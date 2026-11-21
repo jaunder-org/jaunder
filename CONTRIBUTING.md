@@ -1264,13 +1264,17 @@ in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
 or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
 
-A tools-workspace binary is built as its own step, `<bin>-build`
-(`cargo build --locked --quiet --manifest-path tools/Cargo.toml --target-dir tools/target -p <package> --bin <bin>`),
-once per `dev` process, and then runs directly from `tools/target/debug`, so its
-span times the tool and never the compiler. `tools-tests-build` and, when `dev`
-chooses the selection, `nextest-build` compile tests with their run's own
-arguments and environment (`--no-run`) before `tools-tests` and `nextest` run
-them.
+A Rust host tool comes from its flake package
+([`dev` runs Nix-built host tools](docs/adr/drafts/dev-runs-nix-built-host-tools.md)).
+`dev` builds the package as its own Nix step, `<package>-build`
+(`nix build .#<package>`), once per `dev` process, and then runs
+`<out>/bin/<bin>` directly, so the tool's span times the tool and never the
+build. A tool edit is picked up through the Git working tree, so a new tool
+source file must be tracked (`git add`) before `dev` can build it. The tool's
+own `cargo test` and `cargo clippy` remain its inner loop. `tools-tests-build`
+and, when `dev` chooses the selection, `nextest-build` compile tests with their
+run's own arguments and environment (`--no-run`) before `tools-tests` and
+`nextest` run them.
 
 The root span also records its runner where the machine exposes it:
 `host.cpu.model.name` (`/proc/cpuinfo`), `jaunder.host.nproc` (the CPUs `dev`

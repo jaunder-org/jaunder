@@ -9,6 +9,11 @@ inputs:
   cachix-auth-token:
     description: Cachix auth token used to push build products.
     required: true
+  cargo-cache:
+    description:
+      Restore and save Cargo's downloaded registry and Git sources, for jobs
+      that run host Cargo.
+    default: "false"
 
 runs:
   using: composite
@@ -34,17 +39,18 @@ runs:
         # proves which support outputs could be admitted; the measured decision
         # report records why the broad boundary remains.
         pushFilter: "jaunder-coverage|jaunder-e2e"
-    # Host tools are built from the tools workspace by `dev`, so cachix
-    # can't cover them; cache their compiled deps between runs.
-    - name: Cache host tools build
+    # `dev` runs host tools from Cachix-served Nix packages, so no compiled
+    # output is cached here. Jobs that still run host Cargo cache only its
+    # downloads, which the lockfiles fully determine.
+    - name: Cache Cargo downloads
+      if: inputs.cargo-cache == 'true'
       uses: actions/cache@v6
       with:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          tools/target
         key:
-          tools-${{ runner.os }}-${{ hashFiles('tools/Cargo.lock', 'flake.lock')
+          cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'tools/Cargo.lock')
           }}
         restore-keys: |
-          tools-${{ runner.os }}-
+          cargo-${{ runner.os }}-
