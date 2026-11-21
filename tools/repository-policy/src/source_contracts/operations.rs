@@ -72,7 +72,7 @@ impl Operation {
             "html-sink" => Some(Self::HtmlSinkCheck),
             "e2e-scaffold" => Some(Self::E2eScaffoldCheck),
             "xlang-literal" => Some(Self::XlangLiteralCheck),
-            "test-patterns" => Some(Self::TestPatternCheck),
+            "test-backend-pattern" => Some(Self::TestPatternCheck),
             "e2e-server-fn-endpoints" => Some(Self::E2eServerFnEndpointCheck),
             "sqlx-newtype-decode" => Some(Self::SqlxNewtypeDecode),
             "server-fn-coverage" => Some(Self::ServerFnCoverage),

@@ -32,7 +32,7 @@ enum Command {
     },
     /// Guard the Nix coverage derivation's source filter against silent drift:
     /// staging an excluded file leaves `coverage.drvPath` unchanged and staging an
-    /// instrumented `.rs` changes it. Eval-only; runs in CI and on request (#241).
+    /// instrumented `.rs` changes it. Eval-only; runs on request (#241).
     ProbeSource,
     /// Realize each browser WASM evidence producer, validate its archive, then
     /// conditionally count-sum their profiles with the pinned LLVM tools. The

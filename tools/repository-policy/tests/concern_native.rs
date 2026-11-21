@@ -124,15 +124,19 @@ fn source_scan_applies_backend_policy_and_rejects_partial_input() {
         "#[apply(backends)]\n#[tokio::test]\nasync fn works(#[case] backend: Backend) { backend.setup().await; }\n",
     );
     fs::create_dir_all(root.join("storage/src")).unwrap();
-    verdict(run(root, true, "test-patterns"), 0, "test-backend-pattern");
+    verdict(
+        run(root, true, "test-backend-pattern"),
+        0,
+        "test-backend-pattern",
+    );
     write(
         root,
         "server/tests/test.rs",
         "#[tokio::test]\nasync fn unclassified() {}\n",
     );
-    verdict(run(root, true, "test-patterns"), 1, "backend");
+    verdict(run(root, true, "test-backend-pattern"), 1, "backend");
     write(root, "server/tests/test.rs", [0xff]);
-    verdict(run(root, true, "test-patterns"), 1, "cannot read");
+    verdict(run(root, true, "test-backend-pattern"), 1, "cannot read");
 }
 #[test]
 fn placement_uses_all_three_roots_and_fails_on_unreadable_root() {
