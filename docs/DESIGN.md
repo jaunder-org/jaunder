@@ -154,10 +154,13 @@ The [decision](adr/0224-native-otlp-process-logs.md) defines exact
 producer-qualified retention: ordinary scope name, or facade `log.target` only
 within scope `log`, never a global union allowlist. All events at the three
 exact reviewed parser targets survive at every severity/context with fixed
-body/event name; no dropping. Status descriptions are cleared/codes retained.
-Safe parser wording, direct-log paths where bespoke enrichment is needed, and
-private per-kind/coalescing/256-byte diagnostic guarantees retire;
-operation/browser fields, metrics, IDs and stock integer/string carriers do not.
+body/event name; the Collector drops none. html5ever `log` records below WARN
+are discarded earlier, at the log bridge
+([decision](adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md)).
+Status descriptions are cleared/codes retained. Safe parser wording, direct-log
+paths where bespoke enrichment is needed, and private
+per-kind/coalescing/256-byte diagnostic guarantees retire; operation/browser
+fields, metrics, IDs and stock integer/string carriers do not.
 
 Raw SDK/transport/trusted Collector input is accepted, not raw durable outputs
 or persisted Collector failure/debug diagnostics. Invalid policy fails startup
