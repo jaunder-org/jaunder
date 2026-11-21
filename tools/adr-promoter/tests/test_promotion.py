@@ -55,6 +55,8 @@ ALPHA_EXPECTED = ("# ADR-0002: Alpha é\r\n\r\n- Status: accepted\r\n\r\n"
                   "`multi\r\n[code](../code.md)`\r\nprose ](../code.md)\r\n").encode()
 BETA = b"# ADR-DRAFT: Beta\n\n- Status: proposed\n\n| Link |\n| --- |\n| [alpha](../drafts/alpha.md) |\n"
 BETA_EXPECTED = b"# ADR-0003: Beta\n\n- Status: accepted\n\n| Link |\n| --- |\n| [alpha](0002-alpha.md) |\n"
+README_SYNCED = (b"# Records\r\n" + BEGIN + b"\n\n| #   | Title | Status |\n| --- | ----- | ------ |\n"
+                 b"| [0001](adr/0001-old.md) | Curated old | accepted |\n\n" + END + b"\r\nFooter\r\n")
 README_EXPECTED = (b"# Records\r\n" + BEGIN + b"\n\n"
                    b"| #   | Title | Status |\n| --- | ----- | ------ |\n"
                    b"| [0001](adr/0001-old.md) | Curated old | accepted |\n"
@@ -168,10 +170,8 @@ def test_missing_links_warn_after_mutation_and_staging(tmp_path):
 def test_standalone_sync_preserves_titles_and_padded_semantic_noop(tmp_path):
     tracked_repo(tmp_path, {"docs/adr/0001-old.md": OLD, "docs/README.md": README})
     assert sync_readme(tmp_path) == "1 rows (0 added, 0 removed)"
-    expected = (b"# Records\r\n" + BEGIN + b"\n\n| #   | Title | Status |\n| --- | ----- | ------ |\n"
-                b"| [0001](adr/0001-old.md) | Curated old | accepted |\n\n" + END + b"\r\nFooter\r\n")
-    assert (tmp_path / "docs/README.md").read_bytes() == expected
-    padded = expected.replace(b"| Curated old |", b"|   Curated old    |")
+    assert (tmp_path / "docs/README.md").read_bytes() == README_SYNCED
+    padded = README_SYNCED.replace(b"| Curated old |", b"|   Curated old    |")
     write(tmp_path, "docs/README.md", padded)
     stat = (tmp_path / "docs/README.md").stat()
     assert sync_readme(tmp_path) == "1 rows, already in sync"

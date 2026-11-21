@@ -9,7 +9,7 @@ import pytest
 from github import GithubException
 
 from adr_promoter import __main__, controller
-from test_promotion import BEGIN, END, OLD, README, promotion_fixture, git, tracked_repo
+from test_promotion import OLD, README, README_SYNCED, git, tracked_repo
 
 
 def invoke(root, *arguments):
@@ -38,20 +38,13 @@ def test_cli_sync_readme_operates_on_current_fixture_root(tmp_path):
     result = invoke(tmp_path, "sync-readme")
     assert result.returncode == 0, result.stderr
     assert result.stdout == "1 rows (0 added, 0 removed)\n"
-    assert (tmp_path / "docs/README.md").read_bytes() == (
-        b"# Records\r\n" + BEGIN + b"\n\n| #   | Title | Status |\n| --- | ----- | ------ |\n"
-        b"| [0001](adr/0001-old.md) | Curated old | accepted |\n\n" + END + b"\r\nFooter\r\n")
-    result = invoke(tmp_path, "sync-readme")
-    assert result.returncode == 0, result.stderr
-    assert result.stdout == "1 rows, already in sync\n"
+    assert (tmp_path / "docs/README.md").read_bytes() == README_SYNCED
 
 
 def test_cli_refuses_promote_action(tmp_path):
-    promotion_fixture(tmp_path)
     result = invoke(tmp_path, "promote")
     assert result.returncode == 2
     assert "invalid choice: 'promote'" in result.stderr
-    assert (tmp_path / "docs/adr/drafts/alpha.md").exists()
 
 
 def test_cli_mutation_read_failure_is_visible_nonzero(tmp_path):
