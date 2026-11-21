@@ -20,9 +20,8 @@ from dev.index import PathStatus, Reason, Refused, Snapshot
 shared_docs = pytest.mark.skipif(
     not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"
 )
-# What the fakes and `dev` write into the checkout root; Jaunder's checkout
-# ignores built tools as well.
-EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n/tools/target/\n"
+# What the fakes and `dev` write into the checkout root.
+EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
 MARKDOWN_HOST = [
     ["prettier", "-w", "**/*.md"],
     ["prettier", "-w", "end2end"],
@@ -80,13 +79,18 @@ class Repo:
     def tool(self, name: str, body: str) -> None:
         self.workflow.checkout.tool(name, body)
 
-    def fmt(self, body: str) -> None:
-        """Scripts `cargo fmt`, the broad host's first step; every other Cargo
-        command reaches the recording fake, so the tools still build."""
-        fake = self.workflow.checkout.bin.parent / "fake" / "cargo"
+    def recording(self, name: str) -> Path:
+        """The recording fake as `name`, off PATH, for a scripted tool to defer to."""
+        fake = self.workflow.checkout.bin.parent / "fake" / name
         fake.parent.mkdir(exist_ok=True)
         fake.write_text(FAKE, encoding="utf-8")
         fake.chmod(0o755)
+        return fake
+
+    def fmt(self, body: str) -> None:
+        """Scripts `cargo fmt`, the broad host's first step; every other Cargo
+        command reaches the recording fake."""
+        fake = self.recording("cargo")
         self.tool(
             "cargo",
             "if sys.argv[1:] != ['fmt']:\n"
@@ -147,10 +151,10 @@ def test_a_failed_host_check_stops_the_checks_but_staging_still_runs(
 ) -> None:
     repo.write("guide.txt", "staged\n")
     repo.git("add", "guide.txt")
-    failing = CHECK_NO_TEST[3]
+    failing = CHECK_NO_TEST[4]
     result = repo.dev("precommit", failure=" ".join(failing))
     assert result.returncode == 1, result
-    assert repo.workflow.commands() == CHECK_NO_TEST[:4]
+    assert repo.workflow.commands() == CHECK_NO_TEST[:5]
     assert stderr(result).endswith(
         "precommit-staging: no staged fixes\n"
         "[FAIL] precommit — precommit-host: precommit-broad-host exited 17\n"
@@ -426,8 +430,12 @@ def prepush_fixture(repo: Repo, request: str) -> None:
     repo.write(".prettierrc.json", "{}\n")
     repo.write("flake.lock", "{}\n")
     repo.commit()
+    # The scoped adapter's package build reaches the recording fake.
+    fake = str(repo.recording("nix"))
     repo.tool(
         "nix",
+        "if sys.argv[-1] == '.#repository-policy':\n"
+        f"    os.execv({fake!r}, [{fake!r}, *sys.argv[1:]])\n"
         "if '--derivation' in sys.argv:\n"
         "    print('/nix/store/fake-static-docs.drv')\n"
         "    sys.exit()\n"

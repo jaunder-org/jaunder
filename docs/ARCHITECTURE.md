@@ -4596,12 +4596,14 @@ path before the build started, otherwise `built` or `substituted` by
 `build` child, so it is evaluated once and the evaluation is timed; the value
 describes only the output, which the step records as `jaunder.nix.output`, with
 `jaunder.nix.fetched_bytes` for what substituters supplied to the build's
-closure unless the output was reused. Tools-workspace binaries are built as
-their own `<bin>-build` steps and run from `tools/target/debug`, and test runs
-compile in `--no-run` build steps first, so a tool or test span never times the
-compiler. The root span records its runner (CPU model, usable CPUs, cloud
-provider from the DMI vendor) and, in CI, the job's start from setup-ci, which
-`dev trace summary` shows as a `before dev` row
+closure unless the output was reused. Rust host tools come from their flake
+packages, each built as its own `<package>-build` Nix step and run from its
+output
+([`dev` runs Nix-built host tools](adr/drafts/dev-runs-nix-built-host-tools.md)),
+and test runs compile in `--no-run` build steps first, so a tool or test span
+never times the compiler. The root span records its runner (CPU model, usable
+CPUs, cloud provider from the DMI vendor) and, in CI, the job's start from
+setup-ci, which `dev trace summary` shows as a `before dev` row
 ([dev trace step accounting](adr/0254-dev-trace-step-accounting.md)). A
 `substituted` static verdict is expected: static verdicts are sandboxed and
 input-addressed, so a stamp fetched for an identical derivation counts. Coverage
@@ -4843,11 +4845,11 @@ The host check groups run source consistency (`fmt`, `leptosfmt`,
 consistency and compilation, `dev` invokes the existing repository-shape checks
 in their established order. The same host groups serve Fix and Verify workflows,
 calling the shared `dev static` checks directly. ERT launches its retained timer
-with locked Cargo from the checkout. The scoped Leptos formatter adapter is
-built from the checkout before its host invocation. Every `dev` call sets
-`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and canonical worktree roots in
-`SCCACHE_BASEDIRS` for host Cargo compilation, and clears inherited `GIT_*`
-overrides before calling Git.
+with locked Cargo from the checkout. The scoped Leptos formatter adapter comes
+from the checkout's `packages.repository-policy` output, first on leptosfmt's
+PATH. Every `dev` call sets `RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and
+canonical worktree roots in `SCCACHE_BASEDIRS` for host Cargo compilation, and
+clears inherited `GIT_*` overrides before calling Git.
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface runs the same checks with `--sandbox`:
@@ -5406,12 +5408,18 @@ would otherwise default to resolver 1
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.host-proof` and `packages.qualification-host` are built by one shared
+`packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
+`packages.pr-observer` and `packages.qualification-host` are built by one shared
 host-tool builder (`nix/host-tool.nix`) from each package's own Cargo path
-closure; application coverage/E2E dependencies and explicit host-unit-test
-authorities remain separate. CI's E2E verifier runs the cached
-`packages.host-proof` output; local `dev` commands run the host tools with
-locked Cargo from the checkout.
+closure, on a dependencies-only build that only the lockfile, member manifests,
+toolchain and features change (`nix/tools-workspace-package.nix`, which
+`packages.repository-policy` shares); application coverage/E2E dependencies and
+explicit host-unit-test authorities remain separate. `dev` runs every Rust host
+tool from these outputs, `packages.repository-policy` and
+`packages.system-artifacts`, locally and in CI, so CI substitutes unchanged
+tools from Cachix instead of compiling them. setup-ci caches no compiled tool
+output; jobs that run host Cargo opt in to a cache of its downloads only
+([`dev` runs Nix-built host tools](adr/drafts/dev-runs-nix-built-host-tools.md)).
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's
 single host-run executable, built from its own Cargo closure with its store

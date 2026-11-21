@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from dev import report, steps
+from dev.commands import E2E_EVIDENCE
 
 CATALOG = "end2end/e2e-lanes.json"
 # Where `scripts/e2e-workflow` keeps each producer's build record and artifacts.
@@ -51,7 +52,7 @@ def producer(lane: str) -> None:
     steps.run(
         "e2e-evidence",
         [
-            f"{_verifier()}/bin/e2e-evidence",
+            *steps.tool(E2E_EVIDENCE),
             "verify",
             "--lane",
             lane,
@@ -64,15 +65,11 @@ def producer(lane: str) -> None:
     )
 
 
-def _verifier() -> str:
-    return steps.nix_build("host-proof", ".#host-proof", keep=False)
-
-
-def _coverage(verifier: str, action: str, artifacts: str) -> None:
+def _coverage(action: str, artifacts: str) -> None:
     steps.run(
         f"server-fn-coverage-{action}",
         [
-            f"{verifier}/bin/e2e-evidence",
+            *steps.tool(E2E_EVIDENCE),
             "server-fn-coverage",
             action,
             "--catalog",
@@ -90,7 +87,7 @@ def regenerate_coverage() -> None:
         "e2e-coverage-producers",
         ["bash", "scripts/e2e-workflow", "pair", *COVERAGE_PAIR],
     )
-    _coverage(_verifier(), "regenerate", DIAGNOSTICS)
+    _coverage("regenerate", DIAGNOSTICS)
 
 
 def reconcile(backend: str, browser: str, artifacts: str) -> None:
@@ -98,11 +95,10 @@ def reconcile(backend: str, browser: str, artifacts: str) -> None:
 
     The coverage pair's verdict also includes server-function flow coverage.
     """
-    verifier = _verifier()
     steps.run(
         "e2e-reconcile",
         [
-            f"{verifier}/bin/e2e-evidence",
+            *steps.tool(E2E_EVIDENCE),
             "reconcile",
             backend,
             browser,
@@ -114,4 +110,4 @@ def reconcile(backend: str, browser: str, artifacts: str) -> None:
         report.render,
     )
     if (backend, browser) == COVERAGE_PAIR:
-        _coverage(verifier, "verify", artifacts)
+        _coverage("verify", artifacts)

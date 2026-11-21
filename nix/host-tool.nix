@@ -10,11 +10,14 @@
   withWorkspacePlaceholders,
   vendorPinnedFork,
   sqlxSqlitePatchSource,
+  sqlxSqliteExtraDummyScript,
+  mkToolsWorkspacePackage,
 }:
 {
   pname,
   member,
   bins,
+  features ? [ ],
   # Non-Cargo files the executables compile in or their build scripts read.
   extraSourceAdmits ? (_relative: false),
   env ? { },
@@ -51,32 +54,19 @@ let
           && sourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type;
       }
     ) placeholders;
-  vendor = craneLib.vendorCargoDeps {
-    src = source;
-    cargoLock = "${source}/tools/Cargo.lock";
-    overrideVendorGitCheckout = vendorPinnedFork pname;
-  };
   libraryPath = pkgs.lib.makeLibraryPath [
     pkgs.openssl
     pkgs.sqlite
     pkgs.dav1d
   ];
 in
-craneLib.buildPackage (
-  {
-    inherit pname;
-    version = "0.1.0";
-    src = source;
-    cargoVendorDir = vendor;
-    cargoArtifacts = null;
-    cargoExtraArgs =
-      "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member} "
-      + pkgs.lib.concatMapStringsSep " " (bin: "--bin ${bin}") bins;
-    CARGO_PROFILE = "dev";
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    # Auxiliary native tests run through the host tools workspace, not inside Nix.
-    doCheck = false;
-    strictDeps = true;
+mkToolsWorkspacePackage {
+  inherit pname source vendorPinnedFork bins;
+  cargoExtraArgs =
+    "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member}"
+    + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
+  shared = {
+    extraDummyScript = sqlxSqliteExtraDummyScript;
     nativeBuildInputs = [
       pkgs.pkg-config
     ]
@@ -86,23 +76,14 @@ craneLib.buildPackage (
       pkgs.sqlite
       pkgs.dav1d
     ];
-    doNotPostBuildInstallCargoBinaries = true;
-    installPhase = ''
-      mkdir -p "$out/bin"
-      for bin in ${pkgs.lib.escapeShellArgs bins}; do
-        cp "tools/target/debug/$bin" "$out/bin/$bin"
-      done
-    '';
+  };
+  package = {
     postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
       for bin in ${pkgs.lib.escapeShellArgs bins}; do
         patchelf --add-rpath ${libraryPath} "$out/bin/$bin"
       done
     '';
-    meta = {
-      license = pkgs.lib.licenses.gpl3Plus;
-      mainProgram = builtins.head bins;
-    };
     passthru = { inherit sourceAdmits; };
   }
-  // env
-)
+  // env;
+}

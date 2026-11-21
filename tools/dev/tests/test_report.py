@@ -3,7 +3,7 @@
 import json
 
 import pytest
-from conftest import Checkout
+from conftest import Workflow
 
 from dev import report
 
@@ -81,10 +81,10 @@ def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
 
 
 def test_a_failed_tool_keeps_its_own_status_without_a_report(
-    checkout: Checkout,
+    workflow: Workflow,
 ) -> None:
-    checkout.tool("cargo", "print('not a report'); sys.exit(3)")
-    result = checkout.dev("wasm-audit", "report")
+    workflow.checkout.built("wasm-audit", "print('not a report'); sys.exit(3)")
+    result = workflow.dev("wasm-audit", "report")
     assert result.returncode == 3
     assert result.stdout == b"not a report\n"
     assert result.stderr == b""

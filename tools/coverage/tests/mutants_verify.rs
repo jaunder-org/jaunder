@@ -1,11 +1,12 @@
-//! Exercise the real mutation consumer; only cargo-mutants is substituted.
+//! Exercise the real mutation consumer: the real `.mutants-loop/verify.sh` and
+//! the coverage-check binary under test. Only cargo-mutants and `dev`, which
+//! the script reaches the binary through, are substituted.
 #![cfg(feature = "host")]
 
 use serde_json::{Value, json};
-use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Output};
 
 fn verify(fixture: Option<&Path>, status: i32) -> Output {
@@ -16,19 +17,34 @@ fn verify(fixture: Option<&Path>, status: i32) -> Output {
     )
 }
 
+/// Writes an executable script into `directory`.
+fn script(directory: &Path, name: &str, body: &str) {
+    let path = directory.join(name);
+    fs::write(&path, body).unwrap();
+    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
 fn verify_with_binary(fixture: Option<&Path>, status: i32, binary: &Path) -> Output {
     let temp = tempfile::tempdir().unwrap();
-    let cargo = temp.path().join("cargo");
-    fs::write(
-        &cargo,
+    // The script's `dev coverage-check` runs the binary under test; one that
+    // cannot be launched exits as a shell's 127.
+    script(
+        temp.path(),
+        "dev",
         r#"#!/usr/bin/env bash
 set -eu
-# `dev` builds coverage-check, then runs tools/target/debug/coverage-check:
-# the binary under test. A missing one cannot be launched.
-if [ "$1" = build ]; then
-  [ -x "$CHECK_BIN" ] || exit 127
-  exit 0
-fi
+[ "$1" = coverage-check ] || exit 64
+shift
+[ -x "$CHECK_BIN" ] || exit 127
+exec "$CHECK_BIN" "$@"
+"#,
+    );
+    // cargo-mutants copies the fixture's evidence into the requested output.
+    script(
+        temp.path(),
+        "cargo",
+        r#"#!/usr/bin/env bash
+set -eu
 [ "$1" = mutants ] || exit 64
 while [ "$#" -gt 0 ]; do
   if [ "$1" = --output ]; then
@@ -42,9 +58,7 @@ if [ -n "$FIXTURE" ]; then
 fi
 exit "$PRODUCER_STATUS"
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
@@ -65,15 +79,9 @@ exit "$PRODUCER_STATUS"
         .env("TMPDIR_MUTANTS", temp.path().join("scratch"))
         .env("FIXTURE", fixture.unwrap_or(Path::new("")))
         .env("PRODUCER_STATUS", status.to_string())
-        .env("CHECK_BIN", binary)
-        // The script runs the real `dev` in the real checkout: tracing off,
-        // so it neither nests in a calling gate's trace nor leaves a root run
-        // in `.xtask/run`.
-        .env("JAUNDER_TRACE_DIR", "")
-        .env_remove("TRACEPARENT")
-        .env_remove("TRACESTATE");
-    // Normal startup touches Git hooks; never inherit a hook's index or
-    // repository redirection into that startup.
+        .env("CHECK_BIN", binary);
+    // The binary's startup touches the real checkout's Git hooks; never
+    // inherit a hook's index or repository redirection into it.
     for key in [
         "GIT_DIR",
         "GIT_WORK_TREE",
@@ -87,14 +95,29 @@ exit "$PRODUCER_STATUS"
     command.output().unwrap()
 }
 
+/// The binary's one report step: whether it passed, and its detail.
+fn report_step(output: &Output) -> (bool, String) {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let last = stdout.lines().last().unwrap_or_default();
+    let report: Value = serde_json::from_str(last)
+        .unwrap_or_else(|error| panic!("{error}: stdout: {stdout}\nstderr: {stderr}"));
+    let step = &report["steps"][0];
+    assert_eq!(step["name"], "mutants-verify-evidence", "{stdout}");
+    let detail = step["detail"].as_str().unwrap_or_default().to_owned();
+    (step["ok"].as_bool().unwrap(), detail)
+}
+
 fn assert_non_verification(output: Output) {
-    let stdout = String::from_utf8(output.stdout).unwrap();
-    let stderr = String::from_utf8(output.stderr).unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
     assert!(
         !output.status.success(),
         "stdout: {stdout}\nstderr: {stderr}"
     );
-    assert!(stdout.contains("verification failed"), "{stdout}\n{stderr}");
+    let (ok, detail) = report_step(&output);
+    assert!(!ok, "{stdout}");
+    assert!(detail.contains("verification failed"), "{stdout}\n{stderr}");
     for count in ["missed:", "caught:", "unviable:", "timeout:", "STILL ALIVE"] {
         assert!(!stdout.contains(count), "{stdout}");
     }
@@ -103,34 +126,6 @@ fn assert_non_verification(output: Output) {
 #[test]
 fn invalid_argument_without_artifacts_is_not_verification() {
     assert_non_verification(verify(None, 1));
-}
-
-/// The real checkout's root runs whose spans include `dev coverage-check`.
-fn coverage_check_runs(root: &Path) -> BTreeSet<PathBuf> {
-    let Ok(entries) = fs::read_dir(root.join(".xtask/run")) else {
-        return BTreeSet::new();
-    };
-    entries
-        .map(|entry| entry.unwrap().path())
-        .filter(|run| run.extension().is_some_and(|extension| extension == "d"))
-        .filter(|run| {
-            fs::read_dir(run).unwrap().any(|file| {
-                fs::read_to_string(file.unwrap().path())
-                    .is_ok_and(|records| records.contains("\"dev coverage-check\""))
-            })
-        })
-        .collect()
-}
-
-#[test]
-fn verification_leaves_no_trace_in_the_real_checkout() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .ancestors()
-        .nth(2)
-        .unwrap();
-    let before = coverage_check_runs(root);
-    assert_non_verification(verify(None, 1));
-    assert_eq!(coverage_check_runs(root), before);
 }
 
 #[test]
@@ -142,10 +137,8 @@ fn real_consumer_delegates_valid_and_invalid_evidence_to_native_command() {
         "{}",
         String::from_utf8_lossy(&valid.stderr)
     );
-    assert!(String::from_utf8_lossy(&valid.stdout).contains("[ ok ] mutants-verify-evidence"));
-    let invalid = verify(None, 1);
-    assert!(String::from_utf8_lossy(&invalid.stdout).contains("[FAIL] mutants-verify-evidence"));
-    assert_non_verification(invalid);
+    assert!(report_step(&valid).0);
+    assert_non_verification(verify(None, 1));
 }
 
 // Shapes follow cargo-mutants v27.1.0 outcome.rs, mutant.rs and process.rs.
@@ -324,7 +317,7 @@ fn zero_applicable_mutants_and_timeout_holes_are_not_verification() {
     empty["caught"] = json!(0);
     let fixture = fixture(&empty);
     let output = verify(Some(fixture.path()), 0);
-    assert!(String::from_utf8_lossy(&output.stdout).contains("no applicable mutants"));
+    assert!(report_step(&output).1.contains("no applicable mutants"));
     assert_non_verification(output);
     let fixture = self::fixture(&evidence("Timeout"));
     for status in [0, 2, 3] {
@@ -402,16 +395,16 @@ fn completed_mixed_population_retains_actual_counts() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).unwrap();
+    let (_, detail) = report_step(&output);
     assert!(
-        stdout.contains("missed: 1\ncaught: 1\nunviable: 0\ntimeout: 0"),
-        "{stdout}"
+        detail.contains("missed: 1\ncaught: 1\nunviable: 0\ntimeout: 0"),
+        "{detail}"
     );
     assert!(
-        stdout.contains("STILL ALIVE:\ncommon/src/render.rs:10:5:"),
-        "{stdout}"
+        detail.contains("STILL ALIVE:\ncommon/src/render.rs:10:5:"),
+        "{detail}"
     );
-    assert!(!stdout.contains("replace == with !="), "{stdout}");
+    assert!(!detail.contains("replace == with !="), "{detail}");
 }
 
 #[test]
@@ -435,16 +428,17 @@ fn completed_applicable_findings_keep_counts_and_survivor_details() {
     ] {
         let fixture = fixture(&evidence(summary));
         let output = verify(Some(fixture.path()), status);
-        let stdout = String::from_utf8(output.stdout).unwrap();
         assert!(
             output.status.success(),
-            "{stdout}\n{}",
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(stdout.contains(counts), "{stdout}");
-        assert_eq!(stdout.contains("STILL ALIVE:"), status == 2);
+        let (_, detail) = report_step(&output);
+        assert!(detail.contains(counts), "{detail}");
+        assert_eq!(detail.contains("STILL ALIVE:"), status == 2);
         if status == 2 {
-            assert!(stdout.contains(
+            assert!(detail.contains(
                 "common/src/render.rs:10:5: replace render -> String with String::new()"
             ));
         }

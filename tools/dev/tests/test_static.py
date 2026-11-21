@@ -184,11 +184,13 @@ LEAVES = {
 # What the host runs before a leaf, from this checkout.
 PREPARATION = {
     "tsc": ["setup-e2e-node-modules  "],
+    # The scoped adapter's package build: its evaluation, then the build.
     "leptosfmt": [
+        "nix path-info --derivation --accept-flake-config .#repository-policy",
         (
-            "cargo build --locked --quiet --manifest-path tools/Cargo.toml "
-            "--target-dir tools/target -p repository-policy --bin scoped-leptosfmt"
-        )
+            "nix build -L --accept-flake-config --print-out-paths --no-link "
+            ".#repository-policy"
+        ),
     ],
 }
 
@@ -217,10 +219,14 @@ def test_host_leaves_prepare_then_run_their_check_from_the_checkout_root(
 
 
 def test_a_failed_preparation_stops_before_its_check(workflow: Workflow) -> None:
-    build = PREPARATION["leptosfmt"][0]
+    evaluate, build = PREPARATION["leptosfmt"]
     result = workflow.dev("static", "rust-format", failure=build)
     assert result.returncode == 17
-    assert workflow.commands() == [argv("cargo fmt --check"), argv(build)]
+    assert workflow.commands() == [
+        argv("cargo fmt --check"),
+        argv(evaluate),
+        argv(build),
+    ]
 
 
 def test_a_leaf_keeps_its_streams(workflow: Workflow) -> None:
