@@ -1,6 +1,6 @@
-# ADR-DRAFT: CI takes its Clippy verdict from Nix
+# ADR-0255: CI takes its Clippy verdict from Nix
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Issue: [#2010](https://github.com/jaunder-org/jaunder/issues/2010)
 
@@ -20,7 +20,7 @@ The two copies use the same arguments, pinned toolchain and lock file. In PR run
 44837736998 (2026-11-20) the host copy took 621 s of the host lane's 935 s, and
 the Nix copy took about 700 s. On merge-group and `main` runs the Nix verdict
 was substituted from Cachix
-([substitutable static verdicts](../0252-substitutable-static-verdicts.md)), but
+([substitutable static verdicts](0252-substitutable-static-verdicts.md)), but
 the host copy still ran. In merge-group run 44840288640 the host lane (21.6 min)
 outlasted every other job.
 
@@ -36,7 +36,7 @@ CI takes its Clippy verdict only from the hermetic lane's `static-code` check,
 through `clippy-aggregate`. `dev ci-validate-host` runs the host check groups
 without the six Clippy units. It still runs `tsc` and `cargo-deny`. This narrows
 the `host` lane's ownership of "the verify-only host/static gate" in
-[distributed CI lane topology](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md):
+[distributed CI lane topology](0203-distribute-ci-validation-and-firefox-e2e-lanes.md):
 Clippy's CI verdict moves to `hermetic`.
 
 Host Clippy stays required everywhere outside CI: `dev check`,
