@@ -181,7 +181,9 @@ class Checkout:
         return {event["name"]: event for event in self.events()}
 
 
-# The flake packages that build host tools, with the binaries each holds.
+# The flake packages that build host tools, with the binaries each holds. A
+# fake's copy of `nix/packages.nix` and `nix/repository-policy.nix`: it cannot
+# catch a binary those packages lack, which building each package proves.
 TOOL_PACKAGES = {
     "repository-policy": (
         "source-contracts",

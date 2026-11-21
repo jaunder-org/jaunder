@@ -11,6 +11,7 @@
   vendorPinnedFork,
   sqlxSqlitePatchSource,
   sqlxSqliteExtraDummyScript,
+  mkToolsWorkspacePackage,
 }:
 {
   pname,
@@ -53,39 +54,19 @@ let
           && sourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type;
       }
     ) placeholders;
-  vendor = craneLib.vendorCargoDeps {
-    src = source;
-    cargoLock = "${source}/tools/Cargo.lock";
-    overrideVendorGitCheckout = vendorPinnedFork pname;
-  };
   libraryPath = pkgs.lib.makeLibraryPath [
     pkgs.openssl
     pkgs.sqlite
     pkgs.dav1d
   ];
-  common = {
-    inherit pname;
-    version = "0.1.0";
-    src = source;
-    cargoVendorDir = vendor;
-    # Crane places this lock at the source root (its dummy source keeps no
-    # nested lock); the link gives the nested workspace the same one.
-    cargoLock = "${source}/tools/Cargo.lock";
-    postPatch = ''
-      ln -sf ../Cargo.lock tools/Cargo.lock
-    '';
-    # The nested tools workspace must compile into the target crane's
-    # dependency archive restores.
-    CARGO_TARGET_DIR = "target";
-    cargoExtraArgs =
-      "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member}"
-      + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
+in
+mkToolsWorkspacePackage {
+  inherit pname source vendorPinnedFork bins;
+  cargoExtraArgs =
+    "--locked --manifest-path tools/Cargo.toml -p ${builtins.baseNameOf member}"
+    + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
+  shared = {
     extraDummyScript = sqlxSqliteExtraDummyScript;
-    CARGO_PROFILE = "dev";
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    # Auxiliary native tests run through the host tools workspace, not inside Nix.
-    doCheck = false;
-    strictDeps = true;
     nativeBuildInputs = [
       pkgs.pkg-config
     ]
@@ -96,32 +77,13 @@ let
       pkgs.dav1d
     ];
   };
-  # Depends only on the manifests and lockfile, so a source edit inside the
-  # closure (common/, host/, the tool) recompiles workspace crates alone.
-  dependencies = craneLib.buildDepsOnly common;
-in
-craneLib.buildPackage (
-  common
-  // {
-    cargoArtifacts = dependencies;
-    cargoExtraArgs = common.cargoExtraArgs + " " + pkgs.lib.concatMapStringsSep " " (bin: "--bin ${bin}") bins;
-    doNotPostBuildInstallCargoBinaries = true;
-    installPhase = ''
-      mkdir -p "$out/bin"
-      for bin in ${pkgs.lib.escapeShellArgs bins}; do
-        cp "target/debug/$bin" "$out/bin/$bin"
-      done
-    '';
+  package = {
     postFixup = pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux ''
       for bin in ${pkgs.lib.escapeShellArgs bins}; do
         patchelf --add-rpath ${libraryPath} "$out/bin/$bin"
       done
     '';
-    meta = {
-      license = pkgs.lib.licenses.gpl3Plus;
-      mainProgram = builtins.head bins;
-    };
     passthru = { inherit sourceAdmits; };
   }
-  // env
-)
+  // env;
+}

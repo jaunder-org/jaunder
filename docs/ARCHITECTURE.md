@@ -5411,13 +5411,14 @@ building a host executable from executing its orchestrator inside a derivation.
 `packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
 `packages.pr-observer` and `packages.qualification-host` are built by one shared
 host-tool builder (`nix/host-tool.nix`) from each package's own Cargo path
-closure, on a dependencies-only build that only the lockfile, toolchain and
-features change; application coverage/E2E dependencies and explicit
-host-unit-test authorities remain separate. `dev` runs every Rust host tool from
-these outputs, `packages.repository-policy` and `packages.system-artifacts`,
-locally and in CI, so CI substitutes unchanged tools from Cachix instead of
-compiling them. setup-ci caches no compiled tool output; jobs that run host
-Cargo opt in to a cache of its downloads only
+closure, on a dependencies-only build that only the lockfile, member manifests,
+toolchain and features change (`nix/tools-workspace-package.nix`, which
+`packages.repository-policy` shares); application coverage/E2E dependencies and
+explicit host-unit-test authorities remain separate. `dev` runs every Rust host
+tool from these outputs, `packages.repository-policy` and
+`packages.system-artifacts`, locally and in CI, so CI substitutes unchanged
+tools from Cachix instead of compiling them. setup-ci caches no compiled tool
+output; jobs that run host Cargo opt in to a cache of its downloads only
 ([`dev` runs Nix-built host tools](adr/drafts/dev-runs-nix-built-host-tools.md)).
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's

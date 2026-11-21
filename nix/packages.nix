@@ -475,6 +475,7 @@ let
     else
       drv;
 
+  mkToolsWorkspacePackage = import ./tools-workspace-package.nix { inherit pkgs craneLib; };
   mkHostTool = import ./host-tool.nix {
     inherit
       pkgs
@@ -486,6 +487,7 @@ let
       vendorPinnedFork
       sqlxSqlitePatchSource
       sqlxSqliteExtraDummyScript
+      mkToolsWorkspacePackage
       ;
   };
   qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
@@ -522,7 +524,7 @@ let
   };
 
   repositoryPolicyBin = import ./repository-policy.nix {
-    inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork;
+    inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork mkToolsWorkspacePackage;
   };
   cargoVendorDir = craneLib.vendorCargoDeps {
     inherit src;
