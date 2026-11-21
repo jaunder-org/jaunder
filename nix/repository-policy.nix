@@ -8,6 +8,7 @@
   workspaceMembers,
   withWorkspacePlaceholders,
   vendorPinnedFork,
+  mkToolsWorkspacePackage,
 }:
 let
   root = toString ../.;
@@ -36,46 +37,19 @@ let
         cargoSourceAdmits (pkgs.lib.removePrefix "${root}/" (toString path)) type;
     }
   ) placeholders;
-  vendor = craneLib.vendorCargoDeps {
-    src = source;
-    cargoLock = "${source}/tools/Cargo.lock";
-    overrideVendorGitCheckout = vendorPinnedFork "repository-policy";
-  };
-  common = {
-    pname = "repository-policy";
-    version = "0.1.0";
-    src = source;
-    cargoVendorDir = vendor;
-    # Crane places this lock at the source root (its dummy source keeps no
-    # nested lock); the link gives the nested workspace the same one.
-    cargoLock = "${source}/tools/Cargo.lock";
-    postPatch = ''
-      ln -sf ../Cargo.lock tools/Cargo.lock
-    '';
-    # The nested tools workspace must compile into the target crane's
-    # dependency archive restores.
-    CARGO_TARGET_DIR = "target";
-    cargoExtraArgs = "--locked --manifest-path tools/Cargo.toml -p repository-policy";
-    CARGO_PROFILE = "dev";
-    CARGO_PROFILE_DEV_DEBUG = "0";
-    # Auxiliary native tests run through the host tools workspace, not inside Nix.
-    doCheck = false;
-  };
 in
-craneLib.buildPackage (common // {
-  # Depends only on the manifests and lockfile, so a source edit recompiles
-  # workspace crates alone.
-  cargoArtifacts = craneLib.buildDepsOnly common;
-  cargoExtraArgs = common.cargoExtraArgs + " --bins";
-  JAUNDER_REPOSITORY_POLICY_SOURCE = ".#repository-policy.sourceAdmits";
-  doNotPostBuildInstallCargoBinaries = true;
-  installPhase = ''
-    mkdir -p "$out/bin"
-    cp target/debug/{repository-docs,source-contracts,org-timezone-manifest,scoped-leptosfmt} "$out/bin/"
-  '';
-  meta = {
-    license = pkgs.lib.licenses.gpl3Plus;
-    mainProgram = "repository-docs";
+mkToolsWorkspacePackage {
+  pname = "repository-policy";
+  inherit source vendorPinnedFork;
+  cargoExtraArgs = "--locked --manifest-path tools/Cargo.toml -p repository-policy";
+  bins = [
+    "repository-docs"
+    "source-contracts"
+    "org-timezone-manifest"
+    "scoped-leptosfmt"
+  ];
+  package = {
+    JAUNDER_REPOSITORY_POLICY_SOURCE = ".#repository-policy.sourceAdmits";
+    passthru = { inherit sourceAdmits cargoSourceAdmits; };
   };
-  passthru = { inherit sourceAdmits cargoSourceAdmits; };
-})
+}

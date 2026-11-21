@@ -39,9 +39,11 @@ packages:
 - `system-artifacts`
 
 Each host-tool package takes a dependencies-only build as its Cargo artifacts.
-That build changes only with the lockfile, the toolchain or the features. A
-source edit inside the package's closure (`common/`, `host/` or the tool)
-recompiles the workspace crates alone.
+That build changes only with the lockfile, the members' manifests, the toolchain
+or the features, never with source files, so it takes the lockfile as its own
+store path rather than a path into the package source. A source edit inside the
+package's closure (`common/`, `host/` or the tool) recompiles the workspace
+crates alone.
 
 The flake source is the Git working tree. An edited tool therefore always runs
 as edited. A file Git does not track is not in the source:
