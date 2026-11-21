@@ -10,8 +10,8 @@
 Cargo artifacts and sccache reusable across worktrees, and
 [ADR-0237](../0237-just-owned-gate-workflows.md) made the gate runner set the
 host compile-cache policy, including a `SCCACHE_BASEDIRS` list computed from
-`git worktree list`. The [`dev` runner](../drafts/dev-runner-replaces-just.md)
-now owns that environment. CI ran sccache with an empty store in every job.
+`git worktree list`. [ADR-0251](../0251-dev-runner-replaces-just.md) now owns
+that environment. CI ran sccache with an empty store in every job.
 
 Measured on #1972 with kache 2.1.1: sccache missed about a quarter of Rust
 compiles in a second worktree of the same commit, even with both roots in

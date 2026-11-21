@@ -127,17 +127,17 @@ jobs that enter `dev` (`validate-hermetic`, `validate-test-checks`,
 tool builds; they run with an empty, unpersisted default store, and keep the
 `tools/target` cache unchanged.
 
-| Step      | When                                                                          | What                                                                                                                                                              |
-| --------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Configure | always                                                                        | `KACHE_RUNTIME_DIR=~/.cache/kache-run`                                                                                                                            |
-| Restore   | always                                                                        | `actions/cache/restore` of `~/.cache/kache`, newest entry with the `kache-${{ runner.os }}-` prefix                                                               |
-| Stats     | `always()`, after the lane                                                    | `kache stats`                                                                                                                                                     |
-| Save      | `success() && github.event_name == 'push' && github.ref == 'refs/heads/main'` | remove the product `target/`; `kache gc`; `kache daemon stop`; `actions/cache/save` under `kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}` |
+| Step      | When                                                                                             | What                                                                                                                                                              |
+| --------- | ------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Configure | always                                                                                           | `KACHE_RUNTIME_DIR=~/.cache/kache-run`                                                                                                                            |
+| Restore   | always                                                                                           | `actions/cache/restore` of `~/.cache/kache`, newest entry with the `kache-${{ runner.os }}-` prefix                                                               |
+| Stats     | `always()`, after the lane                                                                       | `kache stats`                                                                                                                                                     |
+| Save      | `github.event_name == 'push' && github.ref == 'refs/heads/main'` (with the implicit `success()`) | remove the product `target/`; `kache gc`; `kache daemon stop`; `actions/cache/save` under `kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}` |
 
-- **Steps.** `setup-ci` gains a `compile-cache` input, off by default, that
-  performs the configure and restore steps. Only `validate-host` turns it on,
-  and the stats and save steps sit at the end of that job. kache is only in the
-  dev shell, so those steps run through `nix develop .#ci -c kache …`.
+- **Steps.** All four are steps of `validate-host`: configure and restore right
+  after `setup-ci`, stats and save at the end, so the store's path and key live
+  in one job. `setup-ci` is unchanged. kache is only in the dev shell, so the
+  kache commands run through `nix develop .#ci -c kache …`.
 - **Same configuration.** CI sets only where the daemon's runtime files live, so
   its socket and locks stay out of the archive. The store is kache's default
   location, already outside the checkout, so it never shows up in `clean_tree`
@@ -208,9 +208,10 @@ Proof to execute:
 1. No host Cargo path runs sccache.
    - `git grep -i sccache` matches only historical ADR text, the new ADR draft
      and this spec.
-   - The `tools/dev` environment tests assert `RUSTC_WRAPPER=kache`,
-     `KACHE_CACHE_EXECUTABLES=0`, `CARGO_INCREMENTAL=0` and no
-     `SCCACHE_BASEDIRS`.
+   - The `tools/dev` environment tests assert exactly `RUSTC_WRAPPER=kache`,
+     `KACHE_CACHE_EXECUTABLES=0` and `CARGO_INCREMENTAL=0`. Nothing sets
+     `SCCACHE_BASEDIRS`; the grep above proves its absence, so the tests do not
+     name it.
 2. Cross-worktree hits, with an isolated `KACHE_CACHE_DIR` and
    `KACHE_RUNTIME_DIR`: after `dev check-no-test` in one worktree, the same
    commit in a second worktree reports hits in `kache stats`.
@@ -235,7 +236,7 @@ Deliverables to commit:
 - the `checkout.py` change and its tests
 - the profile change
 - the flake input, dev-shell and lock changes
-- the `setup-ci` input and the `validate-host` steps
+- the `validate-host` steps
 - the ADR draft
 - the `CONTRIBUTING.md` and `ARCHITECTURE.md` updates
 
@@ -249,8 +250,7 @@ Deliverables to commit:
 - No remote kache backend (S3), and no kache test runner or other kache feature
   beyond the rustc wrapper.
 - Follow-ups, not here:
-  - CI's restored `tools/target` is older than the fresh checkout, so every job
-    rebuilds the tools crates (about 45 s): #2026.
   - Host tools built by Nix and served from Cachix, instead of `cargo run` from
-    the checkout. This touches `dev`'s build-from-checkout rule: #2027.
+    the checkout, which retires CI's stale `tools/target` cache: #1968 (it
+    absorbs #2027 and supersedes #2026).
 - No resource limits are added to any lane.
