@@ -4602,7 +4602,7 @@ compile in `--no-run` build steps first, so a tool or test span never times the
 compiler. The root span records its runner (CPU model, usable CPUs, cloud
 provider from the DMI vendor) and, in CI, the job's start from setup-ci, which
 `dev trace summary` shows as a `before dev` row
-([dev trace step accounting](adr/drafts/dev-trace-step-accounting.md)). A
+([dev trace step accounting](adr/0254-dev-trace-step-accounting.md)). A
 `substituted` static verdict is expected: static verdicts are sandboxed and
 input-addressed, so a stamp fetched for an identical derivation counts. Coverage
 and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards

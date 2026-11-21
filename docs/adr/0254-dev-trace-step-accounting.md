@@ -1,12 +1,12 @@
-# ADR-DRAFT: Dev trace spans time one thing each and account for the CI job
+# ADR-0254: Dev trace spans time one thing each and account for the CI job
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Issue: [#2005](https://github.com/jaunder-org/jaunder/issues/2005)
 
 ## Context
 
-The `dev` traces from [ADR-0251](../0251-dev-runner-replaces-just.md) made step
+The `dev` traces from [ADR-0251](0251-dev-runner-replaces-just.md) made step
 time visible, but on CI they hid or mislabelled the largest costs. CI run
 44383337174 showed several of them.
 
