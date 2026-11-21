@@ -4851,7 +4851,7 @@ overrides before calling Git. kache otherwise runs on its defaults: one per-user
 store serves every worktree. In CI only `validate-host` persists its store
 through the Actions cache, saved by `main` and restored by pull requests and the
 merge queue. Dev and test builds emit line-table debug info only
-([kache compile cache](adr/drafts/kache-compile-cache.md)).
+([kache compile cache](adr/0256-kache-compile-cache.md)).
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface runs the same checks with `--sandbox`:
