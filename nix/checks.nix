@@ -218,9 +218,10 @@ performanceGlobalTimeout = 6000;
 # #123/#49: run Playwright capturing its exit (NOT machine.succeed, which
 # would abort before we copy diagnostics), stream its list-reporter output
 # to the build log, copy ALL artifacts out of the VM unconditionally, then
-# fail the check only after the copies are safe. On success the copies land
-# in $out; on failure they live in the --keep-failed build dir for the host's
-# rescue_diagnostics to recover. Shared by both backends so they can't drift.
+# fail the check only after the copies are safe. The copies land in $out on
+# both paths: a failed build's $out survives --keep-failed at its store path,
+# where scripts/e2e-workflow lifts it (ADR-0037). Shared by both backends so
+# they can't drift.
 # VM-local OTel test glue shared by both backends. A systemd unit becomes
 # active when the collector process is spawned, before its receivers are
 # necessarily listening (#1243), so every initial start and restart probes
