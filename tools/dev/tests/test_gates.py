@@ -310,8 +310,8 @@ GATES: dict[str, Commands] = {
     "ci-validate-host": [
         *CLEAN,
         *format_checks("verify"),
-        *docs_shape(),
-        *source_contracts(),
+        *docs_shape(policy_built=True),
+        *source_contracts(policy_built=True),
         *tsc_and_cargo_deny(),
         *elisp_checks(),
         PLATFORM,
