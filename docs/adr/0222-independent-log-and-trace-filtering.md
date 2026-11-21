@@ -152,8 +152,9 @@ separately selects the shared privacy policy, without production activation.
 
 ## Addendum (2026-11-20): html5ever parser stepping is dropped at the log bridge (#2006)
 
-As of #2006, the no-filter rule above has one named exception. The `log` →
-`tracing` bridge discards html5ever `log` records below WARN, which made up 98%
-of E2E log volume. Every other producer is still admitted at every level.
+As of 2026-11-20 (#2006), the no-filter rule above gained one named exception:
+the `log` → `tracing` bridge discarded html5ever `log` records below WARN, and
+every other producer stayed admitted at every level. Current state:
+[ARCHITECTURE.md § Stock native logs and local diagnostic formatting](../ARCHITECTURE.md#stock-native-logs-and-local-diagnostic-formatting).
 Decision:
 [html5ever parser stepping dropped at the log bridge](drafts/html5ever-parser-stepping-dropped-at-log-bridge.md).

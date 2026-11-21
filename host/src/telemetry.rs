@@ -684,8 +684,7 @@ fn setup_exporter_runtime_with<T>(
 /// The `log` → `tracing` bridge, minus html5ever's parser stepping records.
 ///
 /// html5ever reports every character, tokenizer state and tree-builder token
-/// below WARN, which made up 98% of E2E log volume. Those records are discarded
-/// here, before they are formatted; html5ever WARN/ERROR and every other target
+/// below WARN. Those records are discarded here, before they are formatted; html5ever WARN/ERROR and every other target
 /// go to the stock [`tracing_log::LogTracer`]. This is the one named exception
 /// to ADR-0222's no-filter rule
 /// (`docs/adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md`).
@@ -3238,14 +3237,17 @@ mod tests {
         ]
         .into_iter()
         .map(|s| ("native:html5ever::tokenizer".to_owned(), s))
-        .chain(RETAINED_FACADE.into_iter().flat_map(|target| {
-            log::Level::iter().map(move |level| (target.to_owned(), log_severity(level)))
-        }))
-        .chain(PARSER_FACADE.into_iter().flat_map(|target| {
-            log::Level::iter()
-                .filter(|level| *level <= log::Level::Warn)
-                .map(move |level| (target.to_owned(), log_severity(level)))
-        }))
+        .chain(
+            RETAINED_FACADE
+                .map(|target| (target, log::Level::Trace))
+                .into_iter()
+                .chain(PARSER_FACADE.map(|target| (target, log::Level::Warn)))
+                .flat_map(|(target, lowest)| {
+                    log::Level::iter()
+                        .filter(move |level| *level <= lowest)
+                        .map(move |level| (target.to_owned(), log_severity(level)))
+                }),
+        )
         .collect()
     }
 
@@ -3268,7 +3270,7 @@ mod tests {
     }
 
     #[test]
-    fn actual_composition_retains_native_facade_and_parser_levels_under_every_local_policy() {
+    fn actual_composition_drops_facade_parser_stepping_under_every_local_policy() {
         let expected = expected_bridge_rows();
         install_log_bridge().unwrap();
         for (verbose, filter) in [
