@@ -9,15 +9,15 @@ from requests import RequestException
 
 from . import controller, git
 from .admission import admit_checkout
-from .promotion import promote, sync_readme
+from .promotion import sync_readme
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         prog="adr-promoter",
-        description="ADR promotion, README synchronization and serialized controller.",
+        description="Serialized ADR promotion controller and README synchronization.",
     )
-    parser.add_argument("action", choices=("controller", "promote", "sync-readme"))
+    parser.add_argument("action", choices=("controller", "sync-readme"))
     arguments = parser.parse_args()
     try:
         # One admission path consumes Nix's authoritative source predicate.
@@ -26,8 +26,7 @@ def main() -> None:
         if arguments.action == "controller":
             print(controller.execute(repo).detail)
         else:
-            action = promote if arguments.action == "promote" else sync_readme
-            print(action(repo))
+            print(sync_readme(repo))
     except (OSError, UnicodeError, ValueError, RuntimeError, GithubException, RequestException) as error:
         print(f"adr-promoter: {error}", file=sys.stderr)
         raise SystemExit(1) from error
