@@ -127,9 +127,13 @@ def source_contracts() -> None:
         source_contract(name)
 
 
-def compile_checks(mode: Mode) -> None:
+def type_checks(mode: Mode) -> None:
     static.run("tsc", mode)
     static.run("cargo-deny", mode)
+
+
+def compile_checks(mode: Mode) -> None:
+    type_checks(mode)
     for name in static.CLIPPY:
         static.run(name, mode)
 
@@ -333,8 +337,14 @@ def validate() -> None:
 
 
 def ci_validate_host() -> None:
+    """The host check groups without Clippy, whose CI verdict is the hermetic
+    lane's `static-code` (docs/adr/drafts/ci-clippy-verdict-from-nix.md)."""
     clean_tree()
-    host(Mode.VERIFY, Docs.HOST)
+    format_checks(Mode.VERIFY, Docs.HOST)
+    docs_shape()
+    source_contracts()
+    type_checks(Mode.VERIFY)
+    elisp_checks(Mode.VERIFY)
     platform_contract()
     host_tests()
 

@@ -4730,8 +4730,10 @@ The explicit local workflows are:
 
 CI invokes four independent commands: `dev ci-validate-host`,
 `dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and `dev coverage`.
-`host` owns the verify-only host/static gate and auxiliary host tests;
-`hermetic` owns Nix static checks, the `csrBundle` build and the wasm budget;
+`host` owns the verify-only host/static gate except Clippy, and auxiliary host
+tests; `hermetic` owns Nix static checks (including CI's only Clippy verdict,
+through `static-code`'s `clippy-aggregate`), the `csrBundle` build and the wasm
+budget ([CI Clippy verdict from Nix](adr/drafts/ci-clippy-verdict-from-nix.md));
 `test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
 Rust coverage plus its gate. Producer/consumer pairs never cross jobs. The
 coverage source-filter probe remains a manually callable diagnostic, not an
@@ -4744,7 +4746,7 @@ derivation; the coverage and e2e verdicts never are
 ([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)). A
 result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `dev validate-no-e2e` composes the same
-required surfaces in success-path order
+required surfaces in success-path order, plus host Clippy
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
 [distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
@@ -5015,30 +5017,33 @@ distinct. Host `dev` workflows execute each named definition while retaining
 host-local Cargo artifacts and sccache for Rust-compiling checks. Nix has
 independent documentation, TypeScript, Rust-format, residual-code, Elisp-static,
 E2E-census and pure ERT leaves; residual code requests the six-leaf Clippy
-aggregate once without rerunning lint. Native host formatting and Clippy remain
-required. The former standalone `xtask-format`/`xtask-clippy` leaves are retired
-with the xtask workspace; host tools are formatted and linted with the tools
-workspace (`tools-fmt`, `tools-clippy`), and Nix never executes them (ADR-0028).
+aggregate once without rerunning lint. Native host formatting remains required
+everywhere; native host Clippy remains required in hooks and local gates, while
+CI takes the Nix aggregate as its only Clippy verdict. The former standalone
+`xtask-format`/`xtask-clippy` leaves are retired with the xtask workspace; host
+tools are formatted and linted with the tools workspace (`tools-fmt`,
+`tools-clippy`), and Nix never executes them (ADR-0028).
 
 [Verification-family decisions](../CONTRIBUTING.md#prepush-parity-by-failure-surface)
 retain the bounded x86_64-linux Markdown shared verdict and full-local/CI E2E
 producer/reconciliation sharing. Other formatting, TypeScript/census, Elisp
 static/ERT/coverage, root/auxiliary Rust tests and Clippy, doctests, Rust
 coverage, and wasm/browser checks retain their distinct mode, environment or
-population authorities. `dev` composes consumers; host safety owns Fix/index
-admission and reconciliation; Nix owns immutable inputs/producer outputs;
-required status gates, policy consumers and CI joins own their respective
-verdicts. This deliberately accepts repeated checks instead of adding universal
-routing machinery. Further sharing/pruning is deferred pending a concrete
-utility case. Retained sharing combines structural identical-selector and
-declared-input Nix reasoning with actual successful consumers, representative
-Markdown-input invalidation and executed admission/topology/failure/handoff
-fixtures. Literal runtime production-output reuse for Markdown/E2E and empirical
-E2E relevant-input invalidation are deferred, not demonstrated. Revisit those
-observations only on a consumer/input-contract change, unexpected
-reuse/invalidation behavior or concrete maintenance defect. This does not claim
-universal workflow equivalence, speedup, fresh execution from output
-availability or a cache attestation.
+population authorities; for Clippy, CI consumes only the hermetic verdict, an
+attributable-cost exception to the deferral below. `dev` composes consumers;
+host safety owns Fix/index admission and reconciliation; Nix owns immutable
+inputs/producer outputs; required status gates, policy consumers and CI joins
+own their respective verdicts. This deliberately accepts repeated checks instead
+of adding universal routing machinery. Further sharing/pruning is deferred
+pending a concrete utility case. Retained sharing combines structural
+identical-selector and declared-input Nix reasoning with actual successful
+consumers, representative Markdown-input invalidation and executed
+admission/topology/failure/handoff fixtures. Literal runtime production-output
+reuse for Markdown/E2E and empirical E2E relevant-input invalidation are
+deferred, not demonstrated. Revisit those observations only on a
+consumer/input-contract change, unexpected reuse/invalidation behavior or
+concrete maintenance defect. This does not claim universal workflow equivalence,
+speedup, fresh execution from output availability or a cache attestation.
 
 | Step                                       | Guards                                                                                                                                                           |
 | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
