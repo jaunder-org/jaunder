@@ -170,3 +170,12 @@ new public interface, universal producer sanitizer or capacity-recovery promise
 is granted. CONTEXT.md is unchanged: no domain term changes. This draft stays
 numberless/proposed through feature shipping; the architecture projection and
 operator procedures describe current behavior without claiming unrun gates.
+
+## Addendum (2026-11-20): html5ever parser stepping is dropped at the log bridge (#2006)
+
+As of #2006, html5ever `log` records below WARN, `char_ref` included, are
+discarded at the `log` → `tracing` bridge and no longer reach the Collector. The
+"every occurrence at all severities, no event dropping" rule above now holds
+only for html5ever WARN and ERROR. The Collector's exact-target redaction is
+unchanged. Decision:
+[html5ever parser stepping dropped at the log bridge](drafts/html5ever-parser-stepping-dropped-at-log-bridge.md).
