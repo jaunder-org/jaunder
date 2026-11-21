@@ -4,7 +4,6 @@ Expected populations are literal lists of the commands each gate must run,
 not derived from `dev`'s own tables.
 """
 
-import os
 import platform
 
 import pytest
@@ -537,15 +536,10 @@ def test_producer_cleanup_finishes_before_dev_returns(
 
 
 @pytest.mark.parametrize("gate", ["check-no-test", "prepush", "ci-validate-host"])
-def test_cargo_steps_share_the_compile_cache_across_worktree_roots(
-    workflow: Workflow, gate: str
-) -> None:
-    os.symlink(workflow.root, workflow.root / "cache-link")
+def test_cargo_steps_run_under_the_compile_cache(workflow: Workflow, gate: str) -> None:
     result = workflow.dev(gate, cwd=workflow.root / "sub")
     assert result.returncode == 0, result
-    assert (workflow.root / "cache-env").read_text() == (
-        f"sccache\n0\n{workflow.root.resolve()}\n"
-    )
+    assert (workflow.root / "cache-env").read_text() == "kache\n0\n0\n"
 
 
 def test_a_tool_builds_once_per_process_then_runs_directly(

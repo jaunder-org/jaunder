@@ -203,7 +203,7 @@ def test_nextest_gets_the_verified_bundle_and_the_built_worker(
         "args": ["nextest", "run", "--workspace"],
         "bundle": os.path.realpath(local.root.parent / "bundle"),
         "executable": str(local.root.resolve() / "target" / "debug" / "jaunder"),
-        "wrapper": "sccache",
+        "wrapper": "kache",
         "inherited": False,
     }
 

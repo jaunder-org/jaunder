@@ -10,6 +10,10 @@
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    # kache 2.1.1 only (#1972). nixpkgs carries no kache at its locked revision,
+    # and bumping it breaks otelcol-contrib under Go 1.27. Drop this input once
+    # nixpkgs builds both.
+    nixpkgs-kache.url = "github:NixOS/nixpkgs/04906337b6d53e8bb0eaf0470ae9f070a4d4eb55";
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -30,6 +34,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-kache,
       fenix,
       flake-utils,
       crane,
@@ -55,6 +60,7 @@
         };
         devShells = import ./nix/dev-shells.nix {
           inherit system pkgs;
+          kache = nixpkgs-kache.legacyPackages.${system}.kache;
           packageInternals = packageLayer.internals;
         };
       in

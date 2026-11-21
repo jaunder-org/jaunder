@@ -192,7 +192,7 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
     """
     Path(HOST_ARTIFACTS_LOCK).parent.mkdir(parents=True, exist_ok=True)
     # Python opens files non-inheritable, so no step's child (or a daemon it
-    # leaves behind, such as the sccache server) holds the lock past this run.
+    # leaves behind, such as the kache daemon) holds the lock past this run.
     with open(HOST_ARTIFACTS_LOCK, "a") as lock:
         with steps.phase("host-artifacts-lock"):
             fcntl.flock(lock, fcntl.LOCK_EX)

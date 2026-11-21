@@ -61,7 +61,7 @@ def test_sandbox_cargo_leaves_run_offline_against_their_admitted_home(
         **{HOMES[home]: "home"},
         RUSTC_WRAPPER="caller",
         CARGO_INCREMENTAL="caller",
-        SCCACHE_BASEDIRS="caller",
+        KACHE_CACHE_EXECUTABLES="caller",
     )
     assert admitted.returncode == 0, admitted
     assert workflow.commands() == [["cargo", "--offline", *argv(line)]]
@@ -92,9 +92,7 @@ def test_host_fmt_keeps_the_callers_cargo_environment(workflow: Workflow) -> Non
     assert result.returncode == 0, result
     assert workflow.commands() == [["cargo", "fmt", "--check"]]
     assert (workflow.root / "cargo-env").read_text() == "unset\nhost-policy\n"
-    assert (workflow.root / "cache-env").read_text() == (
-        f"sccache\n0\n{workflow.root.resolve()}\n"
-    )
+    assert (workflow.root / "cache-env").read_text() == "kache\n0\n0\n"
 
 
 def test_sandbox_fix_drops_the_check_flag(workflow: Workflow) -> None:

@@ -8,6 +8,10 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 
+# As in the product workspace: line tables only for dev and test builds (#1972).
+[profile.dev]
+debug = "line-tables-only"
+
 [workspace.lints.rust]
 unsafe_code = "forbid"
 

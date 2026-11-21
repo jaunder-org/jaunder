@@ -35,6 +35,18 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      # The kache store saved by the newest `main` run (see "Save compile
+      # cache"). The store stays in kache's default location; only the daemon's
+      # socket and locks move, so they never enter the saved archive.
+      - name: Configure compile cache
+        run: echo "KACHE_RUNTIME_DIR=$HOME/.cache/kache-run" >> "$GITHUB_ENV"
+      - name: Restore compile cache
+        uses: actions/cache/restore@v6
+        with:
+          path: ~/.cache/kache
+          key: kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            kache-${{ runner.os }}-
       # Upload the post-cache baseline before heavy work: a runner-level
       # ENOSPC crash can prevent even always() post-validation steps executing.
       - name: Capture host resource baseline
@@ -91,6 +103,26 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
+      # Diagnostic only: hits and misses for this lane.
+      - name: Compile cache stats
+        if: always()
+        continue-on-error: true
+        run: nix develop .#ci --accept-flake-config -c kache stats
+      # Only `main` saves the store; pull requests and the merge queue restore
+      # it. GC brings the store within its cap, and stopping the daemon leaves
+      # an index nothing is writing. Entries are immutable, so the key is
+      # run-stamped and superseded ones age out of the Actions cache.
+      - name: Prune compile cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          nix develop .#ci --accept-flake-config -c kache gc
+          nix develop .#ci --accept-flake-config -c kache daemon stop
+      - name: Save compile cache
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/.cache/kache
+          key: kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   validate-hermetic:
     name: Validation hermetic

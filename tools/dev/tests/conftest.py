@@ -203,9 +203,6 @@ if [ "$name" = git ]; then
     fi
     case "$*" in
       'rev-parse --show-toplevel') exec "$REAL_GIT" "$@" ;;
-      'worktree list --porcelain')
-        printf 'worktree %s\n\nworktree %s/.\n\nworktree %s/cache-link\n' "$PWD" "$PWD" "$PWD"
-        exit 0 ;;
     esac
 fi
 case "$name $*" in
@@ -213,7 +210,7 @@ case "$name $*" in
   'nix path-info '*) exit 1 ;;
 esac
 if [ "$name" = cargo ]; then
-    printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${SCCACHE_BASEDIRS-unset}" > cache-env
+    printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${KACHE_CACHE_EXECUTABLES-unset}" > cache-env
     printf '%s\n' "${CARGO_HOME-unset}" "${CARGO_NET_OFFLINE-unset}" > cargo-env
 fi
 if [ "$name $1" = "nix build" ]; then

@@ -4845,9 +4845,13 @@ in their established order. The same host groups serve Fix and Verify workflows,
 calling the shared `dev static` checks directly. ERT launches its retained timer
 with locked Cargo from the checkout. The scoped Leptos formatter adapter is
 built from the checkout before its host invocation. Every `dev` call sets
-`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and canonical worktree roots in
-`SCCACHE_BASEDIRS` for host Cargo compilation, and clears inherited `GIT_*`
-overrides before calling Git.
+`RUSTC_WRAPPER=kache`, `CARGO_INCREMENTAL=0` and `KACHE_CACHE_EXECUTABLES=0` for
+host Cargo compilation, the same locally and in CI, and clears inherited `GIT_*`
+overrides before calling Git. kache otherwise runs on its defaults: one per-user
+store serves every worktree. In CI only `validate-host` persists its store
+through the Actions cache, saved by `main` and restored by pull requests and the
+merge queue. Dev and test builds emit line-table debug info only
+([kache compile cache](adr/drafts/kache-compile-cache.md)).
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The
 hermetic shared static surface runs the same checks with `--sandbox`:
@@ -5014,15 +5018,15 @@ compile for `wasm32-unknown-unknown`. The former combined root web(server+CSR)
 configuration is intentionally removed under approved request
 `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`; root/tools lock and test contexts remain
 distinct. Host `dev` workflows execute each named definition while retaining
-host-local Cargo artifacts and sccache for Rust-compiling checks. Nix has
-independent documentation, TypeScript, Rust-format, residual-code, Elisp-static,
-E2E-census and pure ERT leaves; residual code requests the six-leaf Clippy
-aggregate once without rerunning lint. Native host formatting remains required
-everywhere; native host Clippy remains required in hooks and local gates, while
-CI takes the Nix aggregate as its only Clippy verdict. The former standalone
-`xtask-format`/`xtask-clippy` leaves are retired with the xtask workspace; host
-tools are formatted and linted with the tools workspace (`tools-fmt`,
-`tools-clippy`), and Nix never executes them (ADR-0028).
+host-local Cargo artifacts and the kache compile cache for Rust-compiling
+checks. Nix has independent documentation, TypeScript, Rust-format,
+residual-code, Elisp-static, E2E-census and pure ERT leaves; residual code
+requests the six-leaf Clippy aggregate once without rerunning lint. Native host
+formatting remains required everywhere; native host Clippy remains required in
+hooks and local gates, while CI takes the Nix aggregate as its only Clippy
+verdict. The former standalone `xtask-format`/`xtask-clippy` leaves are retired
+with the xtask workspace; host tools are formatted and linted with the tools
+workspace (`tools-fmt`, `tools-clippy`), and Nix never executes them (ADR-0028).
 
 [Verification-family decisions](../CONTRIBUTING.md#prepush-parity-by-failure-surface)
 retain the bounded x86_64-linux Markdown shared verdict and full-local/CI E2E
@@ -5369,16 +5373,16 @@ the sole command-capture interface.
   `dev static-all [fix|verify]` runs every host static leaf in order. The
   obsolete compiled group/all/sandbox selectors, Cargo builders and duplicate
   Leptosfmt implementation are removed. The host verify ladder calls the shared
-  `dev static` checks, preserving host-local Cargo artifacts and sccache for
-  Rust-compiling checks. Prettier is outside this inventory: host `dev` and Nix
-  call the shared `dev static prettier-*` checks directly. Nix `static-docs`
-  runs Markdown; `static-typescript`, `rust-format`, `static-code`,
-  `static-elisp`, and `static-ert` run named `tsc`, Rust-format, residual code
-  (including end-to-end and CSS Prettier), Elisp formatting/byte-compilation,
-  and ERT respectively. Static-code requests the six-leaf Clippy aggregate once;
-  its own derivation does not rerun those lints. Code retains workspace-specific
-  offline Cargo homes; Cargo-deny uses full `cargo deny check` on host and skips
-  `advisories` in sandbox mode
+  `dev static` checks, preserving host-local Cargo artifacts and the kache
+  compile cache for Rust-compiling checks. Prettier is outside this inventory:
+  host `dev` and Nix call the shared `dev static prettier-*` checks directly.
+  Nix `static-docs` runs Markdown; `static-typescript`, `rust-format`,
+  `static-code`, `static-elisp`, and `static-ert` run named `tsc`, Rust-format,
+  residual code (including end-to-end and CSS Prettier), Elisp
+  formatting/byte-compilation, and ERT respectively. Static-code requests the
+  six-leaf Clippy aggregate once; its own derivation does not rerun those lints.
+  Code retains workspace-specific offline Cargo homes; Cargo-deny uses full
+  `cargo deny check` on host and skips `advisories` in sandbox mode
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),

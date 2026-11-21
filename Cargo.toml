@@ -33,6 +33,11 @@ opt-level = 'z'
 #     task would kill the process instead of being isolated.
 # The bundle-size lever that does work is the production `wasm-opt -Oz` pass in the shared Vite pipeline.
 
+# Line tables keep file and line numbers in backtraces at about half the
+# target directory of full debug info; the test profile inherits it (#1972).
+[profile.dev]
+debug = "line-tables-only"
+
 # Force web crate to a single CGU in test builds so inventory::submit! statics
 # are always linked when any web symbol is referenced.
 [profile.test.package.web]

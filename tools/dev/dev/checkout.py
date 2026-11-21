@@ -1,5 +1,5 @@
-"""The checkout a workflow runs in: its root, the compile cache its worktrees
-share, and its Git state.
+"""The checkout a workflow runs in: its root, its compile cache, and its Git
+state.
 
 Every Git call here runs with inherited repository overrides removed, as every
 step does, so it always answers for the checkout `dev` was started in.
@@ -42,27 +42,15 @@ def root() -> Path:
     return Path(found.stdout.strip())
 
 
-def compile_cache_environment() -> dict[str, str]:
-    """Host Cargo compilation shares rustc artifacts across every worktree.
-
-    A failed worktree listing keeps the current root alone.
-    """
-    listed = untraced_git("worktree", "list", "--porcelain").stdout.splitlines()
-    worktrees = [
-        Path(line.removeprefix("worktree "))
-        for line in listed
-        if line.startswith("worktree ")
-    ]
-    roots = {
-        str(path.resolve())
-        for path in [*worktrees, Path.cwd()]
-        if path.is_absolute() and path.is_dir()
-    }
-    return {
-        "RUSTC_WRAPPER": "sccache",
-        "CARGO_INCREMENTAL": "0",
-        "SCCACHE_BASEDIRS": ":".join(sorted(roots)),
-    }
+# Host Cargo compilation runs under kache, whose per-user store serves every
+# worktree without path configuration. Executables stay uncached: they are the
+# bulk of the store and cheap to relink. kache wants incremental compilation off
+# on a persisted target directory.
+COMPILE_CACHE_ENVIRONMENT = {
+    "RUSTC_WRAPPER": "kache",
+    "CARGO_INCREMENTAL": "0",
+    "KACHE_CACHE_EXECUTABLES": "0",
+}
 
 
 def enter(sandbox: bool) -> Path:
@@ -74,7 +62,7 @@ def enter(sandbox: bool) -> Path:
     where = Path.cwd() if sandbox else root()
     os.chdir(where)
     if not sandbox:
-        os.environ.update(compile_cache_environment())
+        os.environ.update(COMPILE_CACHE_ENVIRONMENT)
     return where
 
 

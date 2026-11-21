@@ -253,13 +253,32 @@ against the Cargo homes the derivation provides, admitting every home before any
 work. `rust-format` is a fixed group of checks. `dev static-all [fix|verify]` is
 one command that runs every host static leaf in order, ERT last, each prepared
 as above. Every `dev` call sets the host Cargo compile-cache policy
-(`RUSTC_WRAPPER=sccache`, `CARGO_INCREMENTAL=0`, and sorted, canonical Git
-worktree roots in `SCCACHE_BASEDIRS`, including the current root) and runs every
-step, Git or not, without the inherited `GIT_*` repository overrides a hook
-exports; only precommit/prepush index custody honours them. Discovery failure
-retains the current root and Git's diagnostic. This environment reaches the
-checkout's tool builds and their compiling children as well as direct Cargo
-steps; it adds no resource limits.
+(`RUSTC_WRAPPER=kache`, `CARGO_INCREMENTAL=0`, `KACHE_CACHE_EXECUTABLES=0`) and
+runs every step, Git or not, without the inherited `GIT_*` repository overrides
+a hook exports; only precommit/prepush index custody honours them. This
+environment reaches the checkout's tool builds and their compiling children as
+well as direct Cargo steps; it adds no resource limits. CI uses the same
+configuration.
+
+Beyond that environment kache runs on its defaults: one store in the user cache
+directory serves every worktree, its daemon starts on demand, and the store is
+capped at 5 % of its volume (5 GiB floor, 100 GiB ceiling) with automatic GC.
+Nothing runs `kache init` or writes kache, Cargo or shell configuration into
+your files.
+
+- **Disk.** kache restores artifacts into each worktree's `target/` as reflinks
+  on a reflink filesystem (btrfs, or XFS with reflink), so worktrees share the
+  store's blocks. On ext4 every restore is a private copy, and the store is
+  extra disk on top of each worktree's full `target/`. Measured on 2026-11-20
+  after `dev check-no-test`, with the line-table debug info that dev and test
+  builds emit: a worktree's `target/` and `tools/target/` together took 13–15
+  GB, and the store about 8 GB. Building the product tests (`dev check`,
+  `dev test-local`) adds to both.
+- **Location.** `KACHE_CACHE_DIR` moves the store. Keep it on the same
+  filesystem as your worktrees, or restores fall back to copies.
+- **Off switch.** If you suspect a stale cached artifact, run the command with
+  `KACHE_DISABLED=1`: the wrapper stays in place but hands every compile
+  straight to `rustc` without starting the daemon. `dev` passes it through.
 
 All `dev` gate workflows fail fast: the first failed required step stops later
 ordinary checks, and `dev` exits with that step's status. Prepush's clean-tree
@@ -1097,9 +1116,8 @@ local matrix is needed. CI remains the authoritative integration proof.
 mutates the tree. The coverage gate is stateless (ADR-0050), so there is no
 baseline to heal. `dev` returns nonzero on failure without a gate-wide result
 envelope. `check`'s product Rust tests use the same host-native lane as
-`test-local`, reusing the local target directory and shared `sccache` across
-worktrees. That lane sets `CARGO_INCREMENTAL=0` so `sccache` can share compiler
-work between agents and checkouts.
+`test-local`, reusing the local target directory and the kache store shared
+across worktrees.
 
 CI does **not** run `dev validate` as a single job. It distributes the non-e2e
 surface across `dev ci-validate-host`, `dev ci-validate-hermetic`,
@@ -1835,9 +1853,9 @@ does not bring them in. See
 The simplest way to run them against a throwaway PostgreSQL is `dev test-local`,
 which starts an ephemeral cluster through the devShell's `pg-run` script,
 exports the connection env, runs `cargo nextest run`, tears everything down, and
-applies the shared `sccache` environment. `pg-run` reaches the cluster over a
-Unix socket in a short per-run directory under `XDG_RUNTIME_DIR` (or `TMPDIR`);
-the exported URLs carry it as `?host=`
+applies the shared compile-cache environment. `pg-run` reaches the cluster over
+a Unix socket in a short per-run directory under `XDG_RUNTIME_DIR` (or
+`TMPDIR`); the exported URLs carry it as `?host=`
 ([pg-run as a Python script over a Unix socket](docs/adr/0249-pg-run-python-unix-socket.md)):
 
 ```bash
