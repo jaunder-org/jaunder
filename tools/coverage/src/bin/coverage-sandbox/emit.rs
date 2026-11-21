@@ -504,13 +504,16 @@ pub fn run(out: &str) -> Result<()> {
         write_status(out, &status)?;
         return Ok(());
     };
-    let expected = match status::parse_nextest_census(&census_output.stdout) {
-        Ok(expected) => expected,
-        Err(_) => {
+    let census = status::parse_nextest_census(&census_output.stdout)
+        .context("invalid nextest census")
+        .and_then(|expected| Ok((expected, census_executable(&census_output.stdout)?)));
+    let (expected, executable) = match census {
+        Ok(census) => census,
+        Err(error) => {
             record_evidence_error(
                 &mut status,
                 RequiredStage::TestCensus,
-                "invalid nextest census",
+                &format!("{error:#}"),
             );
             record_duration(&mut status, RequiredStage::TestCensus, census_started);
             write_status(out, &status)?;
@@ -518,16 +521,6 @@ pub fn run(out: &str) -> Result<()> {
         }
     };
     status.population.expected = expected.expected.len();
-    let Ok(executable) = census_executable(&census_output.stdout) else {
-        record_evidence_error(
-            &mut status,
-            RequiredStage::TestCensus,
-            "census did not identify the instrumented Jaunder executable",
-        );
-        record_duration(&mut status, RequiredStage::TestCensus, census_started);
-        write_status(out, &status)?;
-        return Ok(());
-    };
     record_duration(&mut status, RequiredStage::TestCensus, census_started);
 
     let run = &commands[2];
