@@ -4605,7 +4605,7 @@ describes only the output, which the step records as `jaunder.nix.output`, with
 closure unless the output was reused. Rust host tools come from their flake
 packages, each built as its own `<package>-build` Nix step and run from its
 output
-([`dev` runs Nix-built host tools](adr/drafts/dev-runs-nix-built-host-tools.md)),
+([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)),
 and test runs compile in `--no-run` build steps first, so a tool or test span
 never times the compiler. The root span records its runner (CPU model, usable
 CPUs, cloud provider from the DMI vendor) and, in CI, the job's start from
@@ -5430,7 +5430,7 @@ tool from these outputs, `packages.repository-policy` and
 `packages.system-artifacts`, locally and in CI, so CI substitutes unchanged
 tools from Cachix instead of compiling them. setup-ci caches no compiled tool
 output; jobs that run host Cargo opt in to a cache of its downloads only
-([`dev` runs Nix-built host tools](adr/drafts/dev-runs-nix-built-host-tools.md)).
+([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's
 single host-run executable, built from its own Cargo closure with its store
