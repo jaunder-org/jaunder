@@ -1,17 +1,17 @@
-# ADR-DRAFT: kache replaces sccache as the host compile cache
+# ADR-0256: kache replaces sccache as the host compile cache
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-20
 - Issue: [#1972](https://github.com/jaunder-org/jaunder/issues/1972)
 
 ## Context
 
-[ADR-0146](../0146-devtool-owns-compiling-static-check-definitions.md) kept host
+[ADR-0146](0146-devtool-owns-compiling-static-check-definitions.md) kept host
 Cargo artifacts and sccache reusable across worktrees, and
-[ADR-0237](../0237-just-owned-gate-workflows.md) made the gate runner set the
-host compile-cache policy, including a `SCCACHE_BASEDIRS` list computed from
-`git worktree list`. [ADR-0251](../0251-dev-runner-replaces-just.md) now owns
-that environment. CI ran sccache with an empty store in every job.
+[ADR-0237](0237-just-owned-gate-workflows.md) made the gate runner set the host
+compile-cache policy, including a `SCCACHE_BASEDIRS` list computed from
+`git worktree list`. [ADR-0251](0251-dev-runner-replaces-just.md) now owns that
+environment. CI ran sccache with an empty store in every job.
 
 Measured on #1972 with kache 2.1.1: sccache missed about a quarter of Rust
 compiles in a second worktree of the same commit, even with both roots in
@@ -24,7 +24,7 @@ debug info made each worktree's `target/` about twice the size of line tables
 only.
 
 Those CI runs measured a host lane that still ran Clippy. Since
-[CI's Clippy verdict comes from Nix](../0255-ci-clippy-verdict-from-nix.md), the
+[CI's Clippy verdict comes from Nix](0255-ci-clippy-verdict-from-nix.md), the
 host lane compiles only the tools workspace, so its store is smaller than
 measured.
 
