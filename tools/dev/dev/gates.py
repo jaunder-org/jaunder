@@ -338,7 +338,7 @@ def validate() -> None:
 
 def ci_validate_host() -> None:
     """The host check groups without Clippy, whose CI verdict is the hermetic
-    lane's `static-code` (docs/adr/drafts/ci-clippy-verdict-from-nix.md)."""
+    lane's `static-code` (docs/adr/0255-ci-clippy-verdict-from-nix.md)."""
     clean_tree()
     format_checks(Mode.VERIFY, Docs.HOST)
     docs_shape()

@@ -967,7 +967,7 @@ The host check surface that `check-no-test`, `prepush` and `validate-no-e2e`
 share is five public groups, run in this order and stopping at the first
 failure. `ci-validate-host` runs the same groups without the six Clippy units,
 because CI takes its Clippy verdict from the hermetic lane's `static-code`
-([CI Clippy verdict from Nix](docs/adr/drafts/ci-clippy-verdict-from-nix.md)).
+([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md)).
 Each group can be run on its own to re-check one kind of failure; `mode` is
 `verify` (the default) or `fix`:
 

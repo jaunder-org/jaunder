@@ -4733,7 +4733,7 @@ CI invokes four independent commands: `dev ci-validate-host`,
 `host` owns the verify-only host/static gate except Clippy, and auxiliary host
 tests; `hermetic` owns Nix static checks (including CI's only Clippy verdict,
 through `static-code`'s `clippy-aggregate`), the `csrBundle` build and the wasm
-budget ([CI Clippy verdict from Nix](adr/drafts/ci-clippy-verdict-from-nix.md));
+budget ([CI Clippy verdict from Nix](adr/0255-ci-clippy-verdict-from-nix.md));
 `test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
 Rust coverage plus its gate. Producer/consumer pairs never cross jobs. The
 coverage source-filter probe remains a manually callable diagnostic, not an
