@@ -3227,7 +3227,7 @@ mod tests {
 
     /// Native parser events pass at every level; facade html5ever records
     /// below WARN are parser stepping and never reach a sink.
-    fn expected_bridge_rows() -> Vec<(String, Severity)> {
+    fn expected_bridge_rows() -> Vec<(AnyValue, Severity)> {
         [
             Severity::Trace,
             Severity::Debug,
@@ -3236,7 +3236,7 @@ mod tests {
             Severity::Error,
         ]
         .into_iter()
-        .map(|s| ("native:html5ever::tokenizer".to_owned(), s))
+        .map(|s| (AnyValue::from("native:html5ever::tokenizer"), s))
         .chain(
             RETAINED_FACADE
                 .map(|target| (target, log::Level::Trace))
@@ -3245,26 +3245,22 @@ mod tests {
                 .flat_map(|(target, lowest)| {
                     log::Level::iter()
                         .filter(move |level| *level <= lowest)
-                        .map(move |level| (target.to_owned(), log_severity(level)))
+                        .map(move |level| (AnyValue::from(target), log_severity(level)))
                 }),
         )
         .collect()
     }
 
     /// A facade row keyed by its `log.target`, a native row by its target.
-    fn bridge_row_key(row: &SdkLogRecord) -> (String, Severity) {
+    fn bridge_row_key(row: &SdkLogRecord) -> (AnyValue, Severity) {
         let target = row.target().map(AsRef::as_ref).unwrap();
         let key = if target == "log" {
             row.attributes_iter()
-                .find_map(|(k, v)| match v {
-                    AnyValue::String(s) if k.as_str() == "log.target" => {
-                        Some(s.as_str().to_owned())
-                    }
-                    _ => None,
-                })
+                .find(|(k, _)| k.as_str() == "log.target")
+                .map(|(_, v)| v.clone())
                 .unwrap()
         } else {
-            format!("native:{target}")
+            AnyValue::from(format!("native:{target}"))
         };
         (key, row.severity_number().unwrap())
     }
@@ -3333,6 +3329,8 @@ mod tests {
                     target: "html5ever::tree_builder",
                     log::Level::Warn
                 ));
+                // The bridge forwards `log` flushes; they must not disturb export.
+                log::logger().flush();
             });
             logs.force_flush().unwrap();
             let rows = records.0.lock().unwrap();
