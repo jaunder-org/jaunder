@@ -127,13 +127,13 @@ def source_contracts() -> None:
         source_contract(name)
 
 
-def type_checks(mode: Mode) -> None:
+def tsc_and_cargo_deny(mode: Mode) -> None:
     static.run("tsc", mode)
     static.run("cargo-deny", mode)
 
 
 def compile_checks(mode: Mode) -> None:
-    type_checks(mode)
+    tsc_and_cargo_deny(mode)
     for name in static.CLIPPY:
         static.run(name, mode)
 
@@ -343,7 +343,7 @@ def ci_validate_host() -> None:
     format_checks(Mode.VERIFY, Docs.HOST)
     docs_shape()
     source_contracts()
-    type_checks(Mode.VERIFY)
+    tsc_and_cargo_deny(Mode.VERIFY)
     elisp_checks(Mode.VERIFY)
     platform_contract()
     host_tests()

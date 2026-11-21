@@ -160,7 +160,7 @@ def source_contracts() -> Commands:
     ]
 
 
-def type_checks() -> Commands:
+def tsc_and_cargo_deny() -> Commands:
     return [
         ["setup-e2e-node-modules", "", ""],
         *commands("tsc --noEmit -p end2end/tsconfig.json", "cargo deny check"),
@@ -168,7 +168,7 @@ def type_checks() -> Commands:
 
 
 def compile_checks() -> Commands:
-    return [*type_checks(), *commands(*CLIPPY)]
+    return [*tsc_and_cargo_deny(), *commands(*CLIPPY)]
 
 
 def elisp_checks() -> Commands:
@@ -319,7 +319,7 @@ GATES: dict[str, Commands] = {
         *format_checks("verify"),
         *docs_shape(),
         *source_contracts(),
-        *type_checks(),
+        *tsc_and_cargo_deny(),
         *elisp_checks(),
         PLATFORM,
         *host_tests(),

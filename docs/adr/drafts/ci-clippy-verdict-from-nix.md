@@ -34,7 +34,10 @@ attributable cost.
 
 CI takes its Clippy verdict only from the hermetic lane's `static-code` check,
 through `clippy-aggregate`. `dev ci-validate-host` runs the host check groups
-without the six Clippy units. It still runs `tsc` and `cargo-deny`.
+without the six Clippy units. It still runs `tsc` and `cargo-deny`. This narrows
+the `host` lane's ownership of "the verify-only host/static gate" in
+[distributed CI lane topology](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md):
+Clippy's CI verdict moves to `hermetic`.
 
 Host Clippy stays required everywhere outside CI: `dev check`,
 `dev check-no-test`, the pre-commit and pre-push hooks, `dev compile-checks` and
@@ -57,6 +60,8 @@ and leaves the host lane as the slowest job.
   no caching: host Clippy built only lint metadata in the runner's discarded
   `target/`. CI no longer covers host-only build paths. One example is the
   git-aware branch of `test-support/build.rs`, which the Nix copy skips because
-  it has no `.git`. The hooks still exercise those paths.
+  it has no `.git`; the sccache/host-environment handling is another. The
+  pre-commit and pre-push hooks still exercise those paths, though `--no-verify`
+  bypasses them.
 - A PR that changes Rust still spends about 12 min on Nix Clippy. Making those
   leaves cheaper is separate work.
