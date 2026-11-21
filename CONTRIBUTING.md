@@ -269,9 +269,11 @@ your files.
 - **Disk.** kache restores artifacts into each worktree's `target/` as reflinks
   on a reflink filesystem (btrfs, or XFS with reflink), so worktrees share the
   store's blocks. On ext4 every restore is a private copy, and the store is
-  extra disk on top of each worktree's full `target/`. A worktree's `target/`
-  after `dev check-no-test` is about 22 GB with the line-table debug info that
-  dev and test builds emit.
+  extra disk on top of each worktree's full `target/`. Measured on 2026-11-20
+  after `dev check-no-test`, with the line-table debug info that dev and test
+  builds emit: a worktree's `target/` and `tools/target/` together took 13–15
+  GB, and the store about 8 GB. Building the product tests (`dev check`,
+  `dev test-local`) adds to both.
 - **Location.** `KACHE_CACHE_DIR` moves the store. Keep it on the same
   filesystem as your worktrees, or restores fall back to copies.
 - **Off switch.** If you suspect a stale cached artifact, run the command with
