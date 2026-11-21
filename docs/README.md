@@ -284,6 +284,7 @@ convention). See the Status column below for each ADR's current status.
 | [0253](adr/0253-split-chromium-e2e-lanes.md)                             | Split Chromium E2E lanes and reconcile flow coverage                                                         | accepted   |
 | [0254](adr/0254-dev-trace-step-accounting.md)                            | Dev trace spans time one thing each and account for the CI job                                               | accepted   |
 | [0255](adr/0255-ci-clippy-verdict-from-nix.md)                           | CI takes its Clippy verdict from Nix                                                                         | accepted   |
+| [0256](adr/0256-kache-compile-cache.md)                                  | kache replaces sccache as the host compile cache                                                             | accepted   |
 
 <!-- adr-table:end -->
 
