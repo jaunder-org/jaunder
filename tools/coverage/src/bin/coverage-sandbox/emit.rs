@@ -400,51 +400,35 @@ fn emit_reports(
     Ok(())
 }
 
-fn instrumented_executable(build_output: &str) -> Result<PathBuf> {
+/// The instrumented `jaunder` executable the census's workspace test build
+/// produced for `CARGO_BIN_EXE_jaunder`. Reusing it avoids a second build with a
+/// different feature set; nextest owns the target/profile layout.
+fn census_executable(census: &str) -> Result<PathBuf> {
+    let value: Value = serde_json::from_str(census).context("parsing nextest census")?;
+    let meta = &value["rust-build-meta"];
+    let target = meta["target-directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .context("census has no absolute target directory")?;
     let mut executable = None;
-    for line in build_output.lines() {
-        let message: Value = serde_json::from_str(line).context("parsing Cargo build event")?;
-        if message["reason"] == "compiler-artifact"
-            && message["target"]["name"] == "jaunder"
-            && message["target"]["kind"] == serde_json::json!(["bin"])
-            && let Some(path) = message["executable"].as_str()
-        {
-            let path = PathBuf::from(path);
-            if !path.is_absolute() || executable.replace(path).is_some() {
-                bail!("expected one absolute instrumented Jaunder executable");
+    for binaries in meta["non-test-binaries"]
+        .as_object()
+        .context("census has no non-test binaries")?
+        .values()
+    {
+        for binary in binaries.as_array().context("invalid non-test binaries")? {
+            if binary["name"] == "jaunder" && binary["kind"] == "bin-exe" {
+                let path = binary["path"]
+                    .as_str()
+                    .context("non-test binary has no path")?;
+                if executable.replace(target.join(path)).is_some() {
+                    bail!("expected one instrumented Jaunder executable");
+                }
             }
         }
     }
-    executable.context("Cargo did not report the instrumented Jaunder executable")
-}
-
-fn run_instrumented_tests(run: &CommandSpec, diag: &Path) -> Result<CapturedCommand> {
-    // Cargo's artifact event owns the path, including configured target/profile
-    // layout. Build under the same LLVM environment as nextest, never a release SUT.
-    let build = run_capture(Command::new("sh").args([
-        "-c",
-        LLVM_COV_ENVIRONMENT_SCRIPT,
-        "--",
-        "cargo",
-        "build",
-        "--locked",
-        "--package",
-        "jaunder",
-        "--bin",
-        "jaunder",
-        "--message-format=json",
-    ]))?;
-    write_diagnostic(diag, "instrumented-executable-build.log", &build.output);
-    if !build.status.success() {
-        return Ok(build);
-    }
-    let executable = instrumented_executable(&build.stdout)?;
-    // The PostgreSQL URLs are inherited from the enclosing `pg-run`.
-    run_capture(
-        Command::new(run.program)
-            .args(&run.arguments)
-            .env("JAUNDER_TEST_EXECUTABLE", &executable),
-    )
+    executable.context("census did not list the instrumented Jaunder executable")
 }
 
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.
@@ -520,13 +504,16 @@ pub fn run(out: &str) -> Result<()> {
         write_status(out, &status)?;
         return Ok(());
     };
-    let expected = match status::parse_nextest_census(&census_output.stdout) {
-        Ok(expected) => expected,
-        Err(_) => {
+    let census = status::parse_nextest_census(&census_output.stdout)
+        .context("invalid nextest census")
+        .and_then(|expected| Ok((expected, census_executable(&census_output.stdout)?)));
+    let (expected, executable) = match census {
+        Ok(census) => census,
+        Err(error) => {
             record_evidence_error(
                 &mut status,
                 RequiredStage::TestCensus,
-                "invalid nextest census",
+                &format!("{error:#}"),
             );
             record_duration(&mut status, RequiredStage::TestCensus, census_started);
             write_status(out, &status)?;
@@ -538,7 +525,12 @@ pub fn run(out: &str) -> Result<()> {
 
     let run = &commands[2];
     let test_run_started = Instant::now();
-    let test_run = run_instrumented_tests(run, &diag);
+    // The PostgreSQL URLs are inherited from the enclosing `pg-run`.
+    let test_run = run_capture(
+        Command::new(run.program)
+            .args(&run.arguments)
+            .env("JAUNDER_TEST_EXECUTABLE", &executable),
+    );
     let instrumented_outcome = match test_run {
         Ok(test_run) => {
             let outcome = command_outcome(test_run.status);
@@ -729,27 +721,47 @@ mod tests {
         }
     }
 
+    fn census_with(target: &str, binaries: Value) -> String {
+        serde_json::json!({
+            "rust-build-meta": {
+                "target-directory": target,
+                "non-test-binaries": binaries,
+            }
+        })
+        .to_string()
+    }
+
     #[test]
-    fn instrumented_worker_uses_cargos_actual_executable_artifact() {
-        let events = concat!(
-            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"other\",\"kind\":[\"bin\"]},\"executable\":\"/build/other\"}\n",
-            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"lib\"]},\"executable\":null}\n",
-            "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"bin\"]},\"executable\":\"/build/custom-target/x86_64-unknown-linux-gnu/debug/jaunder\"}\n",
-            "{\"reason\":\"build-finished\",\"success\":true}\n",
-        );
+    fn instrumented_worker_is_the_census_test_build_executable() {
+        let binaries = serde_json::json!({
+            "other 0.1.0": [{"name": "other", "kind": "bin-exe", "path": "debug/other"}],
+            "jaunder 0.1.0": [
+                {"name": "jaunder", "kind": "lib", "path": "debug/libjaunder.rlib"},
+                {"name": "jaunder", "kind": "bin-exe", "path": "x86_64-unknown-linux-gnu/debug/jaunder"},
+            ],
+        });
         assert_eq!(
-            instrumented_executable(events).unwrap(),
-            PathBuf::from("/build/custom-target/x86_64-unknown-linux-gnu/debug/jaunder")
+            census_executable(&census_with("/build/target", binaries.clone())).unwrap(),
+            PathBuf::from("/build/target/x86_64-unknown-linux-gnu/debug/jaunder")
         );
-        for invalid in ["", "not json", "{\"reason\":\"build-finished\"}"] {
-            assert!(instrumented_executable(invalid).is_err());
-        }
-        let artifact = "{\"reason\":\"compiler-artifact\",\"target\":{\"name\":\"jaunder\",\"kind\":[\"bin\"]},\"executable\":\"/build/jaunder\"}\n";
+        assert!(census_executable(&census_with("relative/target", binaries)).is_err());
+        let jaunder =
+            serde_json::json!({"name": "jaunder", "kind": "bin-exe", "path": "debug/jaunder"});
         assert!(
-            instrumented_executable(&artifact.replace("/build/jaunder", "relative/jaunder"))
-                .is_err()
+            census_executable(&census_with(
+                "/build/target",
+                serde_json::json!({"a": [jaunder.clone()], "b": [jaunder]})
+            ))
+            .is_err()
         );
-        assert!(instrumented_executable(&artifact.repeat(2)).is_err());
+        for invalid in [
+            String::new(),
+            "not json".into(),
+            "{}".into(),
+            census_with("/build/target", serde_json::json!({})),
+        ] {
+            assert!(census_executable(&invalid).is_err());
+        }
     }
 
     #[test]
