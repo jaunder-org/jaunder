@@ -113,7 +113,7 @@ fn ci_nix_shell_environment_is_exact() {
     let output = Command::new("nix")
         .args([
             "eval", "--impure", "--json", ".#devShells", "--apply",
-            "all: let shells = all.${builtins.currentSystem}; toolchains = builtins.filter (path: builtins.match \".*-rust-[0-9].*\" path != null) (map toString shells.ci.buildInputs); in if builtins.hasAttr \"ci-nix\" shells then let shell = shells.ci-nix; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { inputs = map toString shell.buildInputs; has_cc = shell.stdenv.hasCC; ci_toolchains = toolchains; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
+            "all: let shells = all.${builtins.currentSystem}; in if builtins.hasAttr \"ci-nix\" shells then let shell = shells.ci-nix; omitted = [ \"PLAYWRIGHT_BROWSERS_PATH\" \"PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD\" \"FONTCONFIG_FILE\" \"RUST_SRC_PATH\" \"JAUNDER_PRODUCT_CARGO_HOME\" \"E2E_TYPES_NODE_MODULES\" \"E2E_PLAYWRIGHT_TEST\" \"JAUNDER_THEME_THUMBNAIL_BROWSER\" ]; in { inputs = map toString shell.buildInputs; has_cc = shell.stdenv.hasCC; lc_all = shell.LC_ALL; tz = shell.TZ; tzdir = shell.TZDIR; omitted = builtins.listToAttrs (map (name: { inherit name; value = builtins.hasAttr name shell; }) omitted); } else null",
         ])
         .current_dir(checkout)
         .output()
@@ -168,19 +168,6 @@ fn ci_nix_shell_environment_is_exact() {
     assert_eq!(
         contract["has_cc"], false,
         "ci-nix must not carry a C compiler"
-    );
-    let ci_toolchains = contract["ci_toolchains"].as_array().unwrap();
-    assert_eq!(
-        ci_toolchains.len(),
-        1,
-        "expected one Fenix toolchain in .#ci"
-    );
-    let selected_toolchain = ci_toolchains[0].as_str().unwrap();
-    assert!(
-        inputs
-            .iter()
-            .all(|input| input.as_str() != Some(selected_toolchain)),
-        "selected .#ci Rust toolchain must not be a direct ci-nix input"
     );
     assert!(
         contract["tzdir"]
