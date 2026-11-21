@@ -681,6 +681,51 @@ fn setup_exporter_runtime_with<T>(
     })
 }
 
+/// The `log` → `tracing` bridge, minus html5ever's parser stepping records.
+///
+/// html5ever reports every character, tokenizer state and tree-builder token
+/// below WARN. Those records are discarded here, before they are formatted; html5ever WARN/ERROR and every other target
+/// go to the stock [`tracing_log::LogTracer`]. This is the one named exception
+/// to ADR-0222's no-filter rule
+/// (`docs/adr/drafts/html5ever-parser-stepping-dropped-at-log-bridge.md`).
+struct LogBridge(tracing_log::LogTracer);
+
+impl LogBridge {
+    fn is_parser_stepping(metadata: &log::Metadata<'_>) -> bool {
+        metadata.level() > log::Level::Warn
+            && metadata
+                .target()
+                .strip_prefix("html5ever")
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with("::"))
+    }
+}
+
+impl log::Log for LogBridge {
+    fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+        !Self::is_parser_stepping(metadata) && self.0.enabled(metadata)
+    }
+
+    // The plain `log` macros call `log()` without consulting `enabled()`.
+    fn log(&self, record: &log::Record<'_>) {
+        if !Self::is_parser_stepping(record.metadata()) {
+            self.0.log(record);
+        }
+    }
+
+    fn flush(&self) {
+        self.0.flush();
+    }
+}
+
+/// Installs [`LogBridge`] as the process's `log` logger. Like
+/// `LogTracer::init()`, it raises `log`'s max level only when the install
+/// succeeds.
+fn install_log_bridge() -> Result<(), log::SetLoggerError> {
+    log::set_boxed_logger(Box::new(LogBridge(tracing_log::LogTracer::new())))?;
+    log::set_max_level(log::LevelFilter::Trace);
+    Ok(())
+}
+
 fn init_tracing_impl_with_layer<L>(
     config: &TelemetryConfig,
     extra_layer: Option<L>,
@@ -696,7 +741,7 @@ where
     // phases without duplicate logging calls. A failure here is non-fatal (it
     // means a `log` bridge is already installed), but tracing isn't up yet, so
     // we report it to stderr rather than silently dropping it.
-    if let Err(error) = tracing_log::LogTracer::init() {
+    if let Err(error) = install_log_bridge() {
         eprintln!("log-to-tracing bridge init failed (continuing without it): {error}");
     }
     opentelemetry::global::set_text_map_propagator(
@@ -915,7 +960,7 @@ mod tests {
     use super::*;
     use opentelemetry::{
         Value,
-        logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _},
+        logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity},
         trace::{SpanContext, SpanId, TraceContextExt as _, TraceFlags, TraceId, TraceState},
     };
     use opentelemetry_proto::tonic::collector::logs::v1::{
@@ -3163,10 +3208,67 @@ mod tests {
         );
     }
 
+    const RETAINED_FACADE: [&str; 2] = ["facade::application", "html5everx"];
+    const PARSER_FACADE: [&str; 3] = [
+        "html5ever::tokenizer",
+        "html5ever::tokenizer::char_ref",
+        "html5ever",
+    ];
+
+    fn log_severity(level: log::Level) -> Severity {
+        match level {
+            log::Level::Error => Severity::Error,
+            log::Level::Warn => Severity::Warn,
+            log::Level::Info => Severity::Info,
+            log::Level::Debug => Severity::Debug,
+            log::Level::Trace => Severity::Trace,
+        }
+    }
+
+    /// Native parser events pass at every level; facade html5ever records
+    /// below WARN are parser stepping and never reach a sink.
+    fn expected_bridge_rows() -> Vec<(AnyValue, Severity)> {
+        [
+            Severity::Trace,
+            Severity::Debug,
+            Severity::Info,
+            Severity::Warn,
+            Severity::Error,
+        ]
+        .into_iter()
+        .map(|s| (AnyValue::from("native:html5ever::tokenizer"), s))
+        .chain(
+            RETAINED_FACADE
+                .map(|target| (target, log::Level::Trace))
+                .into_iter()
+                .chain(PARSER_FACADE.map(|target| (target, log::Level::Warn)))
+                .flat_map(|(target, lowest)| {
+                    log::Level::iter()
+                        .filter(move |level| *level <= lowest)
+                        .map(move |level| (AnyValue::from(target), log_severity(level)))
+                }),
+        )
+        .collect()
+    }
+
+    /// A facade row keyed by its `log.target`, a native row by its target.
+    fn bridge_row_key(row: &SdkLogRecord) -> (AnyValue, Severity) {
+        let target = row.target().map(AsRef::as_ref).unwrap();
+        let key = if target == "log" {
+            row.attributes_iter()
+                .find(|(k, _)| k.as_str() == "log.target")
+                .map(|(_, v)| v.clone())
+                .unwrap()
+        } else {
+            AnyValue::from(format!("native:{target}"))
+        };
+        (key, row.severity_number().unwrap())
+    }
+
     #[test]
-    fn actual_composition_retains_native_facade_and_parser_levels_under_every_local_policy() {
-        tracing_log::LogTracer::init().unwrap();
-        log::set_max_level(log::LevelFilter::Trace);
+    fn actual_composition_drops_facade_parser_stepping_under_every_local_policy() {
+        let expected = expected_bridge_rows();
+        install_log_bridge().unwrap();
         for (verbose, filter) in [
             (false, Some("warn")),
             (false, Some("off")),
@@ -3213,57 +3315,27 @@ mod tests {
                     target: "html5ever::tokenizer",
                     "parser detail",
                 );
-                log::trace!(
-                    target: "facade::application",
-                    "facade detail",
-                );
-                log::debug!(
-                    target: "facade::application",
-                    "facade detail",
-                );
-                log::info!(
-                    target: "facade::application",
-                    "facade detail",
-                );
-                log::warn!(
-                    target: "facade::application",
-                    "facade detail",
-                );
-                log::error!(
-                    target: "facade::application",
-                    "facade detail",
-                );
+                for target in RETAINED_FACADE.into_iter().chain(PARSER_FACADE) {
+                    for level in log::Level::iter() {
+                        log::log!(target: target, level, "facade detail");
+                    }
+                }
+                // html5ever's one expensive message sits behind this guard.
+                assert!(!log::log_enabled!(
+                    target: "html5ever::tree_builder",
+                    log::Level::Debug
+                ));
+                assert!(log::log_enabled!(
+                    target: "html5ever::tree_builder",
+                    log::Level::Warn
+                ));
+                // The bridge forwards `log` flushes; they must not disturb export.
+                log::logger().flush();
             });
             logs.force_flush().unwrap();
             let rows = records.0.lock().unwrap();
-            assert_eq!(rows.len(), 10);
-            for (index, row) in rows.iter().enumerate() {
-                assert_eq!(
-                    row.severity_number(),
-                    Some(
-                        [
-                            opentelemetry::logs::Severity::Trace,
-                            opentelemetry::logs::Severity::Debug,
-                            opentelemetry::logs::Severity::Info,
-                            opentelemetry::logs::Severity::Warn,
-                            opentelemetry::logs::Severity::Error
-                        ][index % 5]
-                    )
-                );
-                if index < 5 {
-                    assert_eq!(
-                        row.target().map(AsRef::as_ref),
-                        Some("html5ever::tokenizer")
-                    );
-                } else {
-                    assert_eq!(row.target().map(AsRef::as_ref), Some("log"));
-                    assert!(
-                        row.attributes_iter()
-                            .any(|(k, v)| k.as_str() == "log.target"
-                                && v == &AnyValue::from("facade::application"))
-                    );
-                }
-            }
+            let actual: Vec<_> = rows.iter().map(bridge_row_key).collect();
+            assert_eq!(actual, expected);
         }
     }
 }

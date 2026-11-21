@@ -1491,6 +1491,7 @@ dependencies = [
  "image",
  "jiff",
  "lightningcss",
+ "log",
  "macros",
  "mp4parse",
  "opentelemetry",
