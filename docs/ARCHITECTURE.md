@@ -5327,9 +5327,14 @@ decision):
   GC root or rebuild the image worker under running tests.
 - **In-derivation executables** — the tools that must run inside Nix build
   sandboxes or VM guests, where `nix` and the host tools are unavailable. Each
-  is its own Nix package, built from the shared tools source and dependency
-  build, and each derivation takes only the executable it runs
-  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)):
+  is its own Nix package, and each derivation takes only the executable it runs.
+  `coverage-sandbox`, `doctests` and `perf-producer` share the tools source and
+  dependency build. `system-artifacts`, which every CSR bundle and so the
+  product binary runs, is built from its own Cargo closure like the host tools
+  below, so an edit to an unrelated tool leaves the product derivation unchanged
+  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
+  [devtool retirement owners](adr/drafts/devtool-retirement-owners.md)).
+  Diagnostic-build reads wasm with `wasmparser`, the parser `host-proof` uses:
   `coverage-sandbox` (`tools/coverage`: `emit` produces coverage artifacts into
   `$out` for exfiltration, `validate-status` gates them, `wasm` drives the
   browser WebAssembly coverage lifecycle, and `diagnostic-build` records the
@@ -5400,15 +5405,17 @@ the sole command-capture interface.
 
 **Host tools are host-only — an enforced invariant.** Nix derivations never
 invoke the host concern executables; the flow is strictly one-directional (host
-tool → `nix build`). The application source filter in `nix/packages.nix` keeps
-only the manifests of `tools/repository-policy`, `tools/qualification` and
-`tools/host-proof`, not their implementation, so an accidental host-tool
-invocation inside a derivation fails loudly rather than running a stale copy,
-and frequently-edited gate logic never busts the coverage/e2e cache
-([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)). `tools/` is a standalone
-workspace outside the root cargo workspace (`tools/Cargo.toml:3`); the explicit
-`tools-test` step compensates for the unit suites the application coverage/Nix
-test gates do not execute
+tool → `nix build`). From `tools/`, the application source filter in
+`nix/packages.nix` admits only the crates the root workspace's Cargo path
+closure reaches (today `tools/performance`, through `test-support`), enforced by
+evaluation-time assertions. An accidental host-tool invocation inside a
+derivation therefore fails loudly rather than running a stale copy, and edits to
+gate logic or any other tool never bust the product, coverage or e2e cache
+([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md);
+[devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). `tools/`
+is a standalone workspace outside the root cargo workspace
+(`tools/Cargo.toml:3`); the explicit `tools-test` step compensates for the unit
+suites the application coverage/Nix test gates do not execute
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 [#1061](https://github.com/jaunder-org/jaunder/issues/1061) tracks the stale
 `host_tests` source comment that overstated the related `tools/` Nix-exclusion
@@ -5420,16 +5427,17 @@ would otherwise default to resolver 1
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
 `packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
-`packages.pr-observer` and `packages.qualification-host` are built by one shared
-host-tool builder (`nix/host-tool.nix`) from each package's own Cargo path
-closure, on a dependencies-only build that only the lockfile, member manifests,
-toolchain and features change (`nix/tools-workspace-package.nix`, which
-`packages.repository-policy` shares); application coverage/E2E dependencies and
-explicit host-unit-test authorities remain separate. `dev` runs every Rust host
-tool from these outputs, `packages.repository-policy` and
-`packages.system-artifacts`, locally and in CI, so CI substitutes unchanged
-tools from Cachix instead of compiling them. setup-ci caches no compiled tool
-output; jobs that run host Cargo opt in to a cache of its downloads only
+`packages.pr-observer`, `packages.qualification-host` and
+`packages.system-artifacts` (with its qualification-featured variant) are built
+by one shared host-tool builder (`nix/host-tool.nix`) from each package's own
+Cargo path closure, on a dependencies-only build that only the lockfile, member
+manifests, toolchain and features change (`nix/tools-workspace-package.nix`,
+which `packages.repository-policy` shares); application coverage/E2E
+dependencies and explicit host-unit-test authorities remain separate. `dev` runs
+every Rust host tool from these outputs and `packages.repository-policy`,
+locally and in CI, so CI substitutes unchanged tools from Cachix instead of
+compiling them. setup-ci caches no compiled tool output; jobs that run host
+Cargo opt in to a cache of its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's
@@ -5670,12 +5678,13 @@ Each tool that renders a verdict prints one JSON report on stdout, from which
 ([draft decision](adr/0247-host-tool-json-report-contract.md)). The
 experiment-only two-worker coverage endpoints (`coverage emit --experiment`,
 `experiment-worker`, `experiment-aggregate`) and their `benchmark-local`
-comparison harness are retired by operator decision; a future partitioning
-experiment rebuilds its own harness. The production producer and build endpoints
-live in the crates that own them
-([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). #1864's distinct
-verdicts and #1933's selected passive observations/retention remain separately
-owned.
+comparison harness are retired, so full devtool retirement is no longer blocked;
+a future partitioning experiment rebuilds its own harness. The production
+producer and build endpoints live in the crates that own them
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
+[devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). #1864's
+distinct verdicts and #1933's selected passive observations/retention remain
+separately owned.
 
 ## Documentation & decision process
 

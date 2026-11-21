@@ -47,6 +47,31 @@ theme inputs, and must not admit another tools crate's sources.
 - _Not done:_ narrowing coverage-sandbox, doctests or perf-producer. None of
   them reaches the product binary, and each would need its own input audit.
 
+**1b. The product's own source (found during implementation).** With
+system-artifacts isolated, the probe edit still changed `packages.jaunder`. The
+cause was its direct `source` input. `productSourceFilter`, the source behind
+`commonArgs` (product binary, CSR wasm, nextest, coverage and every other
+root-workspace build), admits all of `tools/`. It excludes only the
+repository-policy, qualification and host-proof implementations and the
+coverage/doctests host and test code. That breadth dates from when devtool
+shared this source.
+
+The root workspace reaches only `tools/performance` (from `test-support`). The
+five hand-written exclusions are replaced by one rule: from `tools/`, admit only
+the root workspace's Cargo path closure, computed by `cargoPackageClosure`.
+Eval-time assertions require `tools/performance` sources to be admitted and
+traced-run, system-artifacts and the host-proof manifest to be left out.
+Verified: with this rule, `packages.jaunder` is `wnr4vv45…` both with and
+without the probe edit. `nix flake check --no-build --keep-going` reports no
+assertion or evaluation error, only import-from-derivation paths that
+`--no-build` will not build.
+
+- _Accepted cost:_ every product derivation's source changes once, so the first
+  build after this lands rebuilds the root workspace's derivations.
+- _Accepted cost:_ the host-tool manifests that were kept (repository-policy,
+  qualification, host-proof) leave the product source too. No root-workspace
+  build reads them.
+
 **2. One wasm parser.** `host-proof` parses wasm with the `wasmparser` crate,
 which is already in `tools/Cargo.lock`. `coverage-sandbox diagnostic-build`
 hand-rolls LEB128, section, custom-name and export parsing
@@ -60,7 +85,7 @@ the error text changes. ADR-0246 forbids a coverage-to-host-proof dependency, so
 the crates share the library, not `host-proof`'s module.
 
 **3. ADR draft amending ADR-0246** (`jaunder-adr`, numberless). The draft
-records two decisions:
+records three decisions:
 
 - The experiment-only coverage emit/worker/aggregate endpoints are retired. The
   human confirmed this on 2026-11-21 in the #1973 comment, closing the open
@@ -69,12 +94,16 @@ records two decisions:
 - The delivered owners replace ADR-0246:72-74 and :81-82: `coverage-sandbox` in
   `tools/coverage` (emit, validate-status, wasm, diagnostic-build), `doctests`,
   the `perf-producer` crate, and the `system-artifacts` crate.
+- From `tools/`, the product source admits only the root workspace's Cargo path
+  closure (1b). This replaces the per-crate exclusions that ARCHITECTURE.md's
+  "host tools are host-only" invariant describes.
 
 The draft notes that `system-artifacts` is built as ADR-0258 describes, which
 retires ADR-0251's shared-source consequence for that executable. Current state
 goes into `docs/ARCHITECTURE.md` in the same change, citing the draft:
 
 - the in-derivation executables bullet (~5328),
+- the "host tools are host-only" invariant paragraph (~5404),
 - the Nix-built host tools paragraph (~5420),
 - §Residual tooling owners (~5640-5675).
 
