@@ -628,6 +628,8 @@ dependencies = [
  "syn 2.0.119",
  "tar",
  "tempfile",
+ "wasm-encoder",
+ "wasmparser",
 ]
 
 [[package]]

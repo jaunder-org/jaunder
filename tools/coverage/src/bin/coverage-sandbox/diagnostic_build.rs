@@ -9,7 +9,7 @@ use std::{
     process::Command,
 };
 
-use anyhow::{Context, Result, anyhow, bail, ensure};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -410,126 +410,40 @@ fn command_version(program: &str, args: &[&str]) -> Result<String> {
         .with_context(|| format!("{program} identity command wrote non-UTF-8 stdout"))
 }
 
-fn read_u32_leb(bytes: &[u8], index: &mut usize, subject: &str) -> Result<u32> {
-    let mut value = 0_u32;
-    for shift in (0..35).step_by(7) {
-        let byte = *bytes
-            .get(*index)
-            .with_context(|| format!("truncated {subject}"))?;
-        *index += 1;
-        let bits = u32::from(byte & 0x7f);
-        if shift == 28 && bits > 0x0f {
-            bail!("{subject} overflows u32");
-        }
-        value |= bits << shift;
-        if byte & 0x80 == 0 {
-            return Ok(value);
-        }
-    }
-    bail!("{subject} is overlong")
-}
-
-struct WasmSection<'a> {
-    id: u8,
-    payload: &'a [u8],
-}
-
-fn wasm_sections(wasm: &[u8]) -> Result<Vec<WasmSection<'_>>> {
-    if !wasm.starts_with(b"\0asm\x01\0\0\0") {
-        bail!("not a wasm version-1 module");
-    }
-    let mut sections = Vec::new();
-    let mut index = 8;
-    while index < wasm.len() {
-        let id = *wasm.get(index).context("truncated wasm section id")?;
-        index += 1;
-        let length = read_u32_leb(wasm, &mut index, "wasm section length")? as usize;
-        let end = index
-            .checked_add(length)
-            .context("wasm section length overflows module")?;
-        let payload = wasm
-            .get(index..end)
-            .context("wasm section extends past module")?;
-        sections.push(WasmSection { id, payload });
-        index = end;
-    }
-    Ok(sections)
-}
-
-fn custom_section_name(section: &[u8]) -> Result<&[u8]> {
-    let mut index = 0;
-    let length = read_u32_leb(section, &mut index, "wasm custom-section name length")? as usize;
-    let end = index
-        .checked_add(length)
-        .context("custom-section name length overflows section")?;
-    section
-        .get(index..end)
-        .context("truncated wasm custom-section name")
-}
-
-fn coverage_section_presence(wasm: &[u8]) -> Result<[bool; 2]> {
-    let mut found = [false; 2];
-    for section in wasm_sections(wasm)? {
-        if section.id != 0 {
-            continue;
-        }
-        let name = custom_section_name(section.payload)?;
-        for (index, required) in COVERAGE_SECTIONS.iter().enumerate() {
-            found[index] |= name == required.as_bytes();
-        }
-    }
-    Ok(found)
-}
-
-fn wasm_custom_section_present(wasm: &[u8], wanted: &str) -> Result<bool> {
-    for section in wasm_sections(wasm)? {
-        if section.id == 0 && custom_section_name(section.payload)? == wanted.as_bytes() {
-            return Ok(true);
-        }
-    }
-    Ok(false)
-}
-
-fn wasm_exports(wasm: &[u8]) -> Result<Vec<String>> {
-    let mut exports = Vec::new();
-    for section in wasm_sections(wasm)? {
-        if section.id != 7 {
-            continue;
-        }
-        let mut index = 0;
-        let count = read_u32_leb(section.payload, &mut index, "wasm export count")?;
-        for _ in 0..count {
-            let name_length =
-                read_u32_leb(section.payload, &mut index, "wasm export name length")? as usize;
-            let end = index
-                .checked_add(name_length)
-                .context("wasm export name length overflows section")?;
-            let name = std::str::from_utf8(
-                section
-                    .payload
-                    .get(index..end)
-                    .context("truncated wasm export name")?,
-            )
-            .context("wasm export name is not UTF-8")?;
-            exports.push(name.to_owned());
-            index = end;
-            index += 1; // export kind
-            let _ = read_u32_leb(section.payload, &mut index, "wasm export index")?;
-        }
-        ensure!(
-            index == section.payload.len(),
-            "trailing data in wasm export section"
-        );
-    }
-    Ok(exports)
-}
-
+/// One wasm artifact's coverage-relevant metadata, read with `wasmparser` (the
+/// parser `host-proof` uses), never a hand-rolled section walker.
 fn wasm_boundary(artifact: &'static str, wasm: &[u8]) -> Result<WasmBoundary> {
+    let mut coverage_sections = [false; 2];
+    let mut wasm_bindgen_metadata = false;
+    let mut exports = Vec::new();
+    for payload in wasmparser::Parser::new(0).parse_all(wasm) {
+        match payload.with_context(|| format!("parsing {artifact}"))? {
+            wasmparser::Payload::Version { encoding, .. } => {
+                if encoding != wasmparser::Encoding::Module {
+                    bail!("{artifact} is not a wasm core module");
+                }
+            }
+            wasmparser::Payload::CustomSection(section) => {
+                let name = section.name();
+                for (index, required) in COVERAGE_SECTIONS.iter().enumerate() {
+                    coverage_sections[index] |= name == *required;
+                }
+                wasm_bindgen_metadata |= name == "__wasm_bindgen_unstable";
+            }
+            wasmparser::Payload::ExportSection(reader) => {
+                for export in reader {
+                    let export = export.with_context(|| format!("parsing {artifact} exports"))?;
+                    exports.push(export.name.to_owned());
+                }
+            }
+            _ => {}
+        }
+    }
     Ok(WasmBoundary {
         artifact,
-        coverage_sections: coverage_section_presence(wasm)?,
-        wasm_bindgen_metadata: wasm_custom_section_present(wasm, "__wasm_bindgen_unstable")?,
-        exports: wasm_exports(wasm)?,
+        coverage_sections,
+        wasm_bindgen_metadata,
+        exports,
     })
 }
 
@@ -608,32 +522,15 @@ mod tests {
     use super::*;
     use tempfile::tempdir;
 
-    fn encode_leb(mut value: u32, output: &mut Vec<u8>) {
-        loop {
-            let mut byte = (value & 0x7f) as u8;
-            value >>= 7;
-            if value != 0 {
-                byte |= 0x80;
-            }
-            output.push(byte);
-            if value == 0 {
-                break;
-            }
-        }
-    }
-
     fn wasm_with_sections(names: &[&str]) -> Vec<u8> {
-        let mut wasm = b"\0asm\x01\0\0\0".to_vec();
+        let mut module = wasm_encoder::Module::new();
         for name in names {
-            let mut payload = Vec::new();
-            encode_leb(name.len() as u32, &mut payload);
-            payload.extend_from_slice(name.as_bytes());
-            payload.extend_from_slice(b"coverage");
-            wasm.push(0);
-            encode_leb(payload.len() as u32, &mut wasm);
-            wasm.extend(payload);
+            module.section(&wasm_encoder::CustomSection {
+                name: (*name).into(),
+                data: b"coverage".as_slice().into(),
+            });
         }
-        wasm
+        module.finish()
     }
 
     #[test]
@@ -649,11 +546,42 @@ mod tests {
     }
 
     #[test]
+    fn diagnostic_wasm_metadata_reads_exports_and_bindgen_metadata() {
+        let mut module = wasm_encoder::Module::new();
+        let mut types = wasm_encoder::TypeSection::new();
+        types.ty().function([], []);
+        module.section(&types);
+        let mut functions = wasm_encoder::FunctionSection::new();
+        functions.function(0);
+        module.section(&functions);
+        let mut exports = wasm_encoder::ExportSection::new();
+        exports.export("main", wasm_encoder::ExportKind::Func, 0);
+        exports.export("__wbindgen_start", wasm_encoder::ExportKind::Func, 0);
+        module.section(&exports);
+        let mut code = wasm_encoder::CodeSection::new();
+        let mut body = wasm_encoder::Function::new([]);
+        body.instructions().end();
+        code.function(&body);
+        module.section(&code);
+        module.section(&wasm_encoder::CustomSection {
+            name: "__wasm_bindgen_unstable".into(),
+            data: b"".as_slice().into(),
+        });
+        let boundary = wasm_boundary("csr.wasm", &module.finish()).unwrap();
+        assert_eq!(boundary.exports, ["main", "__wbindgen_start"]);
+        assert!(boundary.wasm_bindgen_metadata);
+        assert_eq!(boundary.coverage_sections, [false, false]);
+    }
+
+    #[test]
     fn diagnostic_wasm_metadata_parser_rejects_truncated_sections() {
         let truncated = [b"\0asm\x01\0\0\0".as_slice(), &[0, 1]].concat();
-        assert!(coverage_section_presence(&truncated).is_err());
+        assert!(wasm_boundary("csr.wasm", &truncated).is_err());
         let truncated_export = [b"\0asm\x01\0\0\0".as_slice(), &[7, 1, 1]].concat();
-        assert!(wasm_exports(&truncated_export).is_err());
+        assert!(wasm_boundary("csr.wasm", &truncated_export).is_err());
+        assert!(wasm_boundary("csr.wasm", b"not wasm").is_err());
+        let component = wasm_encoder::Component::new().finish();
+        assert!(wasm_boundary("csr.wasm", &component).is_err());
     }
 
     #[test]

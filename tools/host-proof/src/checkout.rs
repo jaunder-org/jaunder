@@ -144,7 +144,6 @@ mod tests {
             "client/src/new.rs",
             "common/src/new.rs",
             "macros/src/new.rs",
-            "storage/src/new.rs",
             "tools/system-artifacts/src/new.rs",
             "csr/index.html",
             "csr/entry.js",
@@ -172,6 +171,9 @@ mod tests {
                     "notes.md",
                     "server/src/unrelated.rs",
                     "tools/dev/tests/test_new.py",
+                    // system-artifacts reaches neither storage nor other tools.
+                    "storage/src/new.rs",
+                    "tools/traced-run/src/new.rs",
                 ]
                 .iter(),
             )

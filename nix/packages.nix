@@ -379,6 +379,17 @@ let
       })
       (builtins.filter (member: !(builtins.elem member wasmTestCargoMembers)) workspaceMembers);
 
+  productToolsMembers = builtins.filter (pkgs.lib.hasPrefix "tools/") (
+    cargoPackageClosure workspaceMembers
+  );
+  productAdmitsTools =
+    path: type:
+    let
+      relative = pkgs.lib.removePrefix "${toString (craneLib.path ../.)}/" (toString path);
+    in
+    !(pkgs.lib.hasPrefix "tools/" relative)
+    || (type == "directory" && builtins.any (member: pkgs.lib.hasPrefix "${relative}/" member) productToolsMembers)
+    || builtins.any (member: relative == member || pkgs.lib.hasPrefix "${member}/" relative) productToolsMembers;
   productSourceFilter =
     path: type:
     # Do not let generic Cargo/data filters admit archive metadata beneath
@@ -401,19 +412,10 @@ let
       # Cargo build scripts treat a present `.git` as authoritative metadata.
       # Never retain the filtered empty directory that crane would otherwise admit.
       && !(pkgs.lib.hasSuffix "/.git" path || pkgs.lib.hasInfix "/.git/" path)
-      # Repository policy is native tooling; retain its manifest, not implementation.
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/repository-policy/" path
-        && path != "${toString (craneLib.path ../.)}/tools/repository-policy/Cargo.toml")
-      # Qualification is host-run tooling; retain its manifest, not implementation.
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/qualification/" path
-        && path != "${toString (craneLib.path ../.)}/tools/qualification/Cargo.toml")
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/host-proof/" path
-        && path != "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml")
-      # Host-run evidence consumers behind nondefault `host` features: the
-      # sandboxed library builds never compile them, so they must not invalidate.
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/src/host/" path)
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/coverage/tests/" path)
-      && !(pkgs.lib.hasPrefix "${toString (craneLib.path ../.)}/tools/doctests/tests/" path)
+      # The tools workspace is separate (ADR-0141). Of it, the product keeps only
+      # the crates its own Cargo path closure reaches, so editing any other tool
+      # leaves every product derivation unchanged.
+      && productAdmitsTools path type
       && (
         (pkgs.lib.hasSuffix ".sql" path)
         || (pkgs.lib.hasSuffix ".css" path)
@@ -452,6 +454,10 @@ let
         "excluded.sql"
         "excluded.css"
       ];
+    assert productSourceFilter "${toString (craneLib.path ../.)}/tools/performance/src/lib.rs" "regular";
+    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/traced-run/src/main.rs" "regular");
+    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/system-artifacts/src/main.rs" "regular");
+    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml" "regular");
     pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter = productSourceFilter;
@@ -521,6 +527,35 @@ let
     pname = "pr-observer";
     member = "tools/pr-observer";
     bins = [ "pr-observer" ];
+  };
+  # Every CSR bundle derivation runs this executable, and the product binary
+  # embeds the bundle. Its own Cargo closure keeps edits to unrelated tools out
+  # of the product derivation
+  # (docs/adr/drafts/devtool-retirement-owners.md).
+  mkSystemArtifacts =
+    args:
+    let
+      package = mkHostTool (
+        {
+          pname = "system-artifacts";
+          member = "tools/system-artifacts";
+          bins = [ "system-artifacts" ];
+        }
+        // args
+      );
+    in
+    assert package.sourceAdmits "tools/system-artifacts/src/main.rs" "regular";
+    assert package.sourceAdmits "host/src/system_theme.rs" "regular";
+    assert package.sourceAdmits "host/system_theme_sources/studio/style.css" "regular";
+    assert package.sourceAdmits "server/assets/jaunder.css" "regular";
+    assert !(package.sourceAdmits "tools/traced-run/src/main.rs" "regular");
+    assert !(package.sourceAdmits "tools/coverage/src/lib.rs" "regular");
+    assert !(package.sourceAdmits "tools/perf-producer/src/main.rs" "regular");
+    package;
+  systemArtifactsBin = mkSystemArtifacts { };
+  qualificationSystemArtifactsBin = mkSystemArtifacts {
+    pname = "jaunder-system-artifact-qualification-system-artifacts";
+    features = [ "qualification" ];
   };
 
   repositoryPolicyBin = import ./repository-policy.nix {
@@ -839,8 +874,9 @@ let
   # The auxiliary tools workspace is separate from the product workspace
   # (ADR-0141): its lockfile and cargo artifacts stay independent, while the
   # performance producer links the selected typed product-storage closure.
-  # Share the producer's existing filter with live-checkout admission; do not
-  # duplicate or narrow its broad tooling closure to manufacture cache hits.
+  # The in-derivation producers built by `mkToolsBin` share this broad source.
+  # system-artifacts, which every CSR bundle runs, is built from its own
+  # closure instead (`mkSystemArtifacts`).
   toolsSourceFilter =
     path: type:
     let
@@ -848,8 +884,7 @@ let
     in
     type == "directory"
     || relative == "tools/Cargo.lock"
-    || relative == "csr/index.html"
-    # Host system-artifact production needs both Theme Package inputs and
+    # Host, linked through storage, compiles in Theme Package inputs and
     # trusted application CSS, not just Cargo-recognized host sources.
     || relative == "server/assets/jaunder.css"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
@@ -873,7 +908,7 @@ let
       path = "${toString ../.}/${relative}";
     in
     siteSourceFilter path type
-    || toolsSourceFilter path type
+    || systemArtifactsBin.sourceAdmits relative type
     || csrViteSourceFilter path type
     # `dev build-csr` drives the host bundle build: the runner's package source.
     || relative == "tools/dev/pyproject.toml"
@@ -1040,29 +1075,21 @@ let
   # A tools executable that runs inside derivations (build sandboxes and VM
   # guests). Offline sandboxes run it from PATH instead of an in-sandbox
   # `cargo run`, whose dependencies would not be vendored. Each consumer takes
-  # only the executable it runs. The CSR shell is retained directly in toolsSrc
-  # for include_str!.
+  # only the executable it runs.
   mkToolsBin =
     {
       package,
       bin ? package,
-      pname ? bin,
-      # Features change the dependency graph, so a featured build gets its own
-      # dependency build rather than the shared tools one.
-      features ? [ ],
       # Native host libraries the executable links.
       runtimeLibraries ? [ ],
     }:
     let
-      cargoExtraArgs =
-        "${toolsArgs.cargoExtraArgs} -p ${package} --bin ${bin}"
-        + pkgs.lib.optionalString (features != [ ]) " --features ${pkgs.lib.concatStringsSep "," features}";
-      tooling =
-        if features != [ ] then mkToolingCargo (toolsArgs // { inherit cargoExtraArgs; }) else toolsBuild;
+      cargoExtraArgs = "${toolsArgs.cargoExtraArgs} -p ${package} --bin ${bin}";
       patchRuntime = pkgs.stdenv.hostPlatform.isLinux && runtimeLibraries != [ ];
     in
-    tooling.buildPackage {
-      inherit cargoExtraArgs pname;
+    toolsBuild.buildPackage {
+      inherit cargoExtraArgs;
+      pname = bin;
       doCheck = false;
       installPhase = ''
         mkdir -p $out/bin
@@ -1088,16 +1115,6 @@ let
   doctestsBin = mkToolsBin { package = "doctests"; };
   perfProducerBin = mkToolsBin {
     package = "perf-producer";
-    runtimeLibraries = hostRuntimeLibraries;
-  };
-  systemArtifactsBin = mkToolsBin {
-    package = "system-artifacts";
-    runtimeLibraries = hostRuntimeLibraries;
-  };
-  qualificationSystemArtifactsBin = mkToolsBin {
-    package = "system-artifacts";
-    pname = "jaunder-system-artifact-qualification-system-artifacts";
-    features = [ "qualification" ];
     runtimeLibraries = hostRuntimeLibraries;
   };
 

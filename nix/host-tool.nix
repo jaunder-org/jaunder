@@ -1,6 +1,7 @@
-# A host-run auxiliary tool package built from its real Cargo path closure in
-# the tools workspace. It never executes inside a derivation; callers run its
-# output on the host (ADR-0246).
+# An auxiliary tool package built from its real Cargo path closure in the tools
+# workspace. Callers run its output on the host (ADR-0246); system-artifacts
+# alone also runs inside the CSR bundle derivations, which stay independent of
+# unrelated tools' sources this way.
 {
   pkgs,
   craneLib,
@@ -36,8 +37,8 @@ let
     || relative == "tools/Cargo.toml"
     || relative == "tools/Cargo.lock"
     || builtins.any (name: relative == "${name}/Cargo.toml") placeholders
-    # Host's build script stages the system theme inventory and CSR shell.
-    || relative == "csr/index.html"
+    # Non-Cargo files compiled in: host's system theme inventory and
+    # application CSS, and storage's migrations for tools that reach storage.
     || relative == "server/assets/jaunder.css"
     || pkgs.lib.hasPrefix "host/system_theme_sources/" relative
     || pkgs.lib.hasPrefix "storage/migrations/" relative
