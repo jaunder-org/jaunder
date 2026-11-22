@@ -42,3 +42,8 @@ into the server binary.
 - Good: Clean separation between base styles and user customizations.
 - Bad: Assets are coupled to the Rust build cycle (though `rust-embed` supports
   disk-reads in debug mode).
+
+> **Annotation (2026-11-22).** Debug builds now embed too
+> (`rust-embed/debug-embed`, #2048), so the debug disk-read mitigation above is
+> retired. Run-time reads used an absolute path the compile cache could not key
+> on. See [ARCHITECTURE.md](../ARCHITECTURE.md).

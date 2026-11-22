@@ -201,6 +201,8 @@ fn build_response(
     (StatusCode::OK, headers, body).into_response()
 }
 
+// Every build embeds (`debug-embed`), so `serve_site` only passes `Borrowed`;
+// the `Owned` arm remains because `RustEmbed` hands out a `Cow`.
 fn embedded_body(data: Cow<'static, [u8]>) -> Bytes {
     match data {
         Cow::Borrowed(bytes) => Bytes::from_static(bytes),
@@ -390,9 +392,7 @@ mod tests {
         );
     }
 
-    /// Debug builds compile the site in rather than reading `$OUT_DIR` at run
-    /// time; a cached lib from another checkout would otherwise read that
-    /// checkout's `target/` (#2048).
+    /// Debug builds embed rather than read `$OUT_DIR` at run time (#2048).
     #[test]
     fn every_site_file_is_compiled_into_the_binary() {
         let paths: Vec<_> = Site::iter().collect();

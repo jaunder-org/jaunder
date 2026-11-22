@@ -41,6 +41,8 @@ pub(crate) fn load() -> Result<SystemArtifactInventory, SystemArtifactLoadError>
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
+
     use super::*;
 
     #[test]
@@ -50,9 +52,7 @@ mod tests {
         );
     }
 
-    /// Debug builds compile the inventory in rather than reading `$OUT_DIR` at
-    /// run time; a cached lib from another checkout would otherwise read that
-    /// checkout's `target/` (#2048).
+    /// Debug builds embed rather than read `$OUT_DIR` at run time (#2048).
     #[test]
     fn every_artifact_is_compiled_into_the_binary() {
         let paths: Vec<_> = EmbeddedSystemArtifacts::iter().collect();
@@ -63,7 +63,7 @@ mod tests {
         for path in paths {
             let file = EmbeddedSystemArtifacts::get(&path).expect("listed artifact is embedded");
             assert!(
-                matches!(file.data, std::borrow::Cow::Borrowed(_)),
+                matches!(file.data, Cow::Borrowed(_)),
                 "{path} is read from disk at run time, not embedded"
             );
         }
