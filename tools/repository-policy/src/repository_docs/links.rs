@@ -295,20 +295,22 @@ fn promoted_replacement(tracked: &BTreeSet<String>, dir: &Path, target: &str) ->
     let (name, None) = (numbered.next()?, numbered.next()) else {
         return None;
     };
-    let dir = normalize_repo_rel(dir)?;
-    let depth = dir.split('/').filter(|part| !part.is_empty()).count();
-    let common = dir
-        .split('/')
+    // Climb from the source directory to its common ancestor with `docs/adr`,
+    // then descend into it. `dir` comes from a tracked path, so it is normalized.
+    let parts: Vec<&str> = dir.to_str()?.split('/').filter(|p| !p.is_empty()).collect();
+    let common = parts
+        .iter()
         .zip(["docs", "adr"])
-        .take_while(|(have, want)| have == want)
+        .take_while(|(have, want)| **have == *want)
         .count();
-    let up = "../".repeat(depth - common);
+    let up = "../".repeat(parts.len() - common);
     let down = ["docs/", "adr/"][common..].concat();
     Some(format!("{up}{down}{name}{fragment}"))
 }
 
 /// Every dead or promotion-unsafe link across [`gated_files`].
-/// Dead links retain the format `<file>:<line> -> <target>`.
+/// Dead links keep the format `<file>:<line> -> <target>`, plus a
+/// `(promoted: use …)` hint when [`promoted_replacement`] finds one.
 pub fn problems(repo: &Path) -> Result<Vec<String>> {
     let tracked = tracked_paths(repo)?;
     let mut out = Vec::new();
@@ -654,12 +656,19 @@ mod tests {
             "# ADR-DRAFT: B\n\n[aaa](../drafts/aaa.md#sec)\n",
         );
         commit(&d, "docs/x.md", "[aaa](adr/drafts/aaa.md)\n");
+        commit(&d, "docs/adr/0008-c.md", "[aaa](drafts/aaa.md)\n");
+        commit(&d, "x.md", "[aaa](docs/adr/drafts/aaa.md)\n");
+        commit(&d, "tools/t/x.md", "[aaa](../../docs/adr/drafts/aaa.md)\n");
         assert_eq!(
             problems(&d).unwrap(),
             vec![
+                "docs/adr/0008-c.md:1 -> drafts/aaa.md (promoted: use 0007-aaa.md)".to_string(),
                 "docs/adr/drafts/b.md:3 -> ../drafts/aaa.md#sec (promoted: use ../0007-aaa.md#sec)"
                     .to_string(),
                 "docs/x.md:1 -> adr/drafts/aaa.md (promoted: use adr/0007-aaa.md)".to_string(),
+                "tools/t/x.md:1 -> ../../docs/adr/drafts/aaa.md (promoted: use ../../docs/adr/0007-aaa.md)"
+                    .to_string(),
+                "x.md:1 -> docs/adr/drafts/aaa.md (promoted: use docs/adr/0007-aaa.md)".to_string(),
             ]
         );
     }

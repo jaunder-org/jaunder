@@ -45,8 +45,8 @@ explainer rather than a draft, and `promote` intentionally skips it.
    your branch still says `../drafts/aaa.md`. Your PR checks pass, but the merge
    queue's `doc-links` run sees a dead link and ejects the PR, with a hint like
    `(promoted: use ../NNNN-aaa.md)`. Rebase onto `main`, link `../NNNN-aaa.md`,
-   and update any rule-3 path citations of that draft too, since no gate catches
-   those.
+   and update any plain-text path citations of that draft (in code or backticked
+   paths) too, since `doc-links` checks only Markdown links.
 
 ## Automated promotion
 
