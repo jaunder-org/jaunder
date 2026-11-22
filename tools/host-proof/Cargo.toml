@@ -59,7 +59,7 @@ tempfile = "3.27.0"
 # e2e-local bridges processkit's async supervision into synchronous lifecycle
 # steps; a background worker keeps process I/O pumps live between calls.
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
-url = "2.5.8"
+url = "2.5.9"
 wasmparser = "0.258.0"
 xshell = "0.2.7"
 
