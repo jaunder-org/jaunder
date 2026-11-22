@@ -40,6 +40,14 @@ explainer rather than a draft, and `promote` intentionally skips it.
    the `doc-links` gate. Rule 3 still applies to references from code and prose
    _outside_ `docs/adr/`.
 
+   Promotion rewrites only what is already on `main`. If you link a draft from
+   another unmerged PR and that PR merges first, its draft is promoted while
+   your branch still says `../drafts/aaa.md`. Your PR checks pass, but the merge
+   queue's `doc-links` run sees a dead link and ejects the PR, with a hint like
+   `(promoted: use ../NNNN-aaa.md)`. Rebase onto `main`, link `../NNNN-aaa.md`,
+   and update any rule-3 path citations of that draft too, since no gate catches
+   those.
+
 ## Automated promotion
 
 Feature authors commit drafts and their path citations; they do **not** run
@@ -65,4 +73,6 @@ subdirectory is excluded twice over, so drafts never trip a gate.
 `doc-links` enumerates tracked Markdown, so it checks drafts before promotion.
 Use the numbered-ADR and cross-draft link forms above: they resolve in the
 tracked draft, then `promote` adjusts them for the one-directory move and path
-rewrite so they resolve in the numbered ADR too.
+rewrite so they resolve in the numbered ADR too. That holds for drafts that are
+on `main` together. A link to another PR's draft that was promoted first needs
+the manual fix in rule 5.
