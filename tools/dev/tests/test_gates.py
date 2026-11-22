@@ -21,7 +21,7 @@ DOCS_SHAPE = [
     "flow-docs",
 ]
 SOURCE_CONTRACTS = [
-    "test-patterns",
+    "test-backend-pattern",
     "server-fn-registrar",
     "server-fn-tracing",
     "server-fn-coverage",

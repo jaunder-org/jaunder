@@ -380,7 +380,7 @@ fn rate_limit_reset_with(
         Err(_) => {
             let _ = writeln!(
                 stderr,
-                "xtask: warning: xtask.pr.rate_limit_reset: ignored failure while looking up rate-limit reset"
+                "pr-observer: warning: pr-observer.pr.rate_limit_reset: ignored failure while looking up rate-limit reset"
             );
             None
         }
@@ -567,7 +567,10 @@ mod tests {
         let reset = rate_limit_reset_with(attempt, &mut stderr);
         assert_eq!(enrich_rate_limit(original.clone(), reset), original);
         let warning = String::from_utf8(stderr).unwrap();
-        assert_eq!(warning.matches("xtask.pr.rate_limit_reset").count(), 1);
+        assert_eq!(
+            warning.matches("pr-observer.pr.rate_limit_reset").count(),
+            1
+        );
         assert_eq!(warning.lines().count(), 1);
         assert!(!warning.contains("sensitive"));
     }

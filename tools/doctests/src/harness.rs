@@ -83,7 +83,6 @@ mod tests {
     fn scanned(source: &str) -> Vec<ScannedFile> {
         vec![ScannedFile {
             path: "src/lib.rs".to_string(),
-            run_path: "src/lib.rs".to_string(),
             source: source.to_string(),
         }]
     }

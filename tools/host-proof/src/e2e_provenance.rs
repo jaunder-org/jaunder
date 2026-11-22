@@ -153,7 +153,7 @@ fn acquisition<T>(operation: &str, result: Result<T>, errors: &mut Vec<String>) 
             // or JSON payloads. A failed warning sink is ancillary too.
             let _ = writeln!(
                 std::io::stderr(),
-                "xtask: warning: xtask.e2e.provenance: {detail}"
+                "e2e-local: warning: e2e-local.e2e.provenance: {detail}"
             );
             if errors.len() < 16 {
                 errors.push(detail.chars().take(256).collect());

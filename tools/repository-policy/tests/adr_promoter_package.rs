@@ -32,9 +32,8 @@ fn checked(output: Output) -> Vec<u8> {
 fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    let files: [(&str, &[u8]); 10] = [
+    let files: [(&str, &[u8]); 9] = [
         ("flake.nix", b"{}\n"),
-        ("xtask/Cargo.toml", b"[package]\n"),
         ("docs/adr/0001-old.md", b"# ADR-0001: Old\n\n- Status: accepted\n"),
         ("docs/adr/drafts/alpha.md", b"# ADR-DRAFT: Alpha\r\n\r\n- Status: proposed\r\n\r\n[beta](../drafts/beta.md)\r\n"),
         ("docs/adr/drafts/beta.md", b"# ADR-DRAFT: Beta\n\n- Status: proposed\n\n[alpha](../drafts/alpha.md)\n"),

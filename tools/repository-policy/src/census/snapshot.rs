@@ -47,14 +47,12 @@ impl SourceSnapshot {
     }
 }
 
-/// The root Rust workspace and the four explicitly approved non-root source trees.
+/// The root Rust workspace and the three explicitly approved non-root source trees.
 pub(crate) fn is_approved_path(path: &str) -> bool {
     !is_excluded_path(path)
         && is_text_input(path)
-        && (matches!(
-            path.split('/').next(),
-            Some("xtask" | "tools" | "end2end" | "elisp")
-        ) || is_root_rust_workspace_path(path))
+        && (matches!(path.split('/').next(), Some("tools" | "end2end" | "elisp"))
+            || is_root_rust_workspace_path(path))
 }
 
 fn is_root_rust_workspace_path(path: &str) -> bool {
@@ -162,7 +160,6 @@ mod tests {
     #[test]
     fn approved_paths_include_only_declared_source_roots() {
         assert!(is_approved_path("server/src/lib.rs"));
-        assert!(is_approved_path("xtask/src/lib.rs"));
         assert!(is_approved_path("tools/system-artifacts/src/main.rs"));
         assert!(is_approved_path("end2end/tests/a.spec.ts"));
         assert!(is_approved_path("elisp/jaunder.el"));

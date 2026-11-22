@@ -48,9 +48,9 @@ pub fn needs_hooks_path(current: Option<&str>) -> bool {
 /// enumerates "every source file" would police other checkouts' code.
 ///
 /// `ls-files` lists only what is under `dir`, so a caller that means "every tracked
-/// file in the repo" must pass [`toplevel`] — a test run with `--manifest-path
-/// xtask/Cargo.toml` executes with `xtask/` as its cwd and would otherwise see a
-/// partial tree, with paths relative to it rather than to the repo.
+/// file in the repo" must pass [`toplevel`] — a test executes with its package
+/// directory as cwd and would otherwise see a partial tree, with paths relative to
+/// that package rather than to the repo.
 pub fn tracked_files(dir: &Path, glob: &str) -> Result<Vec<String>> {
     let out = output(dir, &["ls-files", "--", glob])?;
     let mut files: Vec<String> = out.lines().map(str::to_string).collect();

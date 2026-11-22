@@ -6,9 +6,9 @@
 //! `token.rs:56`, and likewise `:59/:64/:69`, `etag.rs:35/:38`,
 //! `post_body.rs:15/:19`.
 //!
-//! Paths are printed relative to the invoked manifest's directory, so a
-//! `--manifest-path xtask/Cargo.toml` run prints `src/steps/nix.rs`, not
-//! `xtask/src/steps/nix.rs`. Callers hold both spellings; see `check::ScannedFile`.
+//! Paths are printed relative to the invoked manifest's directory. The gate runs
+//! the root workspace, so they are repo-relative and match `check::ScannedFile`'s
+//! path directly.
 //!
 //! # What this cannot read, stated rather than papered over
 //!

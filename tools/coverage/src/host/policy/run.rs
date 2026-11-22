@@ -107,7 +107,7 @@ fn write_failures_dump_with(
     if outcome.is_err() {
         let _ = writeln!(
             stderr,
-            "xtask: warning: xtask.coverage.failure_dump: ignored failure while writing coverage diagnostic dump"
+            "coverage-check: warning: coverage-check.coverage.failure_dump: ignored failure while writing coverage diagnostic dump"
         );
     }
 }
@@ -326,7 +326,12 @@ mod tests {
             );
             assert_eq!(verdict.failures.len(), 1);
             let warning = String::from_utf8(stderr).unwrap();
-            assert_eq!(warning.matches("xtask.coverage.failure_dump").count(), 1);
+            assert_eq!(
+                warning
+                    .matches("coverage-check.coverage.failure_dump")
+                    .count(),
+                1
+            );
             assert_eq!(warning.lines().count(), 1);
             assert!(!warning.contains("injected"));
         }
