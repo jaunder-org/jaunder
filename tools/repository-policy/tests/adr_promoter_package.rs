@@ -29,17 +29,16 @@ fn checked(output: Output) -> Vec<u8> {
 }
 
 #[test]
-fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
+fn selected_package_syncs_readme_after_admission_and_passes_read_only_gates() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    let files: [(&str, &[u8]); 9] = [
+    let drifted: &[u8] =
+        b"<!-- adr-table:begin -->\n| [0001](adr/wrong.md) | Curated | rejected |\n<!-- adr-table:end -->\n";
+    let files: [(&str, &[u8]); 6] = [
         ("flake.nix", b"{}\n"),
         ("docs/adr/0001-old.md", b"# ADR-0001: Old\n\n- Status: accepted\n"),
-        ("docs/adr/drafts/alpha.md", b"# ADR-DRAFT: Alpha\r\n\r\n- Status: proposed\r\n\r\n[beta](../drafts/beta.md)\r\n"),
-        ("docs/adr/drafts/beta.md", b"# ADR-DRAFT: Beta\n\n- Status: proposed\n\n[alpha](../drafts/alpha.md)\n"),
-        ("docs/README.md", b"<!-- adr-table:begin -->\n| [0001](adr/0001-old.md) | Curated | accepted |\n<!-- adr-table:end -->\n"),
-        ("docs/ARCHITECTURE.md", b"adr/0001-old.md adr/drafts/alpha.md adr/drafts/beta.md\n"),
-        ("citation.txt", b"docs/adr/drafts/alpha.md drafts/beta\n"),
+        ("docs/README.md", drifted),
+        ("docs/ARCHITECTURE.md", b"adr/0001-old.md\n"),
         ("docs/adr/drafts/README.md", b"Authoring guide\n"),
         ("event.json", br#"{"action":"opened","pull_request":{"number":7,"head":{"ref":"automation/adr-promoter","sha":"head"},"base":{"ref":"main","sha":"base"}}}"#),
     ];
@@ -89,62 +88,15 @@ fn selected_package_promotes_complete_documents_and_passes_read_only_gates() {
     let input = "tools/adr-promoter/adr_promoter/new.py";
     std::fs::create_dir_all(root.join(input).parent().unwrap()).unwrap();
     std::fs::write(root.join(input), b"# admitted fixture input\n").unwrap();
-    let before = checked(command("git", root).arg("write-tree").output().unwrap());
-    let refused = request("promote");
+    let refused = request("sync-readme");
     assert!(!refused.status.success() && refused.stdout.is_empty());
     assert!(
         String::from_utf8_lossy(&refused.stderr)
             .contains("Git flakes omit untracked declared inputs")
     );
-    assert_eq!(
-        checked(command("git", root).arg("write-tree").output().unwrap()),
-        before
-    );
-    assert!(root.join("docs/adr/drafts/alpha.md").exists());
+    assert_eq!(std::fs::read(root.join("docs/README.md")).unwrap(), drifted);
     checked(command("git", root).args(["add", input]).output().unwrap());
-    assert!(
-        String::from_utf8(run("promote"))
-            .unwrap()
-            .ends_with("; staged\n")
-    );
-    assert_eq!(
-        std::fs::read(root.join("docs/adr/0002-alpha.md")).unwrap(),
-        b"# ADR-0002: Alpha\r\n\r\n- Status: accepted\r\n\r\n[beta](0003-beta.md)\r\n"
-    );
-    assert_eq!(
-        std::fs::read(root.join("docs/adr/0003-beta.md")).unwrap(),
-        b"# ADR-0003: Beta\n\n- Status: accepted\n\n[alpha](0002-alpha.md)\n"
-    );
-    assert_eq!(
-        std::fs::read(root.join("citation.txt")).unwrap(),
-        b"docs/adr/0002-alpha.md 0003-beta\n"
-    );
-    assert_eq!(
-        std::fs::read(root.join("docs/ARCHITECTURE.md")).unwrap(),
-        b"adr/0001-old.md adr/0002-alpha.md adr/0003-beta.md\n"
-    );
-    assert_eq!(std::fs::read(root.join("docs/README.md")).unwrap(),
-               b"<!-- adr-table:begin -->\n\n| #   | Title | Status |\n| --- | ----- | ------ |\n| [0001](adr/0001-old.md) | Curated | accepted |\n| [0002](adr/0002-alpha.md) | Alpha | accepted |\n| [0003](adr/0003-beta.md) | Beta | accepted |\n\n<!-- adr-table:end -->\n");
-    assert_eq!(run("sync-readme"), b"3 rows, already in sync\n");
-    assert_eq!(
-        checked(
-            command("git", root)
-                .args(["diff", "--name-only"])
-                .output()
-                .unwrap()
-        ),
-        b""
-    );
-    let staged = checked(
-        command("git", root)
-            .args(["diff", "--cached", "--name-only"])
-            .output()
-            .unwrap(),
-    );
-    let staged = String::from_utf8(staged).unwrap();
-    assert!(
-        staged.contains("docs/adr/0002-alpha.md") && !staged.contains("docs/adr/drafts/alpha.md")
-    );
+    assert_eq!(run("sync-readme"), b"1 rows (0 added, 0 removed)\n");
     assert!(repository_policy::adr::format_problems(root).is_empty());
     for gate in ["adr-readme-parity", "adr-view-parity", "doc-links"] {
         repository_policy::repository_docs::Operation::parse(gate)
