@@ -5549,7 +5549,12 @@ each PR combined with the current `main` in a temporary `merge_group` branch and
 merges only if that build is green, so the up-to-date-before-merge treadmill is
 gone while the semantic-conflict guarantee is kept.
 `.github/workflows/ci.yml:11` carries the `merge_group:` trigger that makes the
-required checks run in that context.
+required checks run in that context. That queue run is the coverage and e2e
+verdict for the commit it lands. The `push` run for a queue-tested SHA runs only
+`Validation host`, which writes `main`'s kache store, and skips the other lanes.
+A push without a passing `merge_group` run, such as an admin bypass, validates
+in full
+([merge-queue verdict draft](adr/drafts/merge-queue-verdict-covers-landed-commit.md)).
 
 Because green checks are only phase one under a queue — and an ejected PR leaves
 the queue silently — the focused host-only `tools/pr-observer` owns ordinary PR

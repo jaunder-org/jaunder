@@ -87,7 +87,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
     // GitHub Actions uses the YAML 1.2 string key, not a YAML 1.1 boolean.
     assert!(ci["on"].as_mapping().is_some());
     let jobs = &ci["jobs"];
-    assert_eq!(jobs["e2e-reconcile"]["if"].as_str(), Some("always()"));
+    // workflow_callers.rs owns the aggregates' `if` conditions.
     assert!(
         jobs["e2e-reconcile"]["needs"]
             .as_sequence()
@@ -113,7 +113,6 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
                     .is_some_and(|s| s.contains("fromJSON(needs.e2e-catalog.outputs.")))
         );
     }
-    assert_eq!(jobs["e2e-gate"]["if"].as_str(), Some("always()"));
     let steps = jobs["e2e-reconcile"]["steps"].as_sequence().unwrap();
     let reconcile = steps
         .iter()

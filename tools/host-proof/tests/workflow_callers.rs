@@ -81,12 +81,26 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         assert!(!encoded.contains("last-result.json"));
         assert!(!encoded.contains(&format!("{lane}-result.json")));
     }
+    // The aggregates keep always(): otherwise a failed lane would skip a
+    // required check, which branch protection accepts. Only a push of a
+    // merge-queue-tested commit skips them.
+    let aggregate_if = "always() && needs.merge-queue-verdict.outputs.tested != 'true'";
+    for name in ["validate-no-e2e", "e2e-reconcile", "e2e-gate"] {
+        assert_eq!(jobs[name]["if"], aggregate_if, "{name}");
+    }
+    // Pull-request and merge-queue runs can never skip, whatever the script does.
+    assert!(
+        jobs["merge-queue-verdict"]["outputs"]["tested"]
+            .as_str()
+            .unwrap()
+            .starts_with("${{ github.event_name == 'push' && ")
+    );
     let aggregate = &jobs["validate-no-e2e"];
     assert_eq!(aggregate["name"], "Validate (no e2e)");
-    assert_eq!(aggregate["if"], "always()");
     assert_eq!(
         aggregate["needs"],
         serde_yaml::to_value([
+            "merge-queue-verdict",
             "validate-host",
             "validate-hermetic",
             "validate-test-checks",
@@ -108,19 +122,22 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     assert!(source.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
     assert_eq!(
         jobs["e2e-gate"]["needs"],
-        serde_yaml::to_value(["e2e-catalog", "e2e-lane", "e2e-reconcile"]).unwrap()
+        serde_yaml::to_value([
+            "merge-queue-verdict",
+            "e2e-catalog",
+            "e2e-lane",
+            "e2e-reconcile"
+        ])
+        .unwrap()
     );
-    assert_eq!(jobs["e2e-gate"]["if"], "always()");
     assert_eq!(
         jobs["e2e-lane"]["needs"],
-        serde_yaml::to_value(["e2e-catalog"]).unwrap()
+        serde_yaml::to_value(["merge-queue-verdict", "e2e-catalog"]).unwrap()
     );
-    let reconcile = &jobs["e2e-reconcile"];
     assert_eq!(
-        reconcile["needs"],
-        serde_yaml::to_value(["e2e-catalog", "e2e-lane"]).unwrap()
+        jobs["e2e-reconcile"]["needs"],
+        serde_yaml::to_value(["merge-queue-verdict", "e2e-catalog", "e2e-lane"]).unwrap()
     );
-    assert_eq!(reconcile["if"], "always()");
     let lines = jobs["e2e-gate"]["steps"]
         .as_sequence()
         .unwrap()

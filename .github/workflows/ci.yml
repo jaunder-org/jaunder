@@ -23,9 +23,67 @@ on:
 # `postgresTestingVmSystem`), and the jaunder-org cachix cache is populated for that
 # system only — an arm64 runner would emulate the VM and rebuild the world cold. They
 # also need a privileged, long-lived environment for the nix daemon and test VMs,
-# which rules out the container-based `ubuntu-slim` tier that the result-only gates
-# use below.
+# which rules out the container-based `ubuntu-slim` tier that the merge-queue
+# verdict and the result-only gates use below.
 jobs:
+  # A merge-queue run's verdict is the verdict for the commit it tested, so a
+  # push to `main` of a commit whose `merge_group` run passed both required
+  # checks skips everything except `validate-host` (main's kache writer). Any
+  # other push, including an admin bypass of the queue, validates in full. See
+  # docs/adr/drafts/merge-queue-verdict-covers-landed-commit.md.
+  #
+  # The event test lives in the output expression, so a pull_request or
+  # merge_group run can never skip. `github-script` runs on the runner's bundled
+  # Node and needs none of the slim image's software (see `e2e gate` below).
+  merge-queue-verdict:
+    name: Merge-queue verdict
+    runs-on: ubuntu-slim
+    permissions:
+      actions: read
+    outputs:
+      tested:
+        ${{ github.event_name == 'push' && steps.lookup.outputs.tested == 'true'
+        }}
+    steps:
+      - name: Look up a passing merge-queue run of this commit
+        id: lookup
+        if: github.event_name == 'push'
+        uses: actions/github-script@v9.0.0
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const required = ["Validate (no e2e)", "e2e gate"];
+            try {
+              const runs = await github.paginate(github.rest.actions.listWorkflowRuns, {
+                owner, repo, workflow_id: "ci.yml", event: "merge_group",
+                head_sha: context.sha, per_page: 100,
+              });
+              for (const run of runs) {
+                // Required jobs, not the run's conclusion: the queue merges as
+                // soon as they pass, possibly before the run is marked complete.
+                const jobs = await github.paginate(github.rest.actions.listJobsForWorkflowRun, {
+                  owner, repo, run_id: run.id, per_page: 100,
+                });
+                const passed = new Set(
+                  jobs.filter((job) => job.conclusion === "success").map((job) => job.name),
+                );
+                if (required.every((name) => passed.has(name))) {
+                  core.setOutput("tested", "true");
+                  await core.summary
+                    .addRaw(`Merge-queue run [${run.id}](${run.html_url}) passed ${required.join(" and ")} on ${context.sha}; its other lanes are not re-run.`)
+                    .write();
+                  return;
+                }
+              }
+              core.setOutput("tested", "false");
+              await core.summary
+                .addRaw(`No passing merge-queue run of ${context.sha}; validating in full.`)
+                .write();
+            } catch (error) {
+              core.warning(`Merge-queue lookup failed, validating in full: ${error.message}`);
+              core.setOutput("tested", "false");
+            }
+
   validate-host:
     name: Validation host
     runs-on: ubuntu-24.04
@@ -126,6 +184,8 @@ jobs:
   validate-hermetic:
     name: Validation hermetic
     runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if: needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -156,6 +216,8 @@ jobs:
   validate-test-checks:
     name: Validation test checks
     runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if: needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -196,6 +258,8 @@ jobs:
   validate-coverage:
     name: Validation coverage
     runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if: needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -303,12 +367,15 @@ jobs:
     runs-on: ubuntu-slim
     needs:
       [
+        merge-queue-verdict,
         validate-host,
         validate-hermetic,
         validate-test-checks,
         validate-coverage,
       ]
-    if: always()
+    # Keep always(): without it a failed lane would skip this required check,
+    # and branch protection accepts a skipped check.
+    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - name: Require all validation lanes to pass
         run: |
@@ -325,6 +392,8 @@ jobs:
   e2e-catalog:
     name: E2E catalog
     runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if: needs.merge-queue-verdict.outputs.tested != 'true'
     outputs:
       lanes: ${{ steps.matrix.outputs.lanes }}
       reconciles: ${{ steps.matrix.outputs.reconciles }}
@@ -342,7 +411,8 @@ jobs:
   e2e-lane:
     name: e2e (${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    needs: [e2e-catalog]
+    needs: [merge-queue-verdict, e2e-catalog]
+    if: needs.merge-queue-verdict.outputs.tested != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -487,8 +557,8 @@ jobs:
   e2e-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/${{ matrix.browser }})
     runs-on: ubuntu-24.04
-    needs: [e2e-catalog, e2e-lane]
-    if: always()
+    needs: [merge-queue-verdict, e2e-catalog, e2e-lane]
+    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -548,8 +618,9 @@ jobs:
     # tolerable only because the job depends on none of the image's preinstalled
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
-    needs: [e2e-catalog, e2e-lane, e2e-reconcile]
-    if: always()
+    needs: [merge-queue-verdict, e2e-catalog, e2e-lane, e2e-reconcile]
+    # Keep always(): without it a failed lane would skip this required check.
+    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - name: Require all e2e matrix jobs to pass
         run: |
