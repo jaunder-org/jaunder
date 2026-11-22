@@ -2882,10 +2882,15 @@ chain. CDN ranges remain Caddy configuration rather than Jaunder defaults.
 
 **What is inside the executable.** Two `rust-embed` trees, so **no external file
 is needed to serve the client** ([ADR-0003](adr/0003-asset-management.md)).
-Request handling still touches disk for user data — media blobs are opened per
-request from the storage path (`server/src/media.rs`) — and the process writes
-its sole runtime identity to `<storage>/runtime.json` and may read a PostgreSQL
-password file; see "Outside the binary" below.
+Debug builds embed too (`rust-embed/debug-embed`), retiring the debug disk reads
+ADR-0003 cites as a mitigation. `server/build.rs` stages into `$OUT_DIR`, so any
+asset change recompiles the crate anyway. Run-time reads would use an absolute
+path that the compile cache cannot key on, so a cached lib could read another
+checkout's `target/` (#2048). Request handling still touches disk for user data
+— media blobs are opened per request from the storage path
+(`server/src/media.rs`) — and the process writes its sole runtime identity to
+`<storage>/runtime.json` and may read a PostgreSQL password file; see "Outside
+the binary" below.
 
 Startup ownership is an OS-backed exclusive `runtime.lock` keyed only by the
 storage directory. `serve` acquires it before transient cleanup and retains it
@@ -4370,11 +4375,10 @@ artifacts or takes `.xtask/host-artifacts.lock` for preparation. The separate
 named-workspace, server-lease and application runtime locks remain unchanged.
 
 Jaunder embeds the selected CSR at build time; there is no runtime CSR path. The
-existing `server/build.rs` build staging and debug `rust-embed/debug-embed`
-feature remain in use. Profile seeding stays an out-of-process
-`test-support seed-sandbox-profile` operation under ADR-0046; its stdout is
-captured and withheld from operational command output while stderr and exact
-child status are retained. The helper owns its narrow runtime-info
+existing `server/build.rs` build staging remains in use. Profile seeding stays
+an out-of-process `test-support seed-sandbox-profile` operation under ADR-0046;
+its stdout is captured and withheld from operational command output while stderr
+and exact child status are retained. The helper owns its narrow runtime-info
 identity/address parser and HTTP readiness probe rather than exposing the e2e
 host driver's private session adapters. Once ready, it prints the URL and, for a
 nonempty profile (including a named resume's recorded profile), the seeded

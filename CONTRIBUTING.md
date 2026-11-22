@@ -605,8 +605,8 @@ For application preparation, the helper still checks relevant untracked checkout
 inputs against the selected Nix source admission and refuses omitted inputs
 rather than silently selecting an incomplete source snapshot. It then selects
 `.#sandboxArtifacts`, one immutable set containing debug-profile `jaunder` and
-`test-support`; the Nix-built Jaunder executable embeds the selected debug CSR
-bundle with `rust-embed/debug-embed`. The helper keeps its unique
+`test-support`; the Nix-built Jaunder executable embeds the selected CSR bundle,
+as every Jaunder build does. The helper keeps its unique
 `.xtask/sandbox-artifacts-*` Nix output link alive through preparation and the
 server or command consumer lifetime. Nix/store owns this build concurrency; the
 sandbox no longer publishes `target` application artifacts or takes
