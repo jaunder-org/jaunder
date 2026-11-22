@@ -5339,7 +5339,7 @@ decision):
   closure like the host tools below; an edit to an unrelated tool leaves the
   product derivation unchanged
   ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
-  [devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). The
+  [devtool retirement owners](adr/0259-devtool-retirement-owners.md)). The
   executables: `coverage-sandbox` (`tools/coverage`: `emit` produces coverage
   artifacts into `$out` for exfiltration, `validate-status` gates them, `wasm`
   drives the browser WebAssembly coverage lifecycle, and `diagnostic-build`
@@ -5418,10 +5418,10 @@ evaluation-time assertions. An accidental host-tool invocation inside a
 derivation therefore fails loudly rather than running a stale copy, and edits to
 gate logic or any other tool never bust the product, coverage or e2e cache
 ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md);
-[devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). `tools/`
-is a standalone workspace outside the root cargo workspace
-(`tools/Cargo.toml:3`); the explicit `tools-test` step compensates for the unit
-suites the application coverage/Nix test gates do not execute
+[devtool retirement owners](adr/0259-devtool-retirement-owners.md)). `tools/` is
+a standalone workspace outside the root cargo workspace (`tools/Cargo.toml:3`);
+the explicit `tools-test` step compensates for the unit suites the application
+coverage/Nix test gates do not execute
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 [#1061](https://github.com/jaunder-org/jaunder/issues/1061) tracks the stale
 `host_tests` source comment that overstated the related `tools/` Nix-exclusion
@@ -5688,7 +5688,7 @@ comparison harness are retired, and devtool is fully retired; a future
 partitioning experiment rebuilds its own harness. The production producer and
 build endpoints live in the crates that own them
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md);
-[devtool retirement owners](adr/drafts/devtool-retirement-owners.md)). #1864's
+[devtool retirement owners](adr/0259-devtool-retirement-owners.md)). #1864's
 distinct verdicts and #1933's selected passive observations/retention remain
 separately owned.
 

@@ -531,7 +531,7 @@ let
   # Every CSR bundle derivation runs this executable, and the product binary
   # embeds the bundle. Its own Cargo closure keeps edits to unrelated tools out
   # of the product derivation
-  # (docs/adr/drafts/devtool-retirement-owners.md).
+  # (docs/adr/0259-devtool-retirement-owners.md).
   mkSystemArtifacts =
     args:
     let
