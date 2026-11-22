@@ -287,6 +287,7 @@ convention). See the Status column below for each ADR's current status.
 | [0256](adr/0256-kache-compile-cache.md)                                  | kache replaces sccache as the host compile cache                                                             | accepted   |
 | [0257](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)      | html5ever parser stepping records are dropped at the log bridge                                              | accepted   |
 | [0258](adr/0258-dev-runs-nix-built-host-tools.md)                        | `dev` runs Nix-built host tools                                                                              | accepted   |
+| [0259](adr/0259-devtool-retirement-owners.md)                            | Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source         | accepted   |
 
 <!-- adr-table:end -->
 

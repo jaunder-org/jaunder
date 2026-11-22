@@ -1,20 +1,20 @@
-# ADR-DRAFT: Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source
+# ADR-0259: Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-21
 - Issue: [#1973](https://github.com/jaunder-org/jaunder/issues/1973)
 
 ## Context
 
-[ADR-0246](../0246-retire-xtask-devtool-endpoints.md) deferred the
-experiment-only coverage emit/worker/aggregate endpoints. While they remained,
-it said full devtool retirement was "not claimed or permitted" (ADR-0246:95-99).
-It also assigned the in-derivation leaves to the existing coverage, doctests and
+[ADR-0246](0246-retire-xtask-devtool-endpoints.md) deferred the experiment-only
+coverage emit/worker/aggregate endpoints. While they remained, it said full
+devtool retirement was "not claimed or permitted" (ADR-0246:95-99). It also
+assigned the in-derivation leaves to the existing coverage, doctests and
 performance packages, and system-artifacts to a qualification target
 (ADR-0246:72-74, :81-82).
 
-[ADR-0251](../0251-dev-runner-replaces-just.md) then dissolved `tools/devtool`.
-Its leaves became `coverage-sandbox`, `doctests`, `perf-producer` and
+[ADR-0251](0251-dev-runner-replaces-just.md) then dissolved `tools/devtool`. Its
+leaves became `coverage-sandbox`, `doctests`, `perf-producer` and
 `system-artifacts`. The experiment endpoints and their `benchmark-local` harness
 went with it. No accepted record holds the decision to retire those endpoints.
 The human confirmed it was intended on 2026-11-21 (#1973), which closed the
@@ -30,7 +30,7 @@ appending a comment to `tools/traced-run/src/main.rs` changed the derivation of
   implementations. That breadth was left over from when devtool shared this
   source.
 
-[ADR-0258](../0258-dev-runs-nix-built-host-tools.md) already listed
+[ADR-0258](0258-dev-runs-nix-built-host-tools.md) already listed
 `system-artifacts` among the packages built from their own Cargo closure.
 
 ## Decision
