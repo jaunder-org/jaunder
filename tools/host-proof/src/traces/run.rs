@@ -127,53 +127,56 @@ pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
     PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
-/// Read the single required JSONL member from a capture archive.
+/// The server's WARN-and-above diagnostic log inside every capture bundle. It may
+/// legitimately be empty: a clean run warns about nothing.
+pub const DIAG_MEMBER: &str = "capture/diag.log";
+
+/// Read the single required `member` from a capture archive.
 ///
 /// Every archive consumer uses this seam so malformed evidence has the same
-/// missing, ambiguous, file-type, empty, and UTF-8 failure modes.
-pub fn read_trace_member(tarball: &Path) -> Result<String> {
+/// missing, ambiguous, file-type, and UTF-8 failure modes.
+pub fn read_capture_member(tarball: &Path, member: &str) -> Result<String> {
     let file =
         File::open(tarball).with_context(|| format!("opening capture {}", tarball.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
-    let mut trace = None;
+    let mut found = None;
     for entry in archive.entries()? {
         let mut entry = entry?;
-        if entry.path()?.as_ref() != Path::new(TRACE_MEMBER) {
+        if entry.path()?.as_ref() != Path::new(member) {
             continue;
         }
         ensure!(
             entry.header().entry_type().is_file(),
-            "trace member `{TRACE_MEMBER}` is not a regular file"
+            "capture member `{member}` is not a regular file"
         );
-        ensure!(
-            trace.is_none(),
-            "capture has ambiguous trace member `{TRACE_MEMBER}`"
-        );
+        ensure!(found.is_none(), "capture has ambiguous member `{member}`");
         let mut contents = String::new();
         entry
             .read_to_string(&mut contents)
-            .with_context(|| format!("reading trace member `{TRACE_MEMBER}`"))?;
-        trace = Some(contents);
+            .with_context(|| format!("reading capture member `{member}`"))?;
+        found = Some(contents);
     }
-    let trace = trace.ok_or_else(|| {
+    found.ok_or_else(|| {
         anyhow::anyhow!(
-            "trace member `{TRACE_MEMBER}` is missing from {}",
+            "capture member `{member}` is missing from {}",
             tarball.display()
         )
-    })?;
+    })
+}
+
+/// Read the capture's trace, which unlike other members must not be empty.
+pub fn read_trace_member(tarball: &Path) -> Result<String> {
+    let trace = read_capture_member(tarball, TRACE_MEMBER)?;
     ensure!(
         !trace.trim().is_empty(),
-        "trace member `{TRACE_MEMBER}` is empty"
+        "capture member `{TRACE_MEMBER}` is empty"
     );
     Ok(trace)
 }
 
 /// Extract the single `capture/otel-traces.jsonl` member of a `capture-*.tar.gz`
 /// bundle to `dest`.
-///
-/// `pub(crate)` for the flow-coverage gate (#681), which reads the same member out
-/// of the same bundle through [`read_trace_member`].
-pub fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
+fn extract_trace(tarball: &Path, dest: &Path) -> Result<()> {
     let trace = read_trace_member(tarball)?;
     std::fs::write(dest, trace)
         .with_context(|| format!("writing extracted trace {}", dest.display()))
@@ -250,6 +253,15 @@ mod tests {
                 .contains("ambiguous")
         );
     }
+
+    #[test]
+    fn capture_member_reader_accepts_an_empty_member() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture.tar.gz");
+        write_capture(&capture, &[(DIAG_MEMBER, b"", tar::EntryType::Regular)]);
+        assert_eq!(read_capture_member(&capture, DIAG_MEMBER).unwrap(), "");
+    }
+
     #[test]
     fn e2e_attr_gate_and_single_worker() {
         assert_eq!(

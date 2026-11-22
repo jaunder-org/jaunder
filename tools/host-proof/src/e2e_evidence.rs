@@ -371,8 +371,6 @@ pub(crate) mod tests {
     use std::fs;
     use std::path::Path;
 
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
     use serde_json::Value;
 
     use super::{LaneEvidence, reconcile};
@@ -386,8 +384,6 @@ pub(crate) mod tests {
     struct TestCatalog {
         lanes: Vec<super::ExpectedLane>,
     }
-    use crate::traces::run::TRACE_MEMBER;
-
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
     const REPORTS: [&str; 3] = [
         include_str!("testdata/e2e-ownership/ordinary-1-report.json"),
@@ -420,20 +416,6 @@ pub(crate) mod tests {
         "sqlite-firefox-serial-special",
     ];
 
-    pub(crate) fn write_capture(path: &Path, trace: &str) {
-        let file = fs::File::create(path).unwrap();
-        let encoder = GzEncoder::new(file, Compression::default());
-        let mut archive = tar::Builder::new(encoder);
-        let mut header = tar::Header::new_gnu();
-        header.set_size(trace.len().try_into().unwrap());
-        header.set_mode(0o644);
-        header.set_cksum();
-        archive
-            .append_data(&mut header, TRACE_MEMBER, trace.as_bytes())
-            .unwrap();
-        archive.into_inner().unwrap().finish().unwrap();
-    }
-
     pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {
         IDENTITIES
             .iter()
@@ -451,7 +433,7 @@ pub(crate) mod tests {
                 fs::write(&report, REPORTS[index]).unwrap();
                 fs::write(&lane_manifest, LANE_MANIFESTS[index]).unwrap();
                 fs::write(&duration_manifest, DURATION_MANIFESTS[index]).unwrap();
-                write_capture(&capture, TRACES[index]);
+                crate::test_support::write_capture(&capture, TRACES[index], Some(""));
                 fs::write(&phase, PHASES[index]).unwrap();
                 LaneEvidence {
                     identity: (*identity).to_owned(),
@@ -663,7 +645,7 @@ pub(crate) mod tests {
             "e2e.navigation_top_dropped\",\"value\":{\"stringValue\":\"0\"",
             "e2e.navigation_top_dropped\",\"value\":{\"stringValue\":\"1\"",
         );
-        write_capture(&evidence[0].capture, &dropped);
+        crate::test_support::write_capture(&evidence[0].capture, &dropped, Some(""));
         assert!(
             errors(&evidence)
                 .iter()

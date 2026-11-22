@@ -2091,9 +2091,12 @@ The artifact-input CLI
 reads only already-lifted `e2e-<identity>` directories. It first reconciles the
 SQLite/Chromium pair: the exact enabled lane set, an identical complete census
 equal to the lanes' disjoint report union, and a successful phase sidecar per
-lane. Only then are the captures read. Each producer replaces its own lifted
-files before it builds, and the local workflows that reach coverage rerun the
-producers first. These checks do not claim detection of arbitrary hidden capture
+lane. Only then are the captures read. A capture whose server `diag.log` records
+an OpenTelemetry SDK span loss (`BatchSpanProcessor.*`), or that has no
+`diag.log`, is refused as incomplete: a lost request span would otherwise
+surface as an orphan (#2029). Each producer replaces its own lifted files before
+it builds, and the local workflows that reach coverage rerun the producers
+first. These checks do not claim detection of arbitrary hidden capture
 omissions; no extra receipt or attestation schema is involved.
 
 One further property is worth knowing before you fight the gate:

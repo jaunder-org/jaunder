@@ -10,8 +10,10 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
+use super::span_loss::refuse_span_loss;
 use super::{Coverage, Snapshot, extract, render};
 use crate::traces::parse::{Filters, parse_spans};
+use crate::traces::run::{DIAG_MEMBER, read_capture_member, read_trace_member};
 use repository_policy::server_fns::ServerFn;
 
 #[cfg(test)]
@@ -32,8 +34,10 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
     Ok(extract(&spans, inventory))
 }
 
-/// Derive coverage from a `capture-*.tar.gz` bundle, reusing the trace extractor
-/// that `traces run` already uses rather than a second implementation.
+/// Derive coverage from a `capture-*.tar.gz` bundle through the archive reader
+/// every capture consumer shares. A capture whose server reported losing spans is
+/// refused first (#2029); its `diag.log` is required, because without it the loss
+/// cannot be ruled out.
 fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
     if !tarball.exists() {
         bail!(
@@ -42,11 +46,10 @@ fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Cover
             tarball.display()
         );
     }
-    let tmp = tempfile::tempdir().context("creating a temp dir for the extracted trace")?;
-    let dest = tmp.path().join("otel-traces.jsonl");
-    crate::traces::run::extract_trace(tarball, &dest)
-        .with_context(|| format!("extracting the otel trace from {}", tarball.display()))?;
-    let jsonl = std::fs::read_to_string(&dest).context("reading the extracted otel trace")?;
+    let diag_log = read_capture_member(tarball, DIAG_MEMBER)?;
+    refuse_span_loss(&diag_log).with_context(|| format!("refusing {}", tarball.display()))?;
+    let jsonl = read_trace_member(tarball)
+        .with_context(|| format!("reading the otel trace from {}", tarball.display()))?;
     coverage_from_jsonl(&jsonl, inventory)
 }
 
