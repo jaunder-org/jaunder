@@ -628,8 +628,7 @@ let
       // {
         inherit pname passthru;
         cargoArtifacts = if debug then debugCargoArtifacts else cargoArtifacts;
-        # RustEmbed otherwise reads the vanished build directory in dev builds.
-        cargoExtraArgs = "-p jaunder" + pkgs.lib.optionalString debug " --features rust-embed/debug-embed";
+        cargoExtraArgs = "-p jaunder";
         # Embed the CSR bundle + public assets into the binary (#237): the
         # release artifact is self-contained (ADR-0003/0008), serving pkg/*
         # and public/* with no external files. `server/build.rs` stages these

@@ -37,10 +37,10 @@ Two follow-on edits:
 
 - The Nix debug build's `--features rust-embed/debug-embed` now does nothing, so
   it is removed.
-- `site.rs`'s `embedded_body` gets an `unreachable!("<reason>")` in its
-  `Cow::Owned` arm, because that arm can no longer run. CONTRIBUTING's coverage
-  rules exempt that form. The comments about a "runtime disk-read (debug)" are
-  corrected.
+- `site.rs`'s `embedded_body` keeps its general `Cow` conversion. Its
+  `Cow::Owned` arm no longer runs from `serve_site`, so a unit test covers it
+  directly (Clippy rejects narrowing the signature). The comments about a
+  "runtime disk-read (debug)" are corrected.
 
 Docs that describe debug-embed as a Nix-only special case are updated:
 CONTRIBUTING's sandbox paragraph and ARCHITECTURE's sandbox paragraph.

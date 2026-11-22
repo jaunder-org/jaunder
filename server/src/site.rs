@@ -268,8 +268,7 @@ pub async fn serve_site(req: Request) -> Response {
 
     if let Some(file) = Site::get(&variant_path(&logical, encoding)) {
         let hash = file.metadata.sha256_hash();
-        // Zero-copy for the embedded (`'static`-borrowed) case; only a
-        // runtime disk-read (debug) yields an owned buffer.
+        // Zero-copy: every build embeds (`'static`-borrowed) bytes.
         let body = embedded_body(file.data);
         span.record("site.bytes", body.len());
         span.record("site.embedded", true);
@@ -381,6 +380,30 @@ mod tests {
 
         assert_eq!(body.as_ref(), bytes);
         assert_eq!(body.as_ptr(), bytes.as_ptr());
+    }
+
+    #[test]
+    fn embedded_body_keeps_owned_bytes() {
+        assert_eq!(
+            embedded_body(Cow::Owned(b"owned bytes".to_vec())).as_ref(),
+            b"owned bytes"
+        );
+    }
+
+    /// Debug builds compile the site in rather than reading `$OUT_DIR` at run
+    /// time; a cached lib from another checkout would otherwise read that
+    /// checkout's `target/` (#2048).
+    #[test]
+    fn every_site_file_is_compiled_into_the_binary() {
+        let paths: Vec<_> = Site::iter().collect();
+        assert!(!paths.is_empty(), "`public/` is always staged");
+        for path in paths {
+            let file = Site::get(&path).expect("listed file is embedded");
+            assert!(
+                matches!(file.data, Cow::Borrowed(_)),
+                "{path} is read from disk at run time, not embedded"
+            );
+        }
     }
 
     #[test]

@@ -63,7 +63,10 @@ tar.workspace = true
 tokio-cron-scheduler.workspace = true
 jiff.workspace = true
 croner.workspace = true
-rust-embed = { version = "8.12.0", features = ["axum", "interpolate-folder-path"] }
+# `debug-embed`: without it a debug build reads `$OUT_DIR` at run time from an
+# absolute path the compile cache cannot key on, so a cached lib from another
+# checkout reads that checkout's `target/` (#2048).
+rust-embed = { version = "8.12.0", features = ["axum", "debug-embed", "interpolate-folder-path"] }
 axum-embed = "0.1.0"
 mime_guess = "2.0.5"
 urlencoding.workspace = true
