@@ -65,10 +65,13 @@ else
   output=$(nix eval --raw --accept-flake-config "$installable.outPath") || output=
 fi
 lift_status=0
+lifted=0
 if [[ -n $output && -d $output ]]; then
   shopt -s nullglob
   for artifact in "$output"/*-"$lane".*; do
-    if ! cp --no-preserve=mode -- "$artifact" "$destination/"; then
+    if cp --no-preserve=mode -- "$artifact" "$destination/"; then
+      lifted=$((lifted + 1))
+    else
       # The existing producer-input sidecar is attribution, never verdict evidence.
       case ${artifact##*/} in
         producer-input-"$lane".json) printf 'warning: optional attribution unavailable: %s\n' "$artifact" >&2 || true ;;
@@ -77,21 +80,10 @@ if [[ -n $output && -d $output ]]; then
     fi
   done
 fi
-# Recover only the failed build named by this invocation, never ambient builds.
+# A failed VM test keeps its copied-out artifacts in the kept output (ADR-0037);
+# say so only when that left nothing to lift.
 if (( status != 0 )); then
-  kept=$(jq -Rrs '
-    [split("\n")[] | capture("^note: keeping build directory \"(?<path>/[^\"]+)\"$").path
-     | select(test("^/[^/]+(/[^/]+)*$") and (split("/") | all(. != "." and . != "..")))]
-    | unique | if length == 1 then .[0] else empty end
-  ' "$destination/build.log") || kept=
-  if [[ -n $kept && -d $kept/emit-out/diagnostics ]]; then
-    shopt -s nullglob
-    for artifact in "$kept/emit-out/diagnostics"/*-"$lane".*; do
-      cp --no-preserve=mode -- "$artifact" "$destination/" || true
-    done
-  else
-    printf 'warning: current failed-build diagnostics unavailable or ambiguous\n' >&2 || true
-  fi
+  (( lifted > 0 )) || printf 'warning: no lane artifacts were lifted from the failed build of %s\n' "$check" >&2 || true
   exit "$status"
 fi
 (( lift_status == 0 )) || exit 1

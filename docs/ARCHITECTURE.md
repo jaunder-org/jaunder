@@ -4479,9 +4479,10 @@ Diagnostics are captured before the check is allowed to fail
 `list` reporter's output (one line per finished attempt, kept even when a
 timeout kills Playwright) into `build.log`, copies every artifact out of the VM
 unconditionally, and only then asserts the exit. On a failed build
-`scripts/e2e-workflow` recovers the lane's diagnostics from the `--keep-failed`
-build directory its own build log names into `.xtask/diagnostics/<check>/`,
-best-effort so a copy failure can never fail a gate.
+`scripts/e2e-workflow` lifts the lane's diagnostics from the failed check's
+output path, which `--keep-failed` leaves in the store, into
+`.xtask/diagnostics/<check>/`, and warns when that lifts nothing; the build's
+own status stands either way.
 
 Out-of-process state manipulation — seeding, fixture users, mail reset — goes
 through the dedicated `test-support` workspace binary, which links the real

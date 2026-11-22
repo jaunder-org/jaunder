@@ -32,9 +32,6 @@ if [[ $1 == build ]]; then
   lane=${{!#}}; lane=${{lane##*.e2e-}}
   echo "producer $lane" >> "$EVENTS"
   echo "producer exit ${{BUILD_STATUS:-23}}" >&2
-  if [[ -f $EVENTS.kept-note ]]; then
-    while IFS= read -r note; do printf '%s\\n' "$note" >&2; done < "$EVENTS.kept-note"
-  fi
   if [[ -n ${{PRODUCER_SECONDS-}} ]]; then
     sleep "$PRODUCER_SECONDS"
     echo "finished $lane" >> "$EVENTS"
@@ -360,70 +357,24 @@ def test_a_failed_producer_lifts_available_evidence_but_never_verifies_it(
     result = e2e.run("e2e-producer", LANE, output=capture_only(), status="23")
     assert result.returncode == 23
     assert e2e.capture.read_text() == "current diagnostic"
+    assert b"warning" not in result.stderr, "a successful lift was reported missing"
     assert "verifier" not in e2e.events()
 
 
-def kept(root: Path, build: str) -> Path:
-    directory = root / "nix" / "var" / "nix" / "builds" / build / "build"
-    (directory / "emit-out" / "diagnostics").mkdir(parents=True)
-    return directory
-
-
-def test_a_failed_producer_recovers_only_its_logged_build_and_lane(e2e: E2E) -> None:
-    current = kept(e2e.root, "nix-184917-2991942680")
-    unrelated = kept(e2e.root, "nix-999999-1234567890")
-    diagnostics = current / "emit-out" / "diagnostics"
-    (diagnostics / f"capture-{LANE}.tar.gz").write_text("current failed diagnostic")
-    (diagnostics / "capture-postgres-chromium-ordinary-1-of-2.tar.gz").write_text(
-        "other lane"
-    )
-    stale = unrelated / "emit-out" / "diagnostics" / f"playwright-report-{LANE}.json"
-    stale.write_text("stale unrelated report")
-    e2e.diagnostics.mkdir(parents=True)
-    (e2e.diagnostics / "build.log").write_text(
-        f'note: keeping build directory "{unrelated}"\n'
-    )
-    (e2e.root / "events.kept-note").write_text(
-        f'note: keeping build directory "{current}"\n'
-    )
-    result = e2e.run("e2e-producer", LANE, status="23")
-    assert result.returncode == 23
-    assert e2e.capture.read_text() == "current failed diagnostic"
-    assert not (e2e.diagnostics / f"playwright-report-{LANE}.json").exists()
-    assert not (
-        e2e.diagnostics / "capture-postgres-chromium-ordinary-1-of-2.tar.gz"
-    ).exists()
-    assert stale.is_file()
-    assert "verifier" not in e2e.events()
-
-
-@pytest.mark.parametrize(
-    "variant", ["absent", "missing", "relative", "unquoted", "traversal", "ambiguous"]
-)
-def test_unusable_kept_paths_never_replace_the_failure_or_borrow_old_evidence(
-    e2e: E2E, variant: str
+@pytest.mark.parametrize("output", ["unevaluable", "missing", "empty"])
+def test_a_failed_producer_that_lifts_nothing_says_so_and_keeps_its_status(
+    e2e: E2E, output: str
 ) -> None:
-    current = kept(e2e.root, "nix-184917-2991942680")
-    (current / "emit-out" / "diagnostics" / f"capture-{LANE}.tar.gz").write_text(
-        "unselected stale diagnostic"
-    )
-    e2e.diagnostics.mkdir(parents=True)
-    (e2e.diagnostics / "build.log").write_text(
-        f'note: keeping build directory "{current}"\n'
-    )
-    note = {
-        "absent": "",
-        "missing": f'note: keeping build directory "{current}/missing"\n',
-        "relative": 'note: keeping build directory "relative/build"\n',
-        "unquoted": f"note: keeping build directory {current}\n",
-        "traversal": f'note: keeping build directory "{current}/../build"\n',
-        "ambiguous": f'note: keeping build directory "{current}"\n'
-        'note: keeping build directory "/another/build"\n',
-    }[variant]
-    (e2e.root / "events.kept-note").write_text(note)
-    result = e2e.run("e2e-producer", LANE, status="23")
+    selected = {
+        "unevaluable": None,
+        "missing": e2e.root / "missing-output",
+        "empty": immutable({}),
+    }[output]
+    result = e2e.run("e2e-producer", LANE, output=selected, status="23")
     assert result.returncode == 23, "the producer failure was replaced"
-    assert not e2e.capture.exists(), "borrowed unselected evidence"
+    warning = f"no lane artifacts were lifted from the failed build of e2e-{LANE}"
+    assert warning.encode() in result.stderr
+    assert b"unavailable or ambiguous" not in result.stderr
     assert "verifier" not in e2e.events()
 
 
