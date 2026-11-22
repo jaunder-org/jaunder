@@ -89,12 +89,34 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         assert_eq!(jobs[name]["if"], aggregate_if, "{name}");
     }
     // Pull-request and merge-queue runs can never skip, whatever the script does.
+    let verdict_job = &jobs["merge-queue-verdict"];
     assert!(
-        jobs["merge-queue-verdict"]["outputs"]["tested"]
+        verdict_job["outputs"]["tested"]
             .as_str()
             .unwrap()
             .starts_with("${{ github.event_name == 'push' && ")
     );
+    // The lookup matches the aggregates' real display names; a rename would
+    // otherwise silently make every push validate in full.
+    let script = verdict_job["steps"][0]["with"]["script"].as_str().unwrap();
+    for name in ["validate-no-e2e", "e2e-gate"] {
+        let display = jobs[name]["name"].as_str().unwrap();
+        assert!(script.contains(&format!("\"{display}\"")), "{display}");
+    }
+    let lane_if = "needs.merge-queue-verdict.outputs.tested != 'true'";
+    for name in [
+        "validate-hermetic",
+        "validate-test-checks",
+        "validate-coverage",
+        "e2e-catalog",
+        "e2e-lane",
+    ] {
+        assert_eq!(jobs[name]["if"], lane_if, "{name}");
+    }
+    // The host lane is main's only kache writer, so it never waits on or skips
+    // for the verdict.
+    assert!(jobs["validate-host"]["needs"].is_null());
+    assert!(jobs["validate-host"]["if"].is_null());
     let aggregate = &jobs["validate-no-e2e"];
     assert_eq!(aggregate["name"], "Validate (no e2e)");
     assert_eq!(

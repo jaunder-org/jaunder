@@ -11,8 +11,10 @@ CI three times: on `pull_request`, on `merge_group`, and on the `push` to `main`
 that followed. The queue fast-forwards `main` to the exact commit it tested, so
 the push run repeated a full execution on an identical SHA. In that repeat, the
 hermetic and test-check lanes substituted from Cachix, but the host lane,
-coverage and every E2E lane ran again. That was about 193 runner-minutes per
-merge, and it caused jobs to queue while runs overlapped.
+coverage and every E2E lane ran again. The issue measured about 193
+runner-minutes per push run. After later lane changes, push run 45063249071 took
+about 147, of which `Validation host` was about 5. The repeat also caused jobs
+to queue while runs overlapped.
 
 [ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) says coverage and e2e
 verdicts "must remain per-ref".
@@ -47,7 +49,11 @@ it.
 
 ## Consequences
 
-- Each merge saves about 150 runner-minutes, and fewer runs overlap.
+- Each merge saves about 140 runner-minutes (run 45063249071, less
+  `Validation host`), and fewer runs overlap.
+- Every pull-request and merge-queue run waits for one `ubuntu-slim` job before
+  its lanes other than `Validation host` start, and a failure of that job turns
+  the run red.
 - The push run no longer gives a second sample of flaky or infrastructure
   failures in the slow lanes. Flakiness has to show up in pull-request,
   merge-queue or scheduled runs.
