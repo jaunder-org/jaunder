@@ -268,14 +268,59 @@ fn relocating_draft(repo: &Path, rel: &str) -> bool {
             .is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
+/// The source-relative link to the numbered ADR a dead draft link's target was
+/// promoted to. A branch can carry a cross-draft link past its target's
+/// promotion on `main`, which the promoter's rewrite never sees (#2041). An
+/// ambiguous slug gets no replacement rather than a guess.
+fn promoted_replacement(tracked: &BTreeSet<String>, dir: &Path, target: &str) -> Option<String> {
+    let bare = target.split('#').next().unwrap_or_default();
+    let fragment = &target[bare.len()..];
+    let resolved = normalize_repo_rel(&dir.join(bare))?;
+    let slug = resolved
+        .strip_prefix("docs/adr/drafts/")?
+        .strip_suffix(".md")
+        .filter(|slug| !slug.is_empty() && !slug.contains('/'))?;
+    let wanted = format!("{slug}.md");
+    let mut numbered = tracked
+        .range("docs/adr/".to_owned()..)
+        .map_while(|path| path.strip_prefix("docs/adr/"))
+        .filter(|name| {
+            !name.contains('/')
+                && name.split_once('-').is_some_and(|(number, rest)| {
+                    !number.is_empty()
+                        && number.bytes().all(|b| b.is_ascii_digit())
+                        && rest == wanted
+                })
+        });
+    let (name, None) = (numbered.next()?, numbered.next()) else {
+        return None;
+    };
+    // Climb from the source directory to its common ancestor with `docs/adr`,
+    // then descend into it. `dir` comes from a tracked path, so it is normalized.
+    let parts: Vec<&str> = dir.to_str()?.split('/').filter(|p| !p.is_empty()).collect();
+    let common = parts
+        .iter()
+        .zip(["docs", "adr"])
+        .take_while(|(have, want)| **have == *want)
+        .count();
+    let up = "../".repeat(parts.len() - common);
+    let down = ["docs/", "adr/"][common..].concat();
+    Some(format!("{up}{down}{name}{fragment}"))
+}
+
 /// Every dead or promotion-unsafe link across [`gated_files`].
-/// Dead links retain the format `<file>:<line> -> <target>`.
+/// Dead links keep the format `<file>:<line> -> <target>`, plus a
+/// `(promoted: use …)` hint when [`promoted_replacement`] finds one.
 pub fn problems(repo: &Path) -> Result<Vec<String>> {
     let tracked = tracked_paths(repo)?;
     let mut out = Vec::new();
     for rel in gated_files(repo)? {
+        let dir = Path::new(&rel).parent().unwrap_or_else(|| Path::new(""));
         for dead in dead_links_in_with_tracked(repo, &rel, &tracked)? {
-            out.push(format!("{rel}:{} -> {}", dead.line, dead.target));
+            let hint = promoted_replacement(&tracked, dir, &dead.target)
+                .map(|link| format!(" (promoted: use {link})"))
+                .unwrap_or_default();
+            out.push(format!("{rel}:{} -> {}{hint}", dead.line, dead.target));
         }
         // This is a source-time gate only. Keep the promoter's shared dead-link
         // resolver and successful-warning behavior strictly existence-based.
@@ -599,6 +644,58 @@ mod tests {
                 "target: {target}"
             );
         }
+    }
+
+    #[test]
+    fn dead_links_to_a_promoted_draft_name_its_numbered_replacement() {
+        let d = repo("promoted-draft");
+        commit(&d, "docs/adr/0007-aaa.md", "# ADR-0007: Aaa\n");
+        commit(
+            &d,
+            "docs/adr/drafts/b.md",
+            "# ADR-DRAFT: B\n\n[aaa](../drafts/aaa.md#sec)\n",
+        );
+        commit(&d, "docs/x.md", "[aaa](adr/drafts/aaa.md)\n");
+        commit(&d, "docs/adr/0008-c.md", "[aaa](drafts/aaa.md)\n");
+        commit(&d, "x.md", "[aaa](docs/adr/drafts/aaa.md)\n");
+        commit(&d, "tools/t/x.md", "[aaa](../../docs/adr/drafts/aaa.md)\n");
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec![
+                "docs/adr/0008-c.md:1 -> drafts/aaa.md (promoted: use 0007-aaa.md)".to_string(),
+                "docs/adr/drafts/b.md:3 -> ../drafts/aaa.md#sec (promoted: use ../0007-aaa.md#sec)"
+                    .to_string(),
+                "docs/x.md:1 -> adr/drafts/aaa.md (promoted: use adr/0007-aaa.md)".to_string(),
+                "tools/t/x.md:1 -> ../../docs/adr/drafts/aaa.md (promoted: use ../../docs/adr/0007-aaa.md)"
+                    .to_string(),
+                "x.md:1 -> docs/adr/drafts/aaa.md (promoted: use docs/adr/0007-aaa.md)".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn dead_draft_links_without_one_exact_numbered_match_get_no_hint() {
+        let d = repo("promoted-draft-ambiguous");
+        commit(&d, "docs/adr/0007-aaa.md", "# ADR-0007: Aaa\n");
+        commit(&d, "docs/adr/0300-aaa.md", "# ADR-0300: Aaa\n");
+        commit(
+            &d,
+            "docs/adr/0255-ci-verdict.md",
+            "# ADR-0255: Ci verdict\n",
+        );
+        commit(
+            &d,
+            "docs/x.md",
+            "[aaa](adr/drafts/aaa.md) [v](adr/drafts/verdict.md) [n](adr/drafts/none.md)\n",
+        );
+        assert_eq!(
+            problems(&d).unwrap(),
+            vec![
+                "docs/x.md:1 -> adr/drafts/aaa.md".to_string(),
+                "docs/x.md:1 -> adr/drafts/verdict.md".to_string(),
+                "docs/x.md:1 -> adr/drafts/none.md".to_string(),
+            ]
+        );
     }
 
     #[test]
