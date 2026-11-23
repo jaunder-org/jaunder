@@ -897,7 +897,11 @@ mod tests {
                 "fromJSON(needs.e2e-catalog.outputs.lanes)",
                 "fromJSON(needs.e2e-catalog.outputs.reconciles)",
             ),
-            source.replacen("needs: [e2e-catalog]", "needs: []", 1),
+            source.replacen(
+                "needs: [merge-queue-verdict, e2e-catalog]",
+                "needs: [merge-queue-verdict]",
+                1,
+            ),
             source.replace("steps.matrix.outputs.lanes", "steps.other.outputs.lanes"),
             source.replace("-f scripts/e2e-matrix.jq", "-f scripts/other.jq"),
             source.replacen("fail-fast: false", "fail-fast: true", 1),

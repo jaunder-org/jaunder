@@ -207,6 +207,16 @@ the PR stays `OPEN`, which looks identical to "still queued". Don't eyeball it:
 still-queued, and points at the `gh-readonly-queue/main/pr-<N>-…` run that
 caused it. `dev pr-watch <N> --once` answers the same question without blocking.
 
+**Checks on a landed commit.** The queue run is the verdict for the commit it
+lands, so the following `push` run skips every lane except `Validation host`
+([merge-queue verdict draft](adr/drafts/merge-queue-verdict-covers-landed-commit.md)).
+Views that show the latest check per name on that SHA therefore show
+`Validate (no e2e)` and `e2e gate` as `skipped`. To judge whether `main` is
+green, read the commit's check suites
+(`gh api repos/jaunder-org/jaunder/commits/<sha>/check-suites`), where the
+`merge_group` suite carries the result. Do not list CI runs filtered by
+`event=push`.
+
 ## ADR promoter queue boundary
 
 This branch changes `.github/workflows/adr-promoter.yml` to select the locked

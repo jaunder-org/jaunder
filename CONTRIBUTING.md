@@ -2267,10 +2267,13 @@ inputs aggressively. Every other Nix verdict, for example formatting, lint,
 Clippy, type checks, ERT, the census, doctests and `dev-python`, is sandboxed
 and input-addressed, so a stamp substituted for an identical derivation is
 acceptable. Coverage and e2e verdicts are never substituted, and CI executes
-them for every ref: the Cachix `pushFilter` keeps them out of the cache in CI,
-where install-nix-action's `always-allow-substitutes = true` overrides their
-`nonSubstitutable` wrapper
+them for every tested commit: the Cachix `pushFilter` keeps them out of the
+cache in CI, where install-nix-action's `always-allow-substitutes = true`
+overrides their `nonSubstitutable` wrapper
 ([substitutable static verdicts](docs/adr/0252-substitutable-static-verdicts.md)).
+A push to `main` of a commit whose merge-queue run passed reuses that run's
+verdict rather than executing them again
+([merge-queue verdict draft](docs/adr/drafts/merge-queue-verdict-covers-landed-commit.md)).
 
 `dev` gate workflows return process status and parked logs, not the historical
 JSON invalidation envelope. The Nix source filters assert representative
