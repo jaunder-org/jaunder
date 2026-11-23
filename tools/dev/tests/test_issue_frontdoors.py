@@ -725,7 +725,8 @@ def test_an_issue_without_a_backlog_status_is_skipped(
 
 
 def test_candidates_come_out_by_priority_then_number(tracker: Tracker) -> None:
-    priorities = {731: "P3", 732: None, 733: "P1", 734: "P3", 735: "P2", 736: None}
+    # Listed out of number order, so only the number tiebreak orders the ties.
+    priorities = {734: "P3", 736: None, 733: "P1", 731: "P3", 735: "P2", 732: None}
     tracker.reply(
         [
             MILESTONES,
@@ -901,6 +902,11 @@ ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}}
         ),
         # A skipped issue's priority is checked too.
         (one_issue(status("In Progress", "P5")), 5, "invalid priority"),
+        (
+            one_issue(project_items([ITEM | {"status": {"name": "In Progress"}}])),
+            5,
+            "missing priority evidence",
+        ),
         (
             one_issue(
                 project_items(

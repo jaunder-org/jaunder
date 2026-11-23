@@ -34,6 +34,8 @@ PRIORITY_OPTIONS = {
     "P3": "0bba09bc",
     "P4": "4b1f556c",
 }
+# Candidates are worked in this order; an issue without a priority comes last.
+PRIORITY_RANK = {name: rank for rank, name in enumerate(PRIORITY_OPTIONS)}
 TITLE = re.compile(
     r"(feat|fix|docs|refactor|test|chore|build|ci|perf)(\([a-zA-Z0-9_-]+\))?: .+",
     re.DOTALL,
@@ -42,8 +44,6 @@ POSITIVE = re.compile(r"[1-9][0-9]*")
 ISSUE_URL = f"https://github.com/{REPO}/issues/"
 
 
-# Candidates are worked in this order; an issue without a priority comes last.
-PRIORITY_RANK = {name: rank for rank, name in enumerate(PRIORITY_OPTIONS)}
 # An issue's project items, each with its Status and Priority, in one read.
 PROJECT_ITEMS_QUERY = (
     'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
