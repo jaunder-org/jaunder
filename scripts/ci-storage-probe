@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+# Usage: ci-storage-probe <report> <label>
+#
+# Appends one labelled storage snapshot to <report>, which CI uploads as a
+# diagnostic artifact. Diagnostic only: each measurement records its own exit
+# status (`missing_evidence=true` on failure) and the probe itself exits 0, so
+# it never decides a lane's result. The `final` label adds the bounded
+# allocation scans, which are too slow to repeat at every snapshot.
+set -u
+
+if [[ $# -ne 2 ]]; then
+  echo "usage: ci-storage-probe <report> <label>" >&2
+  exit 2
+fi
+report=$1
+label=$2
+workspace=${GITHUB_WORKSPACE:-$PWD}
+
+mkdir -p -- "$(dirname -- "$report")"
+printf '\n=== %s ===\n' "$label" >> "$report"
+
+probe() {
+  printf '\n%s\n' "$1" >> "$report"
+  shift
+  if "$@" >> "$report" 2>&1; then
+    printf 'capture_exit=0\n' >> "$report"
+  else
+    printf 'capture_exit=%s missing_evidence=true\n' "$?" >> "$report"
+  fi
+}
+
+probe timestamp date --utc +%FT%TZ
+probe TMPDIR printf '%s\n' "${TMPDIR-<unset>}"
+probe configured-workspace printf '%s\n' "$workspace"
+for path in /nix/store "$workspace" /tmp; do
+  probe "filesystem bytes: $path" df -B1 -- "$path"
+  probe "filesystem inodes: $path" df -i -- "$path"
+  probe "mount: $path" findmnt --target "$path"
+done
+probe memory-and-swap free -b
+if [[ $label == final ]]; then
+  for path in /nix/store "$workspace/.xtask/tmp" "$workspace"; do
+    probe "allocated bytes: $path" timeout 10s du -s -x -B1 -- "$path"
+  done
+fi
+exit 0

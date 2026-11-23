@@ -12,14 +12,16 @@ markers.
 
 `bash scripts/ci-storage-probe <report> <label>` (invoked through `bash`, like
 the other repo scripts) creates the report's parent directory, appends one
-labelled section to `<report>` and always exits 0. Each measurement is written
-as its title, its output, then `capture_exit=0` or
+section headed `=== <label> ===` to `<report>` and exits 0 whatever its
+measurements do (a wrong argument count is a usage error, exit 2). Each
+measurement is written as its title, its output, then `capture_exit=0` or
 `capture_exit=<code> missing_evidence=true`, exactly as today. Every call takes
 the same measurements:
 
 - timestamp, `TMPDIR` and `$GITHUB_WORKSPACE`;
 - for `/nix/store`, `$GITHUB_WORKSPACE` and `/tmp`: `df` bytes (`-B1`), `df`
-  inodes and `findmnt` (noted when unavailable);
+  inodes and `findmnt` (a missing `findmnt` is a marked failure like any other,
+  replacing today's unmarked "findmnt unavailable" note);
 - `free -b`.
 
 The `final` label alone adds allocated bytes (`du -s -x -B1`, 10 s timeout each)
@@ -64,11 +66,11 @@ stays in `final` only, no lane gains measurable runtime. `du /nix/store`
 routinely hitting its timeout records `capture_exit=124 missing_evidence=true`;
 that is expected, as it is today.
 
-**Diagnostic only.** The script never exits non-zero, and a failed measurement
-is recorded, not raised. Every probe step uses `continue-on-error: true` (the
-host baseline gains it). The one deliberate exception stays: the host baseline
-upload keeps `if-no-files-found: error`, so a report that was never created
-(broken wiring) still fails the host lane.
+**Diagnostic only.** A failed measurement is recorded, not raised, and never
+makes the script exit non-zero. Every probe step uses `continue-on-error: true`
+(the host baseline gains it). The one deliberate exception stays: the host
+baseline upload keeps `if-no-files-found: error`, so a report that was never
+created (broken wiring) still fails the host lane.
 
 ## Acceptance
 
