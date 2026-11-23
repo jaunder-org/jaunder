@@ -99,6 +99,18 @@ fn park_worker_once() {
     std::thread::park();
 }
 
+/// Stay alive until the owner kills the child; only unit tests release it.
+/// A SIGKILL landing while an instrumented child exits truncates its coverage
+/// profile (#2056), so a parked child is the only kind an owner may kill.
+fn park_until_released(mut pause_release: impl FnMut() -> bool) -> io::Result<Option<bool>> {
+    loop {
+        park_worker_once();
+        if pause_release() {
+            return Ok(Some(false));
+        }
+    }
+}
+
 /// A fixed test-owned marker controls only the private worker, not uploads or
 /// the program selected by a caller. Real successful privacy tests set no marker.
 pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Result<Option<bool>> {
@@ -108,7 +120,7 @@ pub(super) fn worker_override(spool: &Path, output: &mut impl Write) -> io::Resu
 fn worker_override_with_pause_release(
     spool: &Path,
     output: &mut impl Write,
-    mut pause_release: impl FnMut() -> bool,
+    pause_release: impl FnMut() -> bool,
 ) -> io::Result<Option<bool>> {
     let mode = match std::fs::read_to_string(spool.join(MODE_FILE)) {
         Ok(mode) => mode,
@@ -117,23 +129,15 @@ fn worker_override_with_pause_release(
     };
     private_file(&spool.join(READY_FILE), b"ready")?;
     match mode.as_str() {
-        "pause" | "oversize" => {
-            if mode == "oversize" {
-                // The JSON is otherwise usable. Invalid JSON would let a parser
-                // failure pass the bound test even if the byte limit were absent.
-                output.write_all(&vec![b' '; 128 * 1024])?;
-                output.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
-                output.flush()?;
-            }
-            // Stay alive until the owner kills us. An oversized response must
-            // be rejected by killing a live child, and a SIGKILL landing while
-            // an instrumented child exits truncates its coverage profile (#2056).
-            loop {
-                park_worker_once();
-                if pause_release() {
-                    return Ok(Some(false));
-                }
-            }
+        "pause" => park_until_released(pause_release),
+        "oversize" => {
+            // The JSON is otherwise usable. Invalid JSON would let a parser
+            // failure pass the bound test even if the byte limit were absent.
+            output.write_all(&vec![b' '; 128 * 1024])?;
+            output.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
+            output.flush()?;
+            // The owner rejects at the bound by killing this still-live child.
+            park_until_released(pause_release)
         }
         "expanded-output" | "verification-failure" => {
             // Fixed fault witnesses in the real child, never alternate production
@@ -267,7 +271,7 @@ mod tests {
             let result = worker_override_with_pause_release(&spool, &mut output, || {
                 entered_tx
                     .send(())
-                    .expect("unit-test owner observes the actual pause arm");
+                    .expect("unit-test owner observes the actual parked arm");
                 let release: bool = release_rx
                     .recv_timeout(std::time::Duration::from_secs(5))
                     .expect("unit-test owner answers pause predicate");
@@ -285,12 +289,12 @@ mod tests {
         worker.thread().unpark();
         entered_rx
             .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("ready marker is written and the Paused arm reaches its park");
+            .expect("ready marker is written and the parked arm reaches its park");
         assert_eq!(
             std::fs::read(root.path().join(READY_FILE)).unwrap(),
             b"ready"
         );
-        release_tx.send(false).expect("retain the paused worker");
+        release_tx.send(false).expect("retain the parked worker");
         entered_rx
             .recv_timeout(std::time::Duration::from_secs(5))
             .expect("false release parks the same worker again");
@@ -300,8 +304,8 @@ mod tests {
         );
         release_tx
             .send(true)
-            .expect("release the actual paused arm");
-        let (result, output) = worker.join().expect("paused unit worker exits cleanly");
+            .expect("release the actual parked arm");
+        let (result, output) = worker.join().expect("parked unit worker exits cleanly");
         assert_eq!(result.unwrap(), Some(false));
         output
     }
