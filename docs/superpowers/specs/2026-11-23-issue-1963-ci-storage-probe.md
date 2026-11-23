@@ -56,7 +56,9 @@ is the workspace filesystem, which `findmnt` on `$GITHUB_WORKSPACE` identifies.
 which the host baseline needs (it is uploaded before heavy work in case the
 runner runs out of disk). A `dev` subcommand would need `nix develop` first,
 paying shell-entry cost and depending on the Nix store it observes. A composite
-action would still carry the same shell body plus an `action.yml` wrapper.
+action would still carry the same shell body plus an `action.yml` wrapper. This
+sits beside, not against, ADR-0251 (`dev` owns workflow composition): the probe
+composes nothing, and the inline YAML it replaces was not `dev` either.
 
 **Accepted changes to report content** (human-approved unification): the host
 baseline now uses the shared paths and adds `findmnt`/`TMPDIR`, and drops

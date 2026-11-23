@@ -1,20 +1,21 @@
 #!/usr/bin/env bash
 # Usage: ci-storage-probe <report> <label>
 #
-# Appends one labelled storage snapshot to <report>, which CI uploads as a
-# diagnostic artifact. Diagnostic only: each measurement records its own exit
-# status (`missing_evidence=true` on failure) and the probe itself exits 0, so
-# it never decides a lane's result. The `final` label adds the bounded
-# allocation scans, which are too slow to repeat at every snapshot.
+# Appends one labelled storage snapshot of $GITHUB_WORKSPACE's runner to
+# <report>, which CI uploads as a diagnostic artifact. Diagnostic only: each
+# measurement records its own exit status (`missing_evidence=true` on failure)
+# and the probe itself exits 0, so it never decides a lane's result. The label
+# `final` also runs the bounded allocation scans, which are too slow to repeat
+# at every snapshot.
 set -u
 
 if [[ $# -ne 2 ]]; then
-  echo "usage: ci-storage-probe <report> <label>" >&2
+  echo "usage: ci-storage-probe <report> <label>  (label 'final' adds du scans)" >&2
   exit 2
 fi
 report=$1
 label=$2
-workspace=${GITHUB_WORKSPACE:-$PWD}
+workspace=$GITHUB_WORKSPACE
 
 mkdir -p -- "$(dirname -- "$report")"
 printf '\n=== %s ===\n' "$label" >> "$report"

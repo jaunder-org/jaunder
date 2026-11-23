@@ -357,10 +357,9 @@ jobs:
         run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt baseline
       - name: Capture lane storage after ci-nix shell entry
         continue-on-error: true
-        run:
-          nix develop .#ci-nix --accept-flake-config -c bash
-          scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt
-          "after ci-nix shell entry"
+        run: |
+          nix develop .#ci-nix --accept-flake-config -c \
+            bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt "after ci-nix shell entry"
       - name: Run isolated lane producer
         run:
           nix develop .#ci-nix --accept-flake-config -c dev e2e-producer ${{
