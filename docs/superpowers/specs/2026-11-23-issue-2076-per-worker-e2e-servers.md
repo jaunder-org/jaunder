@@ -104,12 +104,18 @@ the same template.
 - The site-settings and invite roles merge into the ordinary role for Chromium,
   Firefox and WebKit (`webkit-theme` merges into `webkit`), in both the unsplit
   and split graphs.
-- `@visual` must still run once per backend×browser pair, and first on its
-  instances, because its exact-pixel public timeline needs a fresh database. How
-  a sharded lane does this (Playwright sharding versus project dependencies) is
-  resolved by a feasibility probe in the outline. It must not add a runner.
-- Each pair keeps today's 3 runners as ordinary shards, unless measurement shows
-  a better balance.
+- The five `@visual` tests follow the state rule too:
+  - Each seeds its own fixed-name user instead of using `testlogin`. The name is
+    fixed because usernames render in the pixels.
+  - Each sets the global settings its screenshot renders (title, tagline, site
+    theme, registration policy, default audience) to the seed values.
+
+  So visual needs no fresh database and no ordering. It stays a project only for
+  its `@visual` filter and `retries: 0`, with no dependency edges. It is sharded
+  together with ordinary. Under `--shard`, dependency projects would rerun in
+  every shard, so there must be none.
+
+- Each pair keeps today's 3 runners as plain `--shard` ordinary shards.
 - These all follow the new layout: `end2end/e2e-lanes.json`,
   `scripts/e2e-matrix.jq`, the census and reconciliation, and the documentation.
 
@@ -137,6 +143,8 @@ Proof to execute:
   failure may appear in the retry or flaky reporting.
 - **Memory:** measure peak RSS per instance and the VM's memory headroom in at
   least one Firefox lane per backend, and record them in the PR.
+- **Visual baselines:** the existing `@visual` PNG baselines pass unchanged,
+  with visual tests interleaved after other tests on the same instance.
 - **Local runs:** `dev e2e-local <spec>` and `--update-visual-snapshots` work
   with N instances.
 
