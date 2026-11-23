@@ -41,6 +41,7 @@ if [[ $1 == build ]]; then
     printf '%s' "${{PHASES//@NOW@/$now}}" > "$fresh/e2e-phase-$lane.json"
     OUTPUT=$("$REAL_NIX" store add-path --name e2e-phase-fixture "$fresh")
     echo "$OUTPUT" > "$EVENTS.output"
+    echo "$now" > "$EVENTS.now"
   fi
   if [[ -n ${{PRODUCER_SECONDS-}} ]]; then
     sleep "$PRODUCER_SECONDS"
@@ -312,8 +313,8 @@ def test_a_failed_producer_records_no_cache_and_builds_no_verifier(e2e: E2E) -> 
 PHASE_MANIFEST = f"e2e-phase-{LANE}.json"
 
 
-def phase(
-    name: str, outcome: str, duration_ms: int | None, start: int | str | None
+def phase_entry(
+    name: str, outcome: str, duration_ms: object, start: int | str | None
 ) -> dict[str, object]:
     measured = {} if start is None else {"started_at_unix_ns": start}
     return {
@@ -325,15 +326,15 @@ def phase(
     }
 
 
-def manifest(*phases: dict[str, object]) -> str:
+def manifest(*entries: object) -> str:
     """A phase manifest; a start of "@NOW@" is the fake build's own clock."""
-    text = json.dumps({"schema_version": 1, "lane": LANE, "phases": list(phases)})
+    text = json.dumps({"schema_version": 1, "lane": LANE, "phases": list(entries)})
     return text.replace('"@NOW@"', "@NOW@")
 
 
 def phase_children(e2e: E2E) -> dict[str, dict[str, Any]]:
     """The producer step's child spans, keyed by name."""
-    events = [event for event in e2e.checkout.events() if event.get("ph") == "X"]
+    events = e2e.checkout.events()
     (producer,) = [event for event in events if event["name"] == "e2e-producer"]
     parent = producer["args"]["span_id"]
     return {
@@ -346,20 +347,26 @@ def test_a_producer_shows_this_runs_measured_phases_as_its_children(
     e2e: E2E, status: str, gate: str
 ) -> None:
     phases = manifest(
-        phase("nix-evaluation", "unavailable", None, None),
-        phase("vm-startup-readiness", "success", 3, "@NOW@"),
-        phase("gate-execution", gate, 2, "@NOW@"),
+        phase_entry("nix-evaluation", "unavailable", None, None),
+        phase_entry("vm-startup-readiness", "success", 3, "@NOW@"),
+        phase_entry("gate-execution", gate, 2, "@NOW@"),
         # Written before the start field existed: no place on the timeline.
-        phase("result-lift", "success", 1, None),
+        phase_entry("result-lift", "success", 1, None),
+        # Never written by the driver; skipped, not guessed at.
+        "not a phase",
+        phase_entry("bool-duration", "success", True, "@NOW@"),
+        phase_entry("negative-duration", "success", -1, "@NOW@"),
     )
     result = e2e.run(
         "e2e-producer", LANE, output=capture_only(), status=status, PHASES=phases
     )
     assert str(result.returncode) == status, result
+    assert b"no phase spans" not in result.stderr
     children = phase_children(e2e)
     assert set(children) == {"vm-startup-readiness", "gate-execution"}
-    assert children["vm-startup-readiness"]["dur"] == 3000
-    assert children["gate-execution"]["dur"] == 2000
+    now_us = int((e2e.root / "events.now").read_text()) // 1000
+    for name, duration_us in [("vm-startup-readiness", 3000), ("gate-execution", 2000)]:
+        assert (children[name]["ts"], children[name]["dur"]) == (now_us, duration_us)
     assert children["vm-startup-readiness"]["args"]["jaunder.status"] == "ok"
     expected = "ok" if gate == "success" else "failed"
     assert children["gate-execution"]["args"]["jaunder.status"] == expected
@@ -367,28 +374,32 @@ def test_a_producer_shows_this_runs_measured_phases_as_its_children(
     assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
 
 
+@pytest.mark.parametrize("status", ["0", "23"])
 @pytest.mark.parametrize(
-    "lifted",
+    ("lifted", "warned"),
     [
         # A reused output's manifest describes an earlier run.
-        manifest(phase("gate-execution", "success", 1, 1_000_000_000)),
-        "{",
-        "[]",
-        json.dumps({"phases": [{"name": "gate-execution", "duration_ms": True}]}),
-        None,
+        (manifest(phase_entry("gate-execution", "success", 1, 1_000_000_000)), False),
+        ("{", True),
+        ("[]", True),
+        ("[" * 100_000, True),
+        # A failed or timed-out lane may leave no manifest (#2020).
+        (None, False),
     ],
-    ids=["another-run", "malformed", "not-an-object", "invalid-phase", "missing"],
+    ids=["another-run", "malformed", "not-an-object", "too-deep", "missing"],
 )
 def test_a_producer_without_this_runs_phases_shows_no_children(
-    e2e: E2E, lifted: str | None
+    e2e: E2E, lifted: str | None, warned: bool, status: str
 ) -> None:
     artifacts = {f"capture-{LANE}.tar.gz": "current diagnostic"}
     if lifted is not None:
         artifacts[PHASE_MANIFEST] = lifted
-    result = e2e.run("e2e-producer", LANE, output=immutable(artifacts), status="0")
-    assert result.returncode == 0, result
+    result = e2e.run("e2e-producer", LANE, output=immutable(artifacts), status=status)
+    assert str(result.returncode) == status, result
+    assert (b"no phase spans" in result.stderr) == warned, result.stderr
     assert phase_children(e2e) == {}
-    assert e2e.checkout.merged()["e2e-producer"]["args"]["jaunder.status"] == "ok"
+    step = e2e.checkout.merged()["e2e-producer"]
+    assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
 
 
 def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:

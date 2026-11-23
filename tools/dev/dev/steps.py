@@ -308,8 +308,9 @@ def run(
     environment. `realizes`, for a step that runs a Nix build itself, returns
     the output path that build selected once the step succeeds; the step then
     records its `jaunder.cache` as `nix_build` does. `finished`, whatever the
-    step's outcome, is called with the still-open step span and the wall-clock
-    nanosecond at which the step started, to add what the child left behind.
+    step's outcome, is called once the outcome is recorded, with the still-open
+    step span and the wall-clock nanosecond at which the step started, to add
+    what the child left behind.
     """
     _run(
         name,

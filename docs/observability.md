@@ -425,9 +425,10 @@ They are read from the lifted `e2e-phase-<lane>.json`, each placed at its
 manifest says so. A phase gets no span when it is `unavailable` (the `nix-*`
 entries), when it has no start or duration, or when it does not fall inside the
 step, as for a reused or substituted output whose manifest is from an earlier
-run. A missing or unreadable manifest, as after a timed-out lane, gives no
-children. The Nix build and the work between phases (package copy, seeding,
-census preflight) stay the step's untraced time.
+run. A missing manifest, as after a timed-out lane, gives no children; an
+unreadable or malformed one gives none either, with one `dev:` warning. The Nix
+build and the work between phases (package copy, seeding, census preflight) stay
+the step's untraced time.
 
 Tracing never changes a step's exit status, stdout or stderr; a trace directory
 that cannot be written produces one warning on stderr. `traced-run -- PROGRAM`

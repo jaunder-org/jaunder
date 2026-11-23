@@ -5,9 +5,11 @@ does not depend on where it ran.
 """
 
 import json
+import sys
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
 from opentelemetry.trace import Span, set_span_in_context
 
@@ -41,12 +43,21 @@ def _selected_output(check: str) -> str:
     return output
 
 
-def _measured(phase: object) -> tuple[str, int, int, bool] | None:
-    """A manifest phase's name, start, end and failure, if it was measured."""
-    if not isinstance(phase, dict):
+class _Phase(NamedTuple):
+    """One measured VM phase: wall-clock nanoseconds and whether it failed."""
+
+    name: str
+    start_ns: int
+    end_ns: int
+    failed: bool
+
+
+def _measured(entry: object) -> _Phase | None:
+    """A manifest phase entry as a `_Phase`, if the VM measured it."""
+    if not isinstance(entry, dict):
         return None
-    name, start = phase.get("name"), phase.get("started_at_unix_ns")
-    duration, outcome = phase.get("duration_ms"), phase.get("outcome")
+    name, start = entry.get("name"), entry.get("started_at_unix_ns")
+    duration, outcome = entry.get("duration_ms"), entry.get("outcome")
     # bool is an int to Python, never to the manifest's writer.
     if (
         not isinstance(name, str)
@@ -55,7 +66,7 @@ def _measured(phase: object) -> tuple[str, int, int, bool] | None:
         or outcome not in ("success", "failed")
     ):
         return None
-    return name, start, start + duration * 1_000_000, outcome == "failed"
+    return _Phase(name, start, start + duration * 1_000_000, outcome == "failed")
 
 
 def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
@@ -64,25 +75,31 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     Only phases this step's own run measured are shown: a reused output's
     manifest, or one from another run, falls outside the step. Anything
     unmeasured or unreadable is left out, never shown as zero, and never
-    changes the step.
+    changes the step. A failed lane may leave no manifest at all; any other
+    read failure is reported.
     """
 
     def add(step: Span, started_ns: int) -> None:
-        exited_ns = time.time_ns()
+        ended_ns = time.time_ns()
+        path = Path(DIAGNOSTICS, check, f"e2e-phase-{lane}.json")
         try:
-            manifest = Path(DIAGNOSTICS, check, f"e2e-phase-{lane}.json").read_bytes()
-            phases = json.loads(manifest).get("phases")
-        except OSError, ValueError, AttributeError:
+            entries = json.loads(path.read_bytes()).get("phases")
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, AttributeError, RecursionError) as error:
+            print(f"dev: {path}: no phase spans: {error}", file=sys.stderr, flush=True)
             return
         parent = set_span_in_context(step)
-        for measured in map(_measured, phases if isinstance(phases, list) else []):
-            if measured is None:
-                continue
-            name, start, end, failed = measured
-            if started_ns <= start <= end <= exited_ns:
-                span = trace.tracer().start_span(name, parent, start_time=start)
-                span.set_attribute(STATUS, Status.FAILED if failed else Status.OK)
-                span.end(end_time=end)
+        for phase in map(_measured, entries if isinstance(entries, list) else []):
+            if (
+                phase is not None
+                and started_ns <= phase.start_ns <= phase.end_ns <= ended_ns
+            ):
+                span = trace.tracer().start_span(
+                    phase.name, parent, start_time=phase.start_ns
+                )
+                span.set_attribute(STATUS, Status.FAILED if phase.failed else Status.OK)
+                span.end(end_time=phase.end_ns)
 
     return add
 
