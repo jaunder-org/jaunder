@@ -116,6 +116,13 @@ const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
 function gatedProjects(browser: GatedBrowser): Project[] {
   const use = gatedBrowserUse[browser];
   const site = siteSettingsSpecs(browser);
+  // The exclusive site-configuration roles run one test at a time.
+  const serialConfiguration: Project = {
+    grepInvert: visualTag,
+    fullyParallel: false,
+    workers: 1,
+    use,
+  };
   const role: Record<Role, Project> = {
     visual: {
       testIgnore: ignoreUnavailableSpecializedSpecs(
@@ -132,20 +139,8 @@ function gatedProjects(browser: GatedBrowser): Project[] {
       grepInvert: visualTag,
       use: browser === "chromium" ? { ...use, ...productionBaselineTls } : use,
     },
-    siteSettings: {
-      testMatch: specPattern(site),
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      use,
-    },
-    theme: {
-      testMatch: specPattern(themeSpecs),
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      use,
-    },
+    siteSettings: { ...serialConfiguration, testMatch: specPattern(site) },
+    theme: { ...serialConfiguration, testMatch: specPattern(themeSpecs) },
     invite: {
       testMatch: specPattern(inviteSpecs),
       grepInvert: visualTag,

@@ -268,6 +268,7 @@ export async function withSiteThemeSelection(
   const project = test.info().project;
   expect([
     ...exclusiveConfigurationRoles.flatMap((role) => projectsInRole(role)),
+    // WebKit's own serial configuration project, outside the gated roles.
     "webkit-theme",
   ]).toContain(project.name);
   const context = await tracedContext();

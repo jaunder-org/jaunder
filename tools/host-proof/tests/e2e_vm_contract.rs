@@ -104,21 +104,29 @@ fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
     let lanes = evaluated_e2e_lanes();
     let lanes = lanes.as_object().expect("lane map");
     assert_eq!(lanes.len(), 16);
+    let catalog: serde_json::Value = serde_json::from_slice(
+        &fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../end2end/e2e-lanes.json"))
+            .expect("lane catalog"),
+    )
+    .expect("lane catalog JSON");
+    let shard_weights = &catalog["ordinaryShardWeights"];
     // Every production lane shares one suite cap and deadline (#1985).
     let (suite, deadline) = (1500, 1920);
     for (name, lane) in lanes {
         assert_eq!(lane["globalTimeout"], deadline, "{name}");
         let script = lane["testScript"].as_str().expect("VM test script");
         // Only ordinary shards are sized by their browser's catalog weight.
-        let weights = if name.contains("firefox-ordinary") {
-            Some("PWTEST_SHARD_WEIGHTS=56:44")
-        } else if name.contains("chromium-ordinary") {
-            Some("PWTEST_SHARD_WEIGHTS=59:41")
-        } else {
-            None
-        };
-        match weights {
-            Some(weights) => assert!(script.contains(weights), "{name}"),
+        let browser = ["chromium", "firefox"]
+            .into_iter()
+            .find(|browser| name.contains(&format!("{browser}-ordinary")));
+        match browser {
+            Some(browser) => {
+                let weights = shard_weights[browser].as_str().expect("browser weights");
+                assert!(
+                    script.contains(&format!("PWTEST_SHARD_WEIGHTS={weights}")),
+                    "{name}"
+                );
+            }
             None => assert!(!script.contains("PWTEST_SHARD_WEIGHTS"), "{name}"),
         }
         let syntax = std::process::Command::new("python3")
