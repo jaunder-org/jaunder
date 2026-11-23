@@ -258,9 +258,11 @@ def _run(
     stdin: bytes | None = None,
     refusal: Refusal | None = None,
     realizes: Callable[[], str] | None = None,
+    finished: Callable[[Span, int], None] | None = None,
 ) -> bytes:
     with _step(name, argv) as span:
-        start = int(time.time())
+        started_ns = time.time_ns()
+        start = started_ns // 1_000_000_000
         code, signalled, output = _supervise(argv, capture, environment, stdin)
         if render is not None:
             rendered = render(output)
@@ -280,6 +282,8 @@ def _run(
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
         _record_outcome(span, code, signalled)
+        if finished is not None:
+            finished(span, started_ns)
         if realizes is not None and not code:
             with contextlib.suppress(_QueryFailed):
                 _record_cache(span, realizes(), start)
@@ -294,6 +298,7 @@ def run(
     render: Callable[[bytes], str | None] | None = None,
     environment: Environment | None = None,
     realizes: Callable[[], str] | None = None,
+    finished: Callable[[Span, int], None] | None = None,
 ) -> None:
     """Runs one step; raises StepFailed so the gate stops at the first failure.
 
@@ -302,9 +307,19 @@ def run(
     step that otherwise succeeded. `environment` changes only this step's
     environment. `realizes`, for a step that runs a Nix build itself, returns
     the output path that build selected once the step succeeds; the step then
-    records its `jaunder.cache` as `nix_build` does.
+    records its `jaunder.cache` as `nix_build` does. `finished`, whatever the
+    step's outcome, is called with the still-open step span and the wall-clock
+    nanosecond at which the step started, to add what the child left behind.
     """
-    _run(name, argv, render is not None, environment, render, realizes=realizes)
+    _run(
+        name,
+        argv,
+        render is not None,
+        environment,
+        render,
+        realizes=realizes,
+        finished=finished,
+    )
 
 
 def output(

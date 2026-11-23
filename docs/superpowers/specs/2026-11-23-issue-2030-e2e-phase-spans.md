@@ -17,16 +17,17 @@ it to: the phases are separated by unmeasured gaps (package copy, DB seed,
 census preflight), and the Nix build that hosts the VM runs before them.
 
 1. **The manifest records when each measured phase started.** The driver also
-   records the wall clock (`time.time_ns()`) when each measured phase starts,
-   and writes it as a new `started_at_unix_ns` field on that phase. The field is
-   additive, so `schema_version` stays 1. `duration_ms`, phase names, outcomes
-   and the unavailable `nix-*` entries do not change. host-proof's serde ignores
-   unknown fields, so `e2e-evidence` verify and reconcile keep their verdicts.
-   The existing monotonic anchors stay exactly as they are; host-proof's VM
-   contract test asserts them literally. The driver is host-side Python in the
-   build sandbox, with no time namespace, so its wall clock is the clock the
-   `dev` span records use, both locally and on CI runners. Changing the test
-   script rebuilds every E2E check once.
+   records the wall-clock time (`time.time_ns()`) at which each measured phase
+   started, derived from the phase's monotonic elapsed time, and writes it as a
+   new `started_at_unix_ns` field on that phase. The field is additive, so
+   `schema_version` stays 1. `duration_ms`, phase names, outcomes and the
+   unavailable `nix-*` entries do not change. host-proof's serde ignores unknown
+   fields, so `e2e-evidence` verify and reconcile keep their verdicts. The
+   existing monotonic anchors stay exactly as they are; host-proof's VM contract
+   test asserts them literally. The driver is host-side Python in the build
+   sandbox, with no time namespace, so its wall clock is the clock the `dev`
+   span records use, both locally and on CI runners. Changing the test script
+   rebuilds every E2E check once.
 2. **`dev` emits the children.** Once the producer step's child exits (success,
    failure or signal), and while the step's span is still open, `dev` reads the
    lifted `.xtask/diagnostics/e2e-<lane>/e2e-phase-<lane>.json`.
