@@ -2273,7 +2273,7 @@ overrides their `nonSubstitutable` wrapper
 ([substitutable static verdicts](docs/adr/0252-substitutable-static-verdicts.md)).
 A push to `main` of a commit whose merge-queue run passed reuses that run's
 verdict rather than executing them again
-([merge-queue verdict draft](docs/adr/drafts/merge-queue-verdict-covers-landed-commit.md)).
+([merge-queue verdict draft](docs/adr/0260-merge-queue-verdict-covers-landed-commit.md)).
 
 `dev` gate workflows return process status and parked logs, not the historical
 JSON invalidation envelope. The Nix source filters assert representative
