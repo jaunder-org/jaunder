@@ -1539,11 +1539,16 @@ impl BehaviorSession {
                 "test",
                 "tests/production-baseline-harness.spec.ts",
                 "--project=chromium",
-                "--workers=1",
                 "--no-deps",
             ])
             .current_dir(&browser)
-            .env("JAUNDER_E2E_BASE_URL", "https://localhost:8443")
+            // One worker bound to the one deployed server, whose storage is
+            // not host-visible; seeding goes through the deployment bridge.
+            .env("JAUNDER_E2E_WORKERS", "1")
+            .env(
+                "JAUNDER_E2E_INSTANCES",
+                r#"[{"baseUrl":"https://localhost:8443"}]"#,
+            )
             .env("JAUNDER_PRODUCTION_BASELINE_TLS", "1")
             .env("JAUNDER_PRODUCTION_BASELINE_STATE", state)
             .env("JAUNDER_PRODUCTION_BASELINE_CANARY_PATH", canary_path)

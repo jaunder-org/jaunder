@@ -1,6 +1,7 @@
 import { devices, defineConfig } from "@playwright/test";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { performanceEnabled } from "./tests/browser-performance";
+import { parseInstances } from "./tests/instance";
 import {
   type GatedBrowser,
   type Role,
@@ -39,6 +40,16 @@ const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // overrides this to 1 for its debug wasm build.
 // Rationale: docs/adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md.
 const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
+// Each worker binds to its own server instance by parallel index (#2076), so
+// the harness's instance map must describe exactly one instance per worker.
+const instanceMap = process.env.JAUNDER_E2E_INSTANCES;
+const instanceCount =
+  instanceMap === undefined ? workers : parseInstances(instanceMap).length;
+if (instanceCount !== workers) {
+  throw new Error(
+    `JAUNDER_E2E_INSTANCES has ${instanceCount} entries but workers is ${workers}`,
+  );
+}
 
 // Automatic retry of a failed test, env-driven, default 0 (fail-fast — right for
 // local debugging). The hermetic e2e checks set

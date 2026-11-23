@@ -510,6 +510,19 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
       print("failed to write e2e phase manifest: " + manifest_out)
 '';
 
+# Playwright's worker count and per-worker instance map (#2076) as a Python
+# string literal for the testScripts' shell commands. Each entry is one server
+# instance, bound by a worker's parallel index; `instance` holds the entry's
+# DB and any storage/capture paths that run exports.
+e2eInstancesEnv =
+  workers: instance:
+  builtins.toJSON (
+    " JAUNDER_E2E_WORKERS=${toString workers} JAUNDER_E2E_INSTANCES="
+    + pkgs.lib.escapeShellArg (
+      builtins.toJSON (pkgs.lib.genList (_: { baseUrl = "http://localhost:3000"; } // instance) workers)
+    )
+  );
+
 e2eRunAndCapture =
   {
     backend,
@@ -524,14 +537,23 @@ e2eRunAndCapture =
     expectedCensusTopology ? "${backend}-${browser}-experimental",
     traceId,
     traceParent,
-    # The same DB the running server uses, exported into the Playwright
-    # process env so the `test-support` seed helper it spawns points at
-    # that DB (it reads `JAUNDER_DB`). Backend-specific; see each check.
+    # The same DB the running server uses, bound into each Playwright worker's
+    # env so the `test-support` seed helper it spawns points at that DB (it
+    # reads `JAUNDER_DB`). Backend-specific; see each check.
     jaunderDb,
+    workers,
     extraEnv ? "",
     playwrightTimeout,
   }:
   let
+    # INTERIM (#2076): until Task 2 gives each worker its own `jaunder@<i>`
+    # unit, every entry names the VM's single jaunder.service, so the lane's
+    # workers keep sharing one server exactly as before.
+    instancesEnv = e2eInstancesEnv workers {
+      db = jaunderDb;
+      storagePath = "/var/lib/jaunder/data";
+      captureDir = "/var/lib/jaunder/capture";
+    };
     # Bind only the final test recipe to its clean checkout, not product builds.
     # Dirty flakes cannot attest their entire working tree through a Git revision.
     producerInput = pkgs.writeText "e2e-producer-input-${identity}.json" (builtins.toJSON {
@@ -555,6 +577,7 @@ e2eRunAndCapture =
       + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
       + " JAUNDER_E2E_CENSUS_PREPARE=1"
       + " JAUNDER_E2E_CENSUS_TOPOLOGY=${expectedCensusTopology}"
+      + ${instancesEnv}
       + " ${pkgs.nodejs}/bin/node node_modules/.bin/playwright test"
       + " --list --config playwright.config.ts ${expectedCensusProjectArgs}",
       timeout=${toString e2ePlaywrightTimeout},
@@ -583,9 +606,7 @@ e2eRunAndCapture =
       + " FONTCONFIG_FILE=${visualFontConfig}"
       + " JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"
       + "${extraEnv}"
-      + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
-      + " JAUNDER_DB=${jaunderDb}"
-      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
+      + ${instancesEnv}
       + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
       + " JAUNDER_TEST_EXECUTABLE=${jaunderBin}/bin/jaunder"
       + " JAUNDER_E2E_LANE=${identity}"
@@ -900,6 +921,7 @@ mkE2eCheck =
             shardArg
             expectedCensusProjectArgs
             expectedCensusTopology
+            workers
             ;
         in
         ''
@@ -934,6 +956,7 @@ mkE2eCheck =
               shardArg
               expectedCensusProjectArgs
               expectedCensusTopology
+              workers
               traceId
               traceParent
               extraEnv
@@ -991,6 +1014,8 @@ mkE2eCombo =
     expectedCensusTopology ? "${backend}-${browser}-experimental",
     nameSuffix ? "",
     extraEnv ? "",
+    # Playwright workers; the gate retains 2 (#155).
+    workers ? 2,
     vmMemory ? 2048,
     vmCores ? null,
     vmDiskSize ? null,
@@ -1028,6 +1053,7 @@ mkE2eCombo =
         shardArg
         expectedCensusProjectArgs
         expectedCensusTopology
+        workers
         ;
     };
   };
@@ -1074,10 +1100,10 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
     map (lane: {
       name = "e2e-${lane.backend}-firefox-workers-${toString workers}-control";
       value = mkE2eCombo (lane // {
-        extraEnv = " JAUNDER_E2E_RETRIES=1 JAUNDER_E2E_WORKERS=${toString workers}";
+        extraEnv = " JAUNDER_E2E_RETRIES=1";
         expectedCensusProjectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") lane.projects;
         expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
-        inherit vmMemory vmCores;
+        inherit workers vmMemory vmCores;
       });
     }) e2eFirefoxControlLanes
   );
@@ -1106,7 +1132,7 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
       c
       // {
         nameSuffix = "-single-worker";
-        extraEnv = " JAUNDER_E2E_WORKERS=1";
+        workers = 1;
       }
     );
   }) e2eSingleWorkerLanes
@@ -1262,7 +1288,7 @@ mkPerformanceProducer =
           "cd /tmp/e2e"
           + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-          + " JAUNDER_DB=${backendPolicy.jaunderDb}"
+          + ${e2eInstancesEnv 1 { db = backendPolicy.jaunderDb; }}
           + " JAUNDER_PERF_MANIFEST_PATH=/var/lib/jaunder/performance/dataset-manifest-v1.json"
           + " JAUNDER_PERF_FRAGMENT_DIR=/var/lib/jaunder/performance/fragments"
           + " JAUNDER_PERF_BACKEND=${backend}"
@@ -1455,10 +1481,12 @@ mkWasmCoverageProducer =
         )
       else:
         status, output = machine.execute(
-          "bash -o pipefail -c 'cd /tmp/e2e"
+          # The instance map is exported to bash rather than spliced into its
+          # single-quoted script, whose quoting the map's own quotes would break.
+          ${e2eInstancesEnv 1 { db = "sqlite:/var/lib/jaunder/data/jaunder.db"; }}
+          + " bash -o pipefail -c 'cd /tmp/e2e"
           + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-          + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
           + " FONTCONFIG_FILE=${visualFontConfig}"
           + " JAUNDER_WASM_COVERAGE_INJECT_FAILURE=${failure}"
           + " JAUNDER_WASM_COVERAGE_CSR=${self.packages.${system}.wasm-coverage-csr}"
@@ -1536,7 +1564,7 @@ mkWasmCoverageMeasurementProducer =
         "cd /tmp/e2e"
         + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
         + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-        + " JAUNDER_DB=sqlite:/var/lib/jaunder/data/jaunder.db"
+        + ${e2eInstancesEnv 1 { db = "sqlite:/var/lib/jaunder/data/jaunder.db"; }}
         + " FONTCONFIG_FILE=${visualFontConfig}"
         + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
         + " JAUNDER_WASM_COVERAGE_CSR=${if mode == "baseline" then diagnosticBaselineCsrWasmBundle else diagnosticCsrWasmBundle}"
