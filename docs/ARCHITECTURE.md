@@ -4210,7 +4210,7 @@ Unsplit catalog lanes are disabled; unsplit Firefox workers=2 and workers=4
 remain package-only measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
-[serial Theme lane and weighted shards](adr/drafts/serial-theme-e2e-lane-and-weighted-shards.md)).
+[serial Theme lane and weighted shards](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md)).
 Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
 CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the

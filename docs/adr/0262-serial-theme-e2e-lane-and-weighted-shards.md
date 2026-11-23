@@ -1,13 +1,13 @@
-# ADR-DRAFT: Give the Theme specs their own serial E2E lane and weight ordinary shards
+# ADR-0262: Give the Theme specs their own serial E2E lane and weight ordinary shards
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-23
 - Issue: [#2065](https://github.com/jaunder-org/jaunder/issues/2065)
 
 ## Context
 
-[ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
-[ADR-0253](../0253-split-chromium-e2e-lanes.md) gave every backend/browser pair
+[ADR-0203](0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
+[ADR-0253](0253-split-chromium-e2e-lanes.md) gave every backend/browser pair
 three isolated lanes: ordinary shards 1 and 2 of 2, and one serial-special lane.
 That serial-special lane ran visual, then global configuration, then invite.
 

@@ -290,6 +290,7 @@ convention). See the Status column below for each ADR's current status.
 | [0259](adr/0259-devtool-retirement-owners.md)                            | Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source         | accepted   |
 | [0260](adr/0260-merge-queue-verdict-covers-landed-commit.md)             | A merge-queue verdict covers the commit it lands                                                             | accepted   |
 | [0261](adr/0261-tool-language-by-maintainability.md)                     | Infrastructure language is chosen by maintainability                                                         | accepted   |
+| [0262](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md)            | Give the Theme specs their own serial E2E lane and weight ordinary shards                                    | accepted   |
 
 <!-- adr-table:end -->
 
