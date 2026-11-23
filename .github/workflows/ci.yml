@@ -113,27 +113,8 @@ jobs:
       # ENOSPC crash can prevent even always() post-validation steps executing.
       - name: Capture host resource baseline
         id: host-resource-baseline
-        run: |
-          mkdir -p .xtask
-          report=.xtask/host-resource-baseline.txt
-          printf 'Post-cache, pre-validation resource baseline\n' > "$report"
-          probe() {
-            printf '\n%s\n' "$1" >> "$report"
-            shift
-            if "$@" >> "$report" 2>&1; then
-              printf 'capture_exit=0\n' >> "$report"
-            else
-              code=$?
-              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
-            fi
-          }
-          probe timestamp date --utc +%FT%TZ
-          for path in . /tmp /nix; do
-            probe "filesystem bytes: $path" df -B1 --output=size,used,avail -- "$path"
-            probe "filesystem inodes: $path" df --output=itotal,iused,iavail -- "$path"
-          done
-          probe "owned storage allocated bytes: target" timeout 30s du -s -x -B1 -- target
-          probe memory-and-swap free -b
+        continue-on-error: true
+        run: bash scripts/ci-storage-probe .xtask/host-resource-baseline.txt baseline
       - name: Upload host resource baseline
         if: always() && steps.host-resource-baseline.outcome != 'skipped'
         uses: actions/upload-artifact@v7.0.1
@@ -271,33 +252,7 @@ jobs:
       - name: Capture coverage storage baseline
         id: coverage-storage-baseline
         continue-on-error: true
-        run: |
-          mkdir -p .xtask
-          report=.xtask/coverage-storage-snapshot.txt
-          printf 'Post-setup/cache storage snapshot\n' > "$report"
-          printf 'Configured workspace temporary path: %s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace" >> "$report"
-          probe() {
-            printf '\n%s\n' "$1" >> "$report"
-            shift
-            if "$@" >> "$report" 2>&1; then
-              printf 'capture_exit=0\n' >> "$report"
-            else
-              code=$?
-              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
-            fi
-          }
-          probe timestamp date --utc +%FT%TZ
-          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
-          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
-          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
-            probe "filesystem bytes: $path" df -h -- "$path"
-            probe "filesystem inodes: $path" df -i -- "$path"
-            if command -v findmnt >/dev/null 2>&1; then
-              probe "mount: $path" findmnt --target "$path"
-            else
-              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
-            fi
-          done
+        run: bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt baseline
       - name: Validate Rust coverage lane (via dev)
         run: nix develop .#ci-nix --accept-flake-config -c dev coverage
       # Diagnostic only: the table never decides the job's result.
@@ -309,36 +264,7 @@ jobs:
       - name: Capture coverage storage final snapshot
         if: always()
         continue-on-error: true
-        run: |
-          mkdir -p .xtask
-          report=.xtask/coverage-storage-snapshot.txt
-          printf '\nFinal storage measurements (diagnostic only)\n' >> "$report"
-          probe() {
-            printf '\n%s\n' "$1" >> "$report"
-            shift
-            if "$@" >> "$report" 2>&1; then
-              printf 'capture_exit=0\n' >> "$report"
-            else
-              code=$?
-              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
-            fi
-          }
-          probe timestamp date --utc +%FT%TZ
-          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
-          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
-          probe configured-workspace-temp printf '%s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace"
-          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
-            probe "filesystem bytes: $path" df -h -- "$path"
-            probe "filesystem inodes: $path" df -i -- "$path"
-            if command -v findmnt >/dev/null 2>&1; then
-              probe "mount: $path" findmnt --target "$path"
-            else
-              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
-            fi
-          done
-          for path in /nix/store "$GITHUB_WORKSPACE/.xtask/tmp" "$GITHUB_WORKSPACE"; do
-            probe "allocated bytes: $path" timeout 10s du -shx -- "$path"
-          done
+        run: bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt final
       - name: Upload coverage storage snapshot
         if: always()
         continue-on-error: true
@@ -428,40 +354,12 @@ jobs:
       - name: Capture lane storage baseline
         id: lane-storage-baseline
         continue-on-error: true
+        run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt baseline
+      - name: Capture lane storage after ci-nix shell entry
+        continue-on-error: true
         run: |
-          mkdir -p .xtask
-          report=.xtask/lane-storage-snapshot.txt
-          printf 'Configured workspace temporary path: %s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace" >> "$report"
-          probe() {
-            printf '\n%s\n' "$1" >> "$report"
-            shift
-            if "$@" >> "$report" 2>&1; then
-              printf 'capture_exit=0\n' >> "$report"
-            else
-              code=$?
-              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
-            fi
-          }
-          probe timestamp date --utc +%FT%TZ
-          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
-          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
-          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
-            probe "filesystem bytes: $path" df -h -- "$path"
-            probe "filesystem inodes: $path" df -i -- "$path"
-            if command -v findmnt >/dev/null 2>&1; then
-              probe "mount: $path" findmnt --target "$path"
-            else
-              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
-            fi
-          done
-      - name: E2E disk observation (after ci-nix shell entry)
-        run: |
-          if nix develop .#ci-nix --accept-flake-config -c df -P / /nix/store "$GITHUB_WORKSPACE"; then
-            echo "observation_status=success"
-          else
-            status=$?
-            echo "observation_status=failure exit=$status" >&2
-          fi
+          nix develop .#ci-nix --accept-flake-config -c \
+            bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt "after ci-nix shell entry"
       - name: Run isolated lane producer
         run:
           nix develop .#ci-nix --accept-flake-config -c dev e2e-producer ${{
@@ -472,48 +370,10 @@ jobs:
         run:
           nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
           summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
-      - name: E2E disk observation (after producer)
-        if: always()
-        run: |
-          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
-            echo "observation_status=success"
-          else
-            status=$?
-            echo "observation_status=failure exit=$status" >&2
-          fi
       - name: Capture lane final storage snapshot
         if: always()
         continue-on-error: true
-        run: |
-          mkdir -p .xtask
-          report=.xtask/lane-storage-snapshot.txt
-          printf '\nFinal storage measurements (diagnostic only)\n' >> "$report"
-          probe() {
-            printf '\n%s\n' "$1" >> "$report"
-            shift
-            if "$@" >> "$report" 2>&1; then
-              printf 'capture_exit=0\n' >> "$report"
-            else
-              code=$?
-              printf 'capture_exit=%s missing_evidence=true\n' "$code" >> "$report"
-            fi
-          }
-          probe timestamp date --utc +%FT%TZ
-          printf 'TMPDIR=%s\n' "${TMPDIR-<unset>}" >> "$report"
-          probe configured-workspace printf '%s\n' "$GITHUB_WORKSPACE"
-          probe configured-workspace-temp printf '%s\n' "$GITHUB_WORKSPACE/.xtask/tmp/workspace"
-          for path in /nix/store "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE/.xtask/tmp" /tmp; do
-            probe "filesystem bytes: $path" df -h -- "$path"
-            probe "filesystem inodes: $path" df -i -- "$path"
-            if command -v findmnt >/dev/null 2>&1; then
-              probe "mount: $path" findmnt --target "$path"
-            else
-              printf '\nmount: %s\nfindmnt unavailable\n' "$path" >> "$report"
-            fi
-          done
-          for path in /nix/store "$GITHUB_WORKSPACE/.xtask/tmp" "$GITHUB_WORKSPACE"; do
-            probe "allocated bytes: $path" timeout 10s du -shx -- "$path"
-          done
+        run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt final
       - name: Upload lane storage snapshot
         if: always()
         continue-on-error: true
@@ -546,15 +406,6 @@ jobs:
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
-      - name: E2E disk observation (final)
-        if: always()
-        run: |
-          if df -P / /nix/store "$GITHUB_WORKSPACE"; then
-            echo "observation_status=success"
-          else
-            status=$?
-            echo "observation_status=failure exit=$status" >&2
-          fi
 
   e2e-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/${{ matrix.browser }})
