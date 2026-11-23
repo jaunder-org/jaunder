@@ -345,14 +345,17 @@ def text(
     argv: Sequence[str],
     environment: Environment | None = None,
     refusal: Callable[[str], str | None] | None = None,
+    finished: Callable[[Span, int], None] | None = None,
 ) -> str:
     """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed.
 
     `refusal`, if given, judges that text: a reason it returns is printed and
-    fails the step with status 1.
+    fails the step with status 1. `finished` is as for `run`.
     """
     judge = None if refusal is None else lambda output: refusal(_shell_text(output))
-    return _shell_text(_run(name, argv, True, environment, refusal=judge))
+    return _shell_text(
+        _run(name, argv, True, environment, refusal=judge, finished=finished)
+    )
 
 
 class _QueryFailed(Exception):
@@ -455,6 +458,7 @@ def nix_build(
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
     refusal: Callable[[str], str | None] | None = None,
+    finished: Callable[[Span, int], None] | None = None,
 ) -> str:
     """Builds one installable as the step `name`; returns its output path.
 
@@ -470,6 +474,9 @@ def nix_build(
     the bytes the build fetched from substituters. Several printed paths, an
     undecidable registration or a failed query record less rather than guess,
     and never change the step.
+
+    `finished` is as for `run`, for the `build` step: what the builder timed
+    itself belongs under it.
     """
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
@@ -484,7 +491,7 @@ def nix_build(
                 derivation = text("eval", evaluate)
             # After the evaluation, which registers what it writes.
             start = int(time.time())
-            paths = text("build", argv, refusal=refusal)
+            paths = text("build", argv, refusal=refusal, finished=finished)
             _record_outcome(span, 0, False)
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)
@@ -518,6 +525,7 @@ def nix_check(
     check: str,
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
+    finished: Callable[[Span, int], None] | None = None,
 ) -> None:
     """Builds one flake check as `nix_build` does, as the step `check`."""
-    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep)
+    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep, finished=finished)

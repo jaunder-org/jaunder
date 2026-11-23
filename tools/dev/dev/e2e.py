@@ -6,16 +6,13 @@ does not depend on where it ran.
 
 import json
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
-from typing import NamedTuple
 
-from opentelemetry.trace import Span, set_span_in_context
+from opentelemetry.trace import Span
 
 from dev import report, steps, trace
 from dev.commands import E2E_EVIDENCE
-from dev.spans import STATUS, Status
 
 CATALOG = "end2end/e2e-lanes.json"
 # Where `scripts/e2e-workflow` keeps each producer's build record and artifacts.
@@ -43,17 +40,8 @@ def _selected_output(check: str) -> str:
     return output
 
 
-class _Phase(NamedTuple):
-    """One measured VM phase: wall-clock nanoseconds and whether it failed."""
-
-    name: str
-    start_ns: int
-    end_ns: int
-    failed: bool
-
-
-def _measured(entry: object) -> _Phase | None:
-    """A manifest phase entry as a `_Phase`, if the VM measured it."""
+def _measured(entry: object) -> trace.Phase | None:
+    """A manifest phase entry as a `trace.Phase`, if the VM measured it."""
     if not isinstance(entry, dict):
         return None
     name, start = entry.get("name"), entry.get("started_at_unix_ns")
@@ -66,7 +54,7 @@ def _measured(entry: object) -> _Phase | None:
         or outcome not in ("success", "failed")
     ):
         return None
-    return _Phase(name, start, start + duration * 1_000_000, outcome == "failed")
+    return trace.Phase(name, start, start + duration * 1_000_000, outcome == "success")
 
 
 def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
@@ -80,7 +68,6 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     """
 
     def add(step: Span, started_ns: int) -> None:
-        ended_ns = time.time_ns()
         path = Path(DIAGNOSTICS, check, f"e2e-phase-{lane}.json")
         try:
             entries = json.loads(path.read_bytes()).get("phases")
@@ -89,17 +76,10 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
         except (OSError, ValueError, AttributeError, RecursionError) as error:
             print(f"dev: {path}: no phase spans: {error}", file=sys.stderr, flush=True)
             return
-        parent = set_span_in_context(step)
-        for phase in map(_measured, entries if isinstance(entries, list) else []):
-            if (
-                phase is not None
-                and started_ns <= phase.start_ns <= phase.end_ns <= ended_ns
-            ):
-                span = trace.tracer().start_span(
-                    phase.name, parent, start_time=phase.start_ns
-                )
-                span.set_attribute(STATUS, Status.FAILED if phase.failed else Status.OK)
-                span.end(end_time=phase.end_ns)
+        measured = map(_measured, entries if isinstance(entries, list) else [])
+        trace.record_phases(
+            step, started_ns, [phase for phase in measured if phase is not None]
+        )
 
     return add
 

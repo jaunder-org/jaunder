@@ -13,8 +13,9 @@ import os
 import secrets
 import sys
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 
 from opentelemetry import context as context_api
@@ -25,11 +26,12 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 from opentelemetry.sdk.trace.id_generator import IdGenerator
-from opentelemetry.trace import NoOpTracer, Tracer
+from opentelemetry.trace import NoOpTracer, Tracer, set_span_in_context
 from opentelemetry.trace import Span as ApiSpan
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
 from dev import chrome, runner
+from dev.spans import STATUS, Status
 
 TRACE_DIR = "JAUNDER_TRACE_DIR"
 CARRIER_KEYS = ("TRACEPARENT", "TRACESTATE")
@@ -155,6 +157,33 @@ def child_environment() -> dict[str, str]:
         _PROPAGATOR.inject(carrier)
         environment.update({key.upper(): value for key, value in carrier.items()})
     return environment
+
+
+@dataclass(frozen=True)
+class Phase:
+    """Work a step's child timed itself where it could not trace, as in a Nix
+    sandbox: placed in the run afterwards, on the child's own clock."""
+
+    name: str
+    start_ns: int
+    end_ns: int
+    ok: bool
+
+
+def record_phases(step: ApiSpan, started_ns: int, phases: Iterable[Phase]) -> None:
+    """Writes `phases` as finished children of the still-open `step`.
+
+    `started_ns` is the wall-clock nanosecond the step started. Only phases
+    inside the step so far are its own work: one outside it, as from a reused
+    output or an earlier run, is left out rather than misplaced.
+    """
+    ended_ns = time.time_ns()
+    context = set_span_in_context(step)
+    for phase in phases:
+        if started_ns <= phase.start_ns <= phase.end_ns <= ended_ns:
+            span = tracer().start_span(phase.name, context, start_time=phase.start_ns)
+            span.set_attribute(STATUS, Status.OK if phase.ok else Status.FAILED)
+            span.end(end_time=phase.end_ns)
 
 
 def cap_command_line(command_line: str) -> str:

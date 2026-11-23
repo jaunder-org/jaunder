@@ -1268,7 +1268,9 @@ directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
 `host-proof csr-prerequisite`, a step of `dev test-local`, writes its validation
 phases into the same run; no other host-proof executable joins it. An
 `e2e-producer` step adds its VM run's measured phases, read from the lifted
-phase manifest ([observability](docs/observability.md)). A step span records:
+phase manifest, and the `coverage` step adds its producer's stages (below), both
+as [producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)
+([observability](docs/observability.md)). A step span records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
   merge for a span with no end record or no parent, as when a child is killed);
@@ -1299,6 +1301,18 @@ substitution: Nix keeps a source store's registration time when copying a path
 in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
 or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
+
+Once the `coverage` step's `build` ends, `dev` reads `status.json` through the
+`coverage` GC root. Every stage that started records `started_unix_ms` (wall
+clock) beside `duration_ms`. `dev` writes each such stage that falls inside the
+`build` step as a finished child of it, at those times, `ok` if the stage
+succeeded and `failed` otherwise. So `build`'s untraced time is the Nix overhead
+(fetch, unpack, install). A reused output's or an earlier run's stages fall
+outside the step and are left out. A stage that never started, or a missing or
+malformed `status.json`, yields no stage spans, and reading it never changes the
+step. The census build also writes Cargo's `--timings` report, copied to the
+output's `diagnostics/cargo-timing.html` when present; CI uploads it in
+`validate-coverage-diagnostics`.
 
 A Rust host tool comes from its flake package
 ([`dev` runs Nix-built host tools](docs/adr/0258-dev-runs-nix-built-host-tools.md)).
@@ -1338,7 +1352,7 @@ devShell entry). Only "Set up job" and checkout precede the mark, and the
 trace-summary step, uploads and post-job cleanup follow the root. Spans go only
 to these files; `dev` exports nothing over OTLP. Inside a Nix check the trace
 lands in the build directory and is discarded; the host-side Nix step records
-the cache result.
+the cache result and, for coverage, the stages its producer timed.
 
 Tracing never changes a step's exit status, stdout or stderr. If the trace
 directory cannot be written, `dev` warns once on stderr and otherwise behaves

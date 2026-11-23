@@ -7,11 +7,15 @@ verdict.
 """
 
 import fcntl
+import json
 import os
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
 
-from dev import e2e, index, report, static, steps
+from opentelemetry.trace import Span
+
+from dev import e2e, index, report, static, steps, trace
 from dev.checkout import clean_tree
 from dev.commands import (
     COVERAGE_CHECK,
@@ -266,17 +270,81 @@ def wasm_tests() -> None:
     steps.nix_check("wasm-tests")
 
 
-def _producer_and_gate(check: str) -> None:
-    """Realizes a hermetic producer as a GC root, then its hard status gate."""
-    steps.nix_check(check, steps.NIX_LOCK_FLAGS)
+def _producer_and_gate(
+    check: str, finished: Callable[[Span, int], None] | None = None
+) -> None:
+    """Realizes a hermetic producer as a GC root, then its hard status gate.
+
+    `finished` is as for the producer's `build` step (`steps.nix_build`).
+    """
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished)
     steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
 
 
+def _non_negative_int(value: object) -> bool:
+    # bool is an int to Python, never to the producer.
+    return type(value) is int and value >= 0
+
+
+def _coverage_stages(output: str) -> list[trace.Phase]:
+    """The stages the coverage producer timed, from its output's `status.json`.
+
+    Only what places a stage is read: a stage that never started has neither
+    start nor duration and is skipped. A file that cannot be read whole yields
+    nothing rather than a partial picture.
+    """
+    try:
+        stages = json.loads((Path(output) / "status.json").read_text("utf-8"))["stages"]
+        phases = []
+        for stage in stages:
+            start, duration = stage.get("started_unix_ms"), stage.get("duration_ms")
+            if start is None and duration is None:
+                continue
+            name = stage["stage"]
+            if not (
+                isinstance(name, str)
+                and _non_negative_int(start)
+                and _non_negative_int(duration)
+            ):
+                return []
+            phases.append(
+                trace.Phase(
+                    name,
+                    start * 1_000_000,
+                    (start + duration) * 1_000_000,
+                    stage["outcome"] == "success",
+                )
+            )
+    except (
+        OSError,
+        ValueError,
+        LookupError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ):
+        return []
+    return phases
+
+
+# The coverage producer's output, as its step holds it.
+COVERAGE_ROOT = f"{steps.GCROOTS}/coverage"
+
+
+def _coverage_stage_spans(build: Span, started_ns: int) -> None:
+    """Traces the stages the producer's run timed under its `build` step.
+
+    They are read from the GC root, which a failed build leaves on an earlier
+    output whose stages fall outside the step, as a reused output's do.
+    """
+    trace.record_phases(build, started_ns, _coverage_stages(COVERAGE_ROOT))
+
+
 def coverage_workflow() -> None:
-    _producer_and_gate("coverage")
+    _producer_and_gate("coverage", _coverage_stage_spans)
     steps.run(
         "coverage-policy",
-        [*steps.tool(COVERAGE_CHECK), "policy", "--out", f"{steps.GCROOTS}/coverage"],
+        [*steps.tool(COVERAGE_CHECK), "policy", "--out", COVERAGE_ROOT],
         report.render,
     )
 

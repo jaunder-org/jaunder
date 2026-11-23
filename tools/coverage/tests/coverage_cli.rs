@@ -27,6 +27,7 @@ fn tests_ok_status() -> CoverageStatus {
                 stage,
                 outcome: ProcessOutcome::Success,
                 duration_ms: None,
+                started_unix_ms: None,
             })
             .collect(),
         population: Population {

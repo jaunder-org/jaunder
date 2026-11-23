@@ -430,6 +430,15 @@ unreadable or malformed one gives none either, with one `dev:` warning. The Nix
 build and the work between phases (package copy, seeding, census preflight) stay
 the step's untraced time.
 
+The `coverage` step's `build` child likewise has, as children, the stages its
+producer timed (#2031): `workspace-resolution` through `crap-report`, read from
+`status.json` through the `coverage` GC root at each stage's `started_unix_ms`
+and `duration_ms`, and `failed` unless the stage succeeded. A stage that never
+started, or one outside the step as from a reused output, gets no span, and a
+missing or malformed `status.json` gives none at all, silently. Both producers
+follow [producer-timed phases](adr/drafts/dev-traces-producer-timed-phases.md)
+through one shared writer.
+
 Tracing never changes a step's exit status, stdout or stderr; a trace directory
 that cannot be written produces one warning on stderr. `traced-run -- PROGRAM`
 remains a separate output-parking runner and records no spans. This trace is
