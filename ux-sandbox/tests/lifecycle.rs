@@ -130,6 +130,12 @@ mod tests {
         );
         if std::env::var_os("UX_RUNTIME_IO_ERROR").is_some() {
             fs::create_dir(std::env::var("JAUNDER_RUNTIME_FILE").unwrap()).unwrap();
+            // The helper stops with zero grace (TERM, then SIGKILL at once).
+            // Without a TERM handler the default action ends us without exit
+            // hooks, so the SIGKILL never truncates an exiting profile (#2056).
+            loop {
+                std::thread::park();
+            }
         } else if std::env::var_os("UX_INVALID_RUNTIME").is_some() {
             fs::write(std::env::var("JAUNDER_RUNTIME_FILE").unwrap(), "{}").unwrap();
             fs::write(Path::new(&root).join("valid-runtime"), valid).unwrap();
@@ -857,13 +863,27 @@ mod tests {
 
     fn signal_during_drain(scenario: Scenario, root: &Path, pid: u32) {
         if scenario == Scenario::EarlyForce {
-            // Force may legitimately kill the parent; establish its graceful acknowledgement first.
-            wait_for(&root.join("parent-drained"));
+            // Force SIGKILLs whatever remains in the group. Let the parent finish
+            // its graceful exit and be reaped first: a SIGKILL during an
+            // instrumented process's exit truncates its coverage profile (#2056).
+            wait_reaped(root);
         }
         if matches!(scenario, Scenario::EarlyForce | Scenario::ExitThenInterrupt) {
             send_signal(pid, "-INT");
         } else if scenario != Scenario::Unexpected {
             send_signal(pid, "-TERM");
+        }
+    }
+
+    fn wait_reaped(root: &Path) {
+        let pid: u32 = fs::read_to_string(root.join("app-pid"))
+            .unwrap()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while processkit::process_info(pid).unwrap().is_some() {
+            assert!(Instant::now() < deadline, "fixture parent never reaped");
+            std::thread::sleep(Duration::from_millis(10));
         }
     }
 
