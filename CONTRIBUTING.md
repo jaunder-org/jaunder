@@ -1713,6 +1713,14 @@ Discovery is read-only: it does not claim issues, acquire runtime ownership, or
 dispatch work. An open milestone must match exactly and unambiguously by number
 or title.
 
+Every candidate and skipped row carries its Backlog `priority` (`P1`–`P4`, or
+`null` when unset or the issue has no Backlog item), read in the same project
+query as its Status. Candidates are listed in the order to work them: by
+priority, `P1` first and unset last, then by issue number, so the first
+candidate is the highest-priority unblocked, unclaimed issue. Skipped rows stay
+in issue-number order. A priority outside `P1`–`P4`, or a reply missing the
+Priority field, fails discovery like a malformed Status.
+
 Success means the observed REST inventory was traversed through its last page,
 including prerequisite pages before closed prerequisites are filtered out.
 Candidate and skipped counts describe the gathered issues, excluding pull
