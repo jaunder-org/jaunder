@@ -2,22 +2,31 @@
  * The gated browsers' Playwright project topology, shared by the config, the
  * census contract and the tests that act only in one project role.
  *
- * Every gated browser has the same four roles, run in this order: visual
+ * Every gated browser has the same five roles, run in this order: visual
  * contracts, parallel ordinary tests, the serial site-settings group (specs
- * that mutate or must restore global site configuration), then invite. The
- * unsplit graph chains them in one Playwright process; the split lanes
- * (`end2end/e2e-lanes.json`) select the `split` projects across isolated VMs.
+ * that mutate or must restore global site configuration), the serial Theme
+ * group (the Theme specs, which also mutate global site configuration), then
+ * invite. The unsplit graph chains them in one Playwright process; the split
+ * lanes (`end2end/e2e-lanes.json`) select the `split` projects across isolated
+ * VMs, where Theme has a lane of its own because it is the largest serial group.
  */
 
 export type GatedBrowser = "chromium" | "firefox";
 export const gatedBrowsers: readonly GatedBrowser[] = ["chromium", "firefox"];
 
-export type Role = "visual" | "ordinary" | "siteSettings" | "invite";
+export type Role = "visual" | "ordinary" | "siteSettings" | "theme" | "invite";
 export const roles: readonly Role[] = [
   "visual",
   "ordinary",
   "siteSettings",
+  "theme",
   "invite",
+];
+
+/** The serial roles whose specs own global site configuration exclusively. */
+export const exclusiveConfigurationRoles: readonly Role[] = [
+  "siteSettings",
+  "theme",
 ];
 export type Topology = "unsplit" | "split";
 
@@ -31,6 +40,7 @@ export function projectName(
       visual: `${browser}-visual`,
       ordinary: browser,
       siteSettings: `${browser}-admin-site`,
+      theme: `${browser}-theme`,
       invite: `${browser}-admin`,
     }[role];
   }
@@ -38,6 +48,7 @@ export function projectName(
     visual: `${browser}-special-visual`,
     ordinary: `${browser}-ordinary`,
     siteSettings: `${browser}-special-global-configuration`,
+    theme: `${browser}-special-theme`,
     invite: `${browser}-special-invite`,
   }[role];
 }
@@ -63,9 +74,6 @@ export function siteSettingsSpecs(browser: GatedBrowser): string[] {
     "admin-site",
     "backup",
     "smtp",
-    "theme",
-    "theme-management",
-    "theme-presentation",
     "responsive-shell",
     "post-image-fit",
     "media",
@@ -74,6 +82,9 @@ export function siteSettingsSpecs(browser: GatedBrowser): string[] {
     "production-baseline-flow",
   ];
 }
+
+/** The Theme specs, which mutate the Site's Theme selection and catalog. */
+export const themeSpecs = ["theme", "theme-management", "theme-presentation"];
 
 export const inviteSpecs = ["invite"];
 

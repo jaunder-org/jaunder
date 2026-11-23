@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "lane": "sqlite-firefox-serial-theme",
+  "backend": "sqlite",
+  "browser": "firefox",
+  "partition": "serial-theme",
+  "shard_index": null,
+  "shard_count": null,
+  "tests": [
+    {
+      "project_id": "firefox-special-theme",
+      "project_name": "firefox-special-theme",
+      "test_id": "theme"
+    }
+  ]
+}

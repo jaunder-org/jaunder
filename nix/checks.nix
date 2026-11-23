@@ -963,8 +963,9 @@ e2eSalt = "";
 # topology; traceSeed gives every isolated lane a distinct OTel trace id.
 # The catalog independently identifies retained production lanes and disabled
 # unsplit controls.
-e2eLaneCatalog = (builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json)).lanes;
-# Production uses the retained three-lane split per {backend, browser}. Disabled
+e2eLaneCatalogFile = builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json);
+e2eLaneCatalog = e2eLaneCatalogFile.lanes;
+# Production uses the retained four-lane split per {backend, browser}. Disabled
 # unsplit lanes are measurement and single-worker diagnostic controls only.
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
 e2eFirefoxControlLanes = builtins.filter (lane: !lane.enabled && lane.browser == "firefox" && lane.partition == "unsplit") e2eLaneCatalog;
@@ -1047,7 +1048,11 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
       # rather than failing the combo check, containing timeout flakiness
       # (Firefox 5s `expect` races) while results.json records it.
-      extraEnv = " JAUNDER_E2E_RETRIES=1";
+      # Ordinary shards are sized by measured duration rather than test count:
+      # Playwright weights each `--shard` slice by this per-browser string.
+      extraEnv = " JAUNDER_E2E_RETRIES=1"
+        + pkgs.lib.optionalString (c.partition == "ordinary")
+          " PWTEST_SHARD_WEIGHTS=${e2eLaneCatalogFile.ordinaryShardWeights.${c.browser}}";
       expectedCensusProjectArgs = e2eCensusProjectArgs c.browser;
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;

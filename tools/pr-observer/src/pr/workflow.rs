@@ -866,7 +866,7 @@ mod tests {
         .unwrap();
         let sources = catalog_sources();
         let graph = WorkflowGraph::parse_with_local_sources(&source, &sources).unwrap();
-        for (key, count) in [("e2e-lane", 12), ("e2e-reconcile", 4)] {
+        for (key, count) in [("e2e-lane", 16), ("e2e-reconcile", 4)] {
             assert_eq!(
                 graph
                     .nodes

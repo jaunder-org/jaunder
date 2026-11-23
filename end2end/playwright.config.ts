@@ -10,6 +10,7 @@ import {
   roles,
   siteSettingsSpecs,
   specPattern,
+  themeSpecs,
   visualIgnoredSpecs,
 } from "./e2eProjects";
 
@@ -115,6 +116,13 @@ const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
 function gatedProjects(browser: GatedBrowser): Project[] {
   const use = gatedBrowserUse[browser];
   const site = siteSettingsSpecs(browser);
+  // The exclusive site-configuration roles run one test at a time.
+  const serialConfiguration: Project = {
+    grepInvert: visualTag,
+    fullyParallel: false,
+    workers: 1,
+    use,
+  };
   const role: Record<Role, Project> = {
     visual: {
       testIgnore: ignoreUnavailableSpecializedSpecs(
@@ -126,18 +134,13 @@ function gatedProjects(browser: GatedBrowser): Project[] {
     },
     ordinary: {
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        specPattern([...site, ...inviteSpecs]),
+        specPattern([...site, ...themeSpecs, ...inviteSpecs]),
       ),
       grepInvert: visualTag,
       use: browser === "chromium" ? { ...use, ...productionBaselineTls } : use,
     },
-    siteSettings: {
-      testMatch: specPattern(site),
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      use,
-    },
+    siteSettings: { ...serialConfiguration, testMatch: specPattern(site) },
+    theme: { ...serialConfiguration, testMatch: specPattern(themeSpecs) },
     invite: {
       testMatch: specPattern(inviteSpecs),
       grepInvert: visualTag,
@@ -152,7 +155,8 @@ function gatedProjects(browser: GatedBrowser): Project[] {
       ? { testMatch: diagnosticSpec, dependencies: [] }
       : { dependencies: [unsplit("visual")] },
     siteSettings: { dependencies: [unsplit("ordinary")] },
-    invite: { dependencies: [unsplit("siteSettings")] },
+    theme: { dependencies: [unsplit("siteSettings")] },
+    invite: { dependencies: [unsplit("theme")] },
   };
   return [
     ...roles.map((name) => ({
@@ -218,15 +222,16 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // Site Theme Package mutators and Studio-dependent observers share the
-  // serial configuration project; per-author contexts cannot isolate Local.
-  // admin-site, backup, SMTP, theme, media, timeline-cls, invite, and
+  // Site Theme Package mutators and Studio-dependent observers live in serial
+  // configuration projects; per-author contexts cannot isolate Local.
+  // admin-site, backup, SMTP, the Theme specs, media, timeline-cls, invite, and
   // production-baseline mutate global site configuration or must restore it before
   // dependent projects. Playwright's
   // `fullyParallel: false` is only intra-file, so these files live in dependent
   // projects to prevent cross-file overlap under workers=2. Each gated browser
   // runs visual contracts first, parallel ordinary tests second, then the serial
-  // configuration group, then invite. Reciprocal filters run every spec exactly once.
+  // site-settings and Theme groups, then invite. Reciprocal filters run every
+  // spec exactly once.
   // WebKit's dependent configuration project owns backup alongside its existing
   // theme, SMTP, and media coverage; production baseline remains excluded there.
   projects: [
@@ -234,7 +239,11 @@ export default defineConfig({
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(
-        specPattern([...siteSettingsSpecs("firefox"), ...inviteSpecs]),
+        specPattern([
+          ...siteSettingsSpecs("firefox"),
+          ...themeSpecs,
+          ...inviteSpecs,
+        ]),
       ),
       grepInvert: visualTag,
       use: { ...devices["Desktop Safari"] },

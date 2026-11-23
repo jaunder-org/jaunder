@@ -13,7 +13,7 @@ import {
   type MutationOutcome,
 } from "./helpers";
 import { test, type NewTracedContext } from "./fixtures";
-import { projectsInRole } from "../e2eProjects";
+import { exclusiveConfigurationRoles, projectsInRole } from "../e2eProjects";
 
 export type ThemeAsset = { path: string; mime: string; bytes: Uint8Array };
 export type ThemePackage = {
@@ -260,15 +260,17 @@ type SiteSelection =
   | { kind: "custom"; value: number }
   | null;
 
-/** Own Local's selection only inside the existing exclusive configuration project. */
+/** Own Local's selection only inside an exclusive configuration project. */
 export async function withSiteThemeSelection(
   tracedContext: NewTracedContext,
   use: (mutate: <T>(action: () => Promise<T>) => Promise<T>) => Promise<void>,
 ): Promise<void> {
   const project = test.info().project;
-  expect([...projectsInRole("siteSettings"), "webkit-theme"]).toContain(
-    project.name,
-  );
+  expect([
+    ...exclusiveConfigurationRoles.flatMap((role) => projectsInRole(role)),
+    // WebKit's own serial configuration project, outside the gated roles.
+    "webkit-theme",
+  ]).toContain(project.name);
   const context = await tracedContext();
   const failures: unknown[] = [];
   let original: SiteSelection | undefined;

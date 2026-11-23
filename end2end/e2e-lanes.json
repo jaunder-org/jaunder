@@ -4,11 +4,17 @@
     "chromium-ordinary": [],
     "chromium-special-visual": [],
     "chromium-special-global-configuration": ["chromium-special-visual"],
+    "chromium-special-theme": [],
     "chromium-special-invite": ["chromium-special-global-configuration"],
     "firefox-ordinary": [],
     "firefox-special-visual": [],
     "firefox-special-global-configuration": ["firefox-special-visual"],
+    "firefox-special-theme": [],
     "firefox-special-invite": ["firefox-special-global-configuration"]
+  },
+  "ordinaryShardWeights": {
+    "chromium": "59:41",
+    "firefox": "56:44"
   },
   "lanes": [
     {
@@ -83,6 +89,15 @@
       "enabled": true
     },
     {
+      "backend": "sqlite",
+      "browser": "firefox",
+      "partition": "serial-theme",
+      "identity": "sqlite-firefox-serial-theme",
+      "traceSeed": "13",
+      "projects": ["firefox-special-theme"],
+      "enabled": true
+    },
+    {
       "backend": "postgres",
       "browser": "firefox",
       "partition": "ordinary",
@@ -115,6 +130,15 @@
         "firefox-special-global-configuration",
         "firefox-special-invite"
       ],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "firefox",
+      "partition": "serial-theme",
+      "identity": "postgres-firefox-serial-theme",
+      "traceSeed": "14",
+      "projects": ["firefox-special-theme"],
       "enabled": true
     },
     {
@@ -153,6 +177,15 @@
       "enabled": true
     },
     {
+      "backend": "sqlite",
+      "browser": "chromium",
+      "partition": "serial-theme",
+      "identity": "sqlite-chromium-serial-theme",
+      "traceSeed": "15",
+      "projects": ["chromium-special-theme"],
+      "enabled": true
+    },
+    {
       "backend": "postgres",
       "browser": "chromium",
       "partition": "ordinary",
@@ -185,6 +218,15 @@
         "chromium-special-global-configuration",
         "chromium-special-invite"
       ],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "chromium",
+      "partition": "serial-theme",
+      "identity": "postgres-chromium-serial-theme",
+      "traceSeed": "16",
+      "projects": ["chromium-special-theme"],
       "enabled": true
     }
   ]

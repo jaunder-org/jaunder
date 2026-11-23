@@ -64,7 +64,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
         .map(|lane| lane["identity"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(emitted, enabled);
-    assert_eq!(emitted.len(), 12);
+    assert_eq!(emitted.len(), 16);
     let mut pairs = Vec::new();
     for backend in ["postgres", "sqlite"] {
         for browser in ["chromium", "firefox"] {
@@ -76,7 +76,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
                     .iter()
                     .filter(|lane| lane["backend"] == backend && lane["browser"] == browser)
                     .count(),
-                3
+                4
             );
         }
     }
@@ -133,6 +133,31 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_cross_lane_depen
             lane["enabled"] = false.into();
         }
     }
+    // A pair without its serial Theme lane, or a Theme project also run by
+    // the serial-special lane.
+    let mut missing_theme = base.clone();
+    for lane in missing_theme["lanes"].as_array_mut().unwrap() {
+        if lane["identity"] == "postgres-firefox-serial-theme" {
+            lane["enabled"] = false.into();
+        }
+    }
+    let mut overlapping_theme = base.clone();
+    for lane in overlapping_theme["lanes"].as_array_mut().unwrap() {
+        if lane["identity"] == "sqlite-chromium-serial-special" {
+            lane["projects"]
+                .as_array_mut()
+                .unwrap()
+                .push("chromium-special-theme".into());
+        }
+    }
+    // Shard weights must be a well-formed string for exactly the gated browsers.
+    let mut malformed_weights = base.clone();
+    malformed_weights["ordinaryShardWeights"]["firefox"] = "56/44".into();
+    let mut missing_weights = base.clone();
+    missing_weights["ordinaryShardWeights"]
+        .as_object_mut()
+        .unwrap()
+        .remove("chromium");
     // Seeds that expand to the same trace id, or to the invalid all-zero id.
     let mut colliding_seed = base.clone();
     colliding_seed["lanes"][1]["traceSeed"] = "11".into();
@@ -145,6 +170,10 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_cross_lane_depen
         chromium_dependency,
         unsplit,
         missing_special,
+        missing_theme,
+        overlapping_theme,
+        malformed_weights,
+        missing_weights,
         colliding_seed,
         zero_seed,
     ] {

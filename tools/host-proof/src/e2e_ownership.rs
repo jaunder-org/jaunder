@@ -245,7 +245,9 @@ pub fn reconcile(
         .iter()
         .map(|e| e.0.as_str())
         .collect::<BTreeSet<_>>();
-    if lanes.len() != 3 || expected_lanes != supplied || evidence.len() != supplied.len() {
+    // The catalog's shape is validated by `scripts/e2e-matrix.jq`; here the
+    // supplied evidence must name exactly the pair's enabled split lanes.
+    if lanes.is_empty() || expected_lanes != supplied || evidence.len() != supplied.len() {
         return Err("split lane evidence does not exactly match the catalog".into());
     }
     let mut census_all = None;
@@ -345,6 +347,8 @@ mod tests {
     const M1: &str = include_str!("testdata/e2e-ownership/ordinary-1-manifest.json");
     const M2: &str = include_str!("testdata/e2e-ownership/ordinary-2-manifest.json");
     const MS: &str = include_str!("testdata/e2e-ownership/serial-special-manifest.json");
+    const RT: &str = include_str!("testdata/e2e-ownership/serial-theme-report.json");
+    const MT: &str = include_str!("testdata/e2e-ownership/serial-theme-manifest.json");
     fn e() -> Vec<(String, String, String, String)> {
         vec![
             (
@@ -364,6 +368,12 @@ mod tests {
                 C.into(),
                 RS.into(),
                 MS.into(),
+            ),
+            (
+                "sqlite-firefox-serial-theme".into(),
+                C.into(),
+                RT.into(),
+                MT.into(),
             ),
         ]
     }

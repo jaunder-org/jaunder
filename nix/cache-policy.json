@@ -56,6 +56,10 @@
       "classification": "final"
     },
     {
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-serial-theme",
+      "classification": "final"
+    },
+    {
       "attr": "checks.x86_64-linux.e2e-postgres-firefox-ordinary-1-of-2",
       "classification": "final"
     },
@@ -65,6 +69,10 @@
     },
     {
       "attr": "checks.x86_64-linux.e2e-postgres-firefox-serial-special",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-serial-theme",
       "classification": "final"
     },
     {
@@ -80,6 +88,10 @@
       "classification": "final"
     },
     {
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-serial-theme",
+      "classification": "final"
+    },
+    {
       "attr": "checks.x86_64-linux.e2e-sqlite-firefox-ordinary-1-of-2",
       "classification": "final"
     },
@@ -89,6 +101,10 @@
     },
     {
       "attr": "checks.x86_64-linux.e2e-sqlite-firefox-serial-special",
+      "classification": "final"
+    },
+    {
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-serial-theme",
       "classification": "final"
     },
     {
@@ -117,6 +133,11 @@
       "sourceFamily": "e2e-driver"
     },
     {
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-serial-theme-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
       "attr": "packages.x86_64-linux.e2e-postgres-chromium-single-worker",
       "classification": "final"
     },
@@ -137,6 +158,11 @@
     },
     {
       "attr": "packages.x86_64-linux.e2e-postgres-firefox-serial-special-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-serial-theme-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
@@ -183,6 +209,11 @@
       "sourceFamily": "e2e-driver"
     },
     {
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-serial-theme-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
       "attr": "packages.x86_64-linux.e2e-sqlite-chromium-single-worker",
       "classification": "final"
     },
@@ -203,6 +234,11 @@
     },
     {
       "attr": "packages.x86_64-linux.e2e-sqlite-firefox-serial-special-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-serial-theme-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
