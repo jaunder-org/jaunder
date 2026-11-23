@@ -1,0 +1,23 @@
+{
+  "suites": [
+    {
+      "suites": [],
+      "specs": [
+        {
+          "id": "theme",
+          "title": "theme contract",
+          "file": "tests/theme.spec.ts",
+          "line": 3,
+          "tests": [
+            {
+              "projectId": "firefox-special-theme",
+              "projectName": "firefox-special-theme",
+              "status": "expected",
+              "results": [{ "retry": 0, "duration": 15 }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

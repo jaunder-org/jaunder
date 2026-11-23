@@ -17,6 +17,11 @@
       "project_id": "firefox-special-visual",
       "project_name": "firefox-special-visual",
       "test_id": "visual"
+    },
+    {
+      "project_id": "firefox-special-theme",
+      "project_name": "firefox-special-theme",
+      "test_id": "theme"
     }
   ]
 }

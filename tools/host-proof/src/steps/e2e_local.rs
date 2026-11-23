@@ -181,6 +181,7 @@ fn ordinary_projects(
             "chromium-visual",
             "chromium",
             "chromium-admin-site",
+            "chromium-theme",
             "chromium-admin",
         ],
         // Theme, admin-site, media, and invite tests are deliberately excluded
@@ -191,6 +192,7 @@ fn ordinary_projects(
             "firefox-visual",
             "firefox",
             "firefox-admin-site",
+            "firefox-theme",
             "firefox-admin",
         ],
         // WebKit likewise keeps its fast ordinary default. Its theme/admin
@@ -1256,7 +1258,7 @@ while :; do :; done"#;
     }
 
     #[test]
-    fn filtered_firefox_theme_run_selects_admin_site_project() {
+    fn filtered_firefox_theme_run_selects_theme_project() {
         let plan = e2e_local_plan(
             Some(E2eLocalBrowser::Firefox),
             Some("theme.spec.ts:63"),
@@ -1274,6 +1276,8 @@ while :; do :; done"#;
                     "firefox",
                     "--project",
                     "firefox-admin-site",
+                    "--project",
+                    "firefox-theme",
                     "--project",
                     "firefox-admin",
                     "--no-deps",

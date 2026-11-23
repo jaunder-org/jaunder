@@ -700,7 +700,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   gesture, losing the click. Keep destination-content assertions; do not repair
   this readiness gap with sleeps, larger timeouts or retries.
 
-- **The authoritative workflow** — `dev e2e` attempts all twelve enabled
+- **The authoritative workflow** — `dev e2e` attempts all sixteen enabled
   hermetic Nix VM lanes, then reconciles every backend/browser pair even after
   producer failures. Any producer, reconciliation or coverage failure fails the
   workflow. Full `dev validate` calls this same synchronous workflow after its
@@ -714,15 +714,18 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   boundary matters; this is not required before every push. The push hook
   remains `prepush`.
 - **Reconciliation and controls** — Every browser uses the same split per
-  backend: ordinary shards 1 and 2 of 2 plus one serial-special lane owning the
-  visual, global-configuration and invite projects. Producers lift available
-  lane-qualified diagnostics before propagating their original Nix failure;
-  missing diagnostics cannot turn a failure green. Reconciliation fail-closed
-  checks the independent census, report union, retries, duration manifests,
-  phase sidecars and trace captures. The retired Rust producer/control aliases
-  are not parallel workflow entrypoints. Existing unsplit Firefox
-  workers=2/workers=4 measurement installables remain available through ordinary
-  `nix build`; workers=4 remains rejected for production.
+  backend: ordinary shards 1 and 2 of 2, one serial-special lane owning the
+  visual, global-configuration and invite projects, and one serial-theme lane
+  owning the Theme specs. The catalog's per-browser `ordinaryShardWeights`
+  (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the ordinary shards by
+  measured duration; re-derive them from lane reports when the shards drift
+  apart. Producers lift available lane-qualified diagnostics before propagating
+  their original Nix failure; missing diagnostics cannot turn a failure green.
+  Reconciliation fail-closed checks the independent census, report union,
+  retries, duration manifests, phase sidecars and trace captures. The retired
+  Rust producer/control aliases are not parallel workflow entrypoints. Existing
+  unsplit Firefox workers=2/workers=4 measurement installables remain available
+  through ordinary `nix build`; workers=4 remains rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -1137,10 +1140,10 @@ stable `Validate (no e2e)` result-only job. The coverage source-filter probe
 (`dev coverage-check probe-source`) is an on-demand diagnostic, not an automatic
 CI step.
 
-E2E uses one catalog-derived matrix of twelve isolated producers
-(`dev e2e-producer <identity>`), three per backend/browser pair. An `always()`
+E2E uses one catalog-derived matrix of sixteen isolated producers
+(`dev e2e-producer <identity>`), four per backend/browser pair. An `always()`
 reconciliation job per pair waits for the complete producer matrix, downloads
-that pair's three artifacts and runs `dev e2e-reconcile` even if downloads fail;
+that pair's four artifacts and runs `dev e2e-reconcile` even if downloads fail;
 the SQLite/Chromium job also verifies server-function coverage. Stable
 `e2e gate` requires the catalog job, every producer, and all four
 reconciliations. Running independent surfaces across runners cuts workflow
@@ -2054,7 +2057,7 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the OTLP traces of the three reconciled SQLite/Chromium e2e lanes, extracted per
+the OTLP traces of the four reconciled SQLite/Chromium e2e lanes, extracted per
 lane and unioned. Its sole committed generated artifact is
 `docs/coverage/server-fns.json`, which records the covered `<vertical>::<ident>`
 set plus orphan reasons and is compared byte-for-byte. Do not hand-edit it:
@@ -2083,10 +2086,10 @@ use the single explicit command:
 dev e2e-regenerate-coverage
 ```
 
-It freshly runs the three SQLite/Chromium producers, then reconciles their
-lifted artifacts before writing the snapshot. Producer, reconciliation or
-artifact failures remain failures; snapshot verification is deliberately
-replaced by regeneration only for this explicit action. Ordinary `dev e2e` and
+It freshly runs the four SQLite/Chromium producers, then reconciles their lifted
+artifacts before writing the snapshot. Producer, reconciliation or artifact
+failures remain failures; snapshot verification is deliberately replaced by
+regeneration only for this explicit action. Ordinary `dev e2e` and
 `dev e2e-producer` remain verification-only.
 
 The artifact-input CLI
@@ -2282,7 +2285,7 @@ verdict rather than executing them again
 JSON invalidation envelope. The Nix source filters assert representative
 membership inline (the coverage filter also has
 `dev coverage-check probe-source`); do not infer execution from reused outputs.
-`dev validate` adds all twelve retained E2E lanes, their reconciliation, and
+`dev validate` adds all sixteen retained E2E lanes, their reconciliation, and
 server-function coverage verification to `dev validate-no-e2e`.
 
 ### Nix VM checks
@@ -2376,6 +2379,8 @@ server-function coverage verification to `dev validate-no-e2e`.
   — two ordinary shards per backend and browser
 - `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-serial-special`
   — one visual/global-configuration/invite lane per backend and browser
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-serial-theme` —
+  one Theme lane per backend and browser
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
   realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
@@ -2412,7 +2417,7 @@ e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
 The salt rides the lane's extra-env string into the VM test script, so it
-changes every E2E derivation hash — twelve retained gate checks, four unsplit
+changes every E2E derivation hash — sixteen retained gate checks, four unsplit
 Firefox workers=2/workers=4 control packages, and four historical single-worker
 packages. It does **not** change `packages.x86_64-linux.jaunder`:
 `nix/checks.nix` sits outside the crane source filter owned by

@@ -4200,20 +4200,24 @@ Each browser E2E lane is a NixOS-test VM running Playwright against a real
 served instance. One JSON catalog, `end2end/e2e-lanes.json`, defines the
 retained topology consumed by Nix and runtime artifact verifiers. Pinned `jq`
 projects CI matrices at runtime; Actions `fromJSON` consumes that data rather
-than maintaining a second lane list in workflow YAML. Every browser has three
-isolated lanes per backend: two shards of its ordinary project and one
+than maintaining a second lane list in workflow YAML. Every browser has four
+isolated lanes per backend: two shards of its ordinary project, one
 serial-special lane owning visual, global-configuration, and invite projects in
-dependency order. Unsplit catalog lanes are disabled; unsplit Firefox workers=2
-and workers=4 remain package-only measurement controls
+dependency order, and one serial-theme lane owning the Theme specs. Ordinary
+shards are sized by one per-browser duration weight (`ordinaryShardWeights`,
+exported as Playwright's `PWTEST_SHARD_WEIGHTS`) rather than by test count.
+Unsplit catalog lanes are disabled; unsplit Firefox workers=2 and workers=4
+remain package-only measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
-[split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Each lane's
-one- or two-hex-digit `traceSeed` expands to a distinct trace id.
+[split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
+[serial Theme lane and weighted shards](adr/drafts/serial-theme-e2e-lane-and-weighted-shards.md)).
+Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
-CI runs twelve lane-qualified producers with `fail-fast: false`, all under the
+CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
 shared 1500 s Playwright cap. Every lane runs its browser's independent
 unsharded preflight census, then emits its own report, lane and duration
 manifests, phase sidecar, trace capture, journals, and Playwright archive. An
-`always()` host reconciliation job per backend/browser pair downloads its three
+`always()` host reconciliation job per backend/browser pair downloads its four
 producer artifacts, proves the exact census/report/manifest union, and
 independently validates retries, duration pressure, panic phases, and boot
 traces. Missing, duplicated, misidentified, malformed, or failed evidence fails
@@ -4261,18 +4265,19 @@ whose workflow `dev` now owns
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Each
 browser's lane graph is distributed: `<browser>-ordinary` is sharded across two
-VMs, while one serial-special VM selects
-`<browser>-special-visual → <browser>-special-global-configuration → <browser>-special-invite`.
-The unsplit Chromium graph
-`chromium-visual → chromium → chromium-admin-site → chromium-admin` remains for
-host E2E, production-baseline qualification and wasm coverage. Each visual
-project selects the existing `@visual` behavioral tests, disables retries, and
-reuses the reviewed `<browser>-visual` baseline paths rather than minting
-topology-qualified images. Ordinary excludes visual and global-state specs.
-Chromium and Firefox each own one Linux baseline per state under the owning
-spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries browser
-identity but not backend, so SQLite and PostgreSQL compare the same expected
-image. WebKit has no visual project or baseline.
+VMs, one serial-special VM selects
+`<browser>-special-visual → <browser>-special-global-configuration → <browser>-special-invite`,
+and one serial-theme VM selects `<browser>-special-theme`. The unsplit Chromium
+graph
+`chromium-visual → chromium → chromium-admin-site → chromium-theme → chromium-admin`
+remains for host E2E, production-baseline qualification and wasm coverage. Each
+visual project selects the existing `@visual` behavioral tests, disables
+retries, and reuses the reviewed `<browser>-visual` baseline paths rather than
+minting topology-qualified images. Ordinary excludes visual and global-state
+specs. Chromium and Firefox each own one Linux baseline per state under the
+owning spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries
+browser identity but not backend, so SQLite and PostgreSQL compare the same
+expected image. WebKit has no visual project or baseline.
 
 Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
 fontconfig universe to both host and VM browser processes, while
@@ -4431,9 +4436,9 @@ in `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
 provisions a uniquely-named account out of band, `mailbox` is a recipient-scoped
 cursor-tracked mail waiter, and `verifiedUser` adds the verification flow. Each
 browser's global-state specs are additionally isolated from both ordinary shards
-in its serial-special VM. The catalog and Playwright dependency graph require
-visual ownership exactly once and keep each special project's prerequisites in
-the same lane
+in its serial-special and serial-theme VMs. The catalog and Playwright
+dependency graph require visual ownership exactly once and keep each special
+project's prerequisites in the same lane
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
@@ -4733,7 +4738,7 @@ The explicit local workflows are:
   auxiliary host tests, wasm tests, public `dev coverage` and `dev doctests`,
   and Elisp producer/consumer. **`dev validate`** adds the currently landed E2E
   producers and final authoritative flow consumer; it never reruns live ERT.
-  Each backend/browser pair owns three retained lanes and one reconciliation.
+  Each backend/browser pair owns four retained lanes and one reconciliation.
   `dev` owns coverage/doctest composition and hard status-gate requests.
   `dev e2e` owns the full local E2E workflow; CI calls its producer and
   reconciliation boundaries directly, using the shared enabled-lane catalog and
@@ -4998,7 +5003,7 @@ Identity stability alone is not local/remote cache or compiler freshness
 evidence.
 
 `dev validate` composes `dev validate-no-e2e` and the synchronous `dev e2e`
-workflow, which settles all twelve retained producers before every
+workflow, which settles all sixteen retained producers before every
 backend/browser reconciliation; the SQLite/Chromium reconciliation owns
 authoritative flow verification. Gate-wide JSON invalidation reports are
 retired. The coverage source-filter probe remains an optional, named diagnostic;

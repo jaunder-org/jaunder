@@ -54,8 +54,8 @@ if [[ -n ${{REAL_VERIFIER-}} ]]; then exec "$REAL_VERIFIER" "$@"; fi
 printf '{{"steps":[{{"name":"%s","ok":true,"duration_ms":1}}]}}\\n' "$1"
 """
 LANE = "sqlite-chromium-ordinary-1-of-2"
-COVERAGE_LANES = 3
-LANES = 12
+COVERAGE_LANES = 4
+LANES = 16
 PAIRS = ["sqlite chromium", "sqlite firefox", "postgres chromium", "postgres firefox"]
 MARKER = f"producer-input-{LANE}.json"
 

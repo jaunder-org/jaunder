@@ -103,12 +103,24 @@ fn evaluated_e2e_lanes() -> serde_json::Value {
 fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
     let lanes = evaluated_e2e_lanes();
     let lanes = lanes.as_object().expect("lane map");
-    assert_eq!(lanes.len(), 12);
+    assert_eq!(lanes.len(), 16);
     // Every production lane shares one suite cap and deadline (#1985).
     let (suite, deadline) = (1500, 1920);
     for (name, lane) in lanes {
         assert_eq!(lane["globalTimeout"], deadline, "{name}");
         let script = lane["testScript"].as_str().expect("VM test script");
+        // Only ordinary shards are sized by their browser's catalog weight.
+        let weights = if name.contains("firefox-ordinary") {
+            Some("PWTEST_SHARD_WEIGHTS=56:44")
+        } else if name.contains("chromium-ordinary") {
+            Some("PWTEST_SHARD_WEIGHTS=59:41")
+        } else {
+            None
+        };
+        match weights {
+            Some(weights) => assert!(script.contains(weights), "{name}"),
+            None => assert!(!script.contains("PWTEST_SHARD_WEIGHTS"), "{name}"),
+        }
         let syntax = std::process::Command::new("python3")
             .args([
                 "-B",
