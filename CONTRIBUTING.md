@@ -1265,7 +1265,9 @@ directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
 `host-proof csr-prerequisite`, a step of `dev test-local`, writes its validation
 phases into the same run; no other host-proof executable joins it. An
 `e2e-producer` step adds its VM run's measured phases, read from the lifted
-phase manifest ([observability](docs/observability.md)). A step span records:
+phase manifest, and the `coverage` step adds its producer's stages (below), both
+as [producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)
+([observability](docs/observability.md)). A step span records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
   merge for a span with no end record or no parent, as when a child is killed);
@@ -1297,9 +1299,6 @@ in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
 or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
 
-A producer that times its own phases inside the sandbox gets them traced
-afterwards
-([producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)).
 Once the `coverage` step's `build` ends, `dev` reads `status.json` through the
 `coverage` GC root. Every stage that started records `started_unix_ms` (wall
 clock) beside `duration_ms`. `dev` writes each such stage that falls inside the

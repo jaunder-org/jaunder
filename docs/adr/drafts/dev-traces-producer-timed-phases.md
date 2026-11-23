@@ -41,8 +41,10 @@ is added.
   build, ran before the step started and are left out, not misplaced. No Nix
   store query decides this.
 - A missing or malformed sidecar yields no phase spans and never changes the
-  step's status or output. Each producer's reader decides how strictly it reads
-  its own sidecar: coverage's reads all or nothing.
+  step's status or exit code. At most it adds one `dev:` warning, which the E2E
+  reader prints for an unreadable manifest. Each producer's reader decides how
+  strictly it reads its own sidecar: coverage's reads all or nothing, while
+  E2E's skips the entries it cannot place.
 
 ## Consequences
 

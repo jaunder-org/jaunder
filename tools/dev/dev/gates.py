@@ -286,7 +286,7 @@ def _non_negative_int(value: object) -> bool:
     return type(value) is int and value >= 0
 
 
-def coverage_stages(output: str) -> list[trace.Phase]:
+def _coverage_stages(output: str) -> list[trace.Phase]:
     """The stages the coverage producer timed, from its output's `status.json`.
 
     Only what places a stage is read: a stage that never started has neither
@@ -315,9 +315,20 @@ def coverage_stages(output: str) -> list[trace.Phase]:
                     stage["outcome"] == "success",
                 )
             )
-    except OSError, ValueError, LookupError, TypeError, AttributeError:
+    except (
+        OSError,
+        ValueError,
+        LookupError,
+        TypeError,
+        AttributeError,
+        RecursionError,
+    ):
         return []
     return phases
+
+
+# The coverage producer's output, as its step holds it.
+COVERAGE_ROOT = f"{steps.GCROOTS}/coverage"
 
 
 def _coverage_stage_spans(build: Span, started_ns: int) -> None:
@@ -326,15 +337,14 @@ def _coverage_stage_spans(build: Span, started_ns: int) -> None:
     They are read from the GC root, which a failed build leaves on an earlier
     output whose stages fall outside the step, as a reused output's do.
     """
-    stages = coverage_stages(f"{steps.GCROOTS}/coverage")
-    trace.record_phases(build, started_ns, stages)
+    trace.record_phases(build, started_ns, _coverage_stages(COVERAGE_ROOT))
 
 
 def coverage_workflow() -> None:
     _producer_and_gate("coverage", _coverage_stage_spans)
     steps.run(
         "coverage-policy",
-        [*steps.tool(COVERAGE_CHECK), "policy", "--out", f"{steps.GCROOTS}/coverage"],
+        [*steps.tool(COVERAGE_CHECK), "policy", "--out", COVERAGE_ROOT],
         report.render,
     )
 
