@@ -30,7 +30,9 @@ jobs:
   # push to `main` of a commit whose `merge_group` run passed both required
   # checks skips everything except `validate-host` (main's kache writer). Any
   # other push, including an admin bypass of the queue, validates in full. See
-  # docs/adr/drafts/merge-queue-verdict-covers-landed-commit.md.
+  # docs/ci-merge-queue.md, "Checks on a landed commit", for the decision record.
+  # (Never cite an ADR draft path in a workflow: promotion rewrites it, and the
+  # promoter App may not push workflow changes.)
   #
   # The event test lives in the output expression, so a pull_request or
   # merge_group run can never skip. `github-script` runs on the runner's bundled

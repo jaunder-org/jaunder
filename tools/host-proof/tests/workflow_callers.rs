@@ -347,3 +347,19 @@ fn the_performance_job_keeps_its_trace_and_summarises_it_without_a_verdict() {
         &["performance"],
     );
 }
+
+#[test]
+fn workflows_never_cite_an_adr_draft_path() {
+    // ADR promotion rewrites draft paths repo-wide, and the promoter App has no
+    // `workflows` permission, so a draft cited here blocks every promotion.
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.github/workflows");
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        let source = fs::read_to_string(&path).unwrap();
+        assert!(
+            !source.contains("docs/adr/drafts/"),
+            "{} cites an ADR draft path",
+            path.display()
+        );
+    }
+}
