@@ -2926,19 +2926,34 @@ mkWasmCoverageMeasurementProducer =
       ];
       clippySourceFilter;
   };
-  # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild these.
-  mkClippyLeaf = name: pkgs.runCommand name {
-    nativeBuildInputs = [ pkgs.stdenv.cc devBin toolchain ] ++ hostArgs.nativeBuildInputs;
-    buildInputs = hostArgs.buildInputs;
-    LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
-    JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
-    JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
-  } ''
-    cp --no-preserve=mode -r ${clippySource} src
-    cd src
-    dev static ${name} --sandbox
-    touch $out
-  '';
+  # Each leaf inherits a dependency build that runs the same `dev static` over
+  # crane's dummy source, so Rust-only edits re-lint just the workspace crates.
+  # `dev` arrives as its own filtered build, so tools/dev/ edits rebuild both.
+  mkClippyLeaf =
+    name:
+    let
+      args = hostArgs // leanDevAndTestProfile // {
+        pname = "jaunder-${name}";
+        src = clippySource;
+        # Crane's dummy source keeps only the root lock; tools-clippy needs its own.
+        extraDummyScript = hostArgs.extraDummyScript + ''
+          cp ${../tools/Cargo.lock} "$out/tools/Cargo.lock"
+        '';
+        nativeBuildInputs = [ devBin ] ++ hostArgs.nativeBuildInputs;
+        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath [ pkgs.openssl pkgs.dav1d ];
+        JAUNDER_PRODUCT_CARGO_HOME = "${appOfflineCargoHome}";
+        JAUNDER_TOOLS_CARGO_HOME = "${toolsOfflineCargoHome}";
+        # Nested tools Cargo would otherwise use tools/target, which crane never archives.
+        CARGO_TARGET_DIR = "target";
+        doCheck = false;
+        buildPhaseCargoCommand = "dev static ${name} --sandbox";
+      };
+    in
+    craneLib.mkCargoDerivation (args // {
+      cargoArtifacts = craneLib.buildDepsOnly args;
+      doInstallCargoArtifacts = false;
+      installPhaseCommand = "touch $out";
+    });
 in
 {
 
