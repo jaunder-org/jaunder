@@ -168,18 +168,30 @@ let
 # (#144/#227) and the journal fallback, de-duplicates by panic location with the
 # scoped record winning, and owns the default-empty source-controlled allowlist.
 # The CLI receives the capture directory rather than restating the diagnostic
-# filename defined by `host::capture`.
-e2ePanicGate = backend: identity: ''
-  machine.succeed("journalctl -u jaunder.service --no-pager -o cat > /tmp/jaunder-journal-${identity}.log")
-  # copy_from_machine's 2nd arg is a target *directory*; "" preserves the
-  # lane-qualified source basename in the output.
-  _grab("/tmp/jaunder-journal-${identity}.log")
-  panic_status, panic_out = machine.execute(
-      "test-support verify-no-panics"
-      + " --capture-dir /var/lib/jaunder/capture"
-      + " --server-log /tmp/jaunder-journal-${identity}.log"
-  )
-  print(panic_out)
+# filename defined by `host::capture`. Every server instance (#2076) is gated
+# over its own journal and capture subdirectory; any failing instance fails
+# the lane.
+e2ePanicGate = identity: ''
+  def verify_instance_panics():
+    panic_status = 0
+    for index, instance in enumerate(e2e_instances()):
+      # The lane suffix lets the producer lift every instance's journal.
+      journal = "/tmp/jaunder-journal-instance-%d-${identity}.log" % index
+      machine.succeed("journalctl -u " + instance["unit"] + " --no-pager -o cat > " + journal)
+      # copy_from_machine's 2nd arg is a target *directory*; "" preserves the
+      # lane-qualified source basename in the output.
+      _grab(journal)
+      instance_status, panic_out = machine.execute(
+          "test-support verify-no-panics"
+          + " --capture-dir " + instance["captureDir"]
+          + " --server-log " + journal
+      )
+      print("panic-gate", instance["unit"], instance_status)
+      print(panic_out)
+      panic_status = panic_status or instance_status
+    return panic_status
+
+  panic_status = verify_instance_panics()
 '';
 
 # The two e2e time budgets, which must stay ordered:
@@ -223,8 +235,18 @@ performanceGlobalTimeout = 6000;
 # necessarily listening (#1243), so every initial start and restart probes
 # the actual endpoints before any exporter runs. Seed-span verification
 # then stops the collector to flush short-lived process spans into the
-# JSONL file the VM owns.
-e2eOtelTestHelpers = identity: ''
+# JSONL file the VM owns. Each `instances` entry is one Jaunder server unit
+# (#2076); see e2eInstances.
+e2eOtelTestHelpers = identity: instances: ''
+  def e2e_instances():
+    return ${builtins.toJSON instances}
+
+  def start_e2e_instances():
+    machine.succeed("systemctl start " + " ".join(instance["unit"] for instance in e2e_instances()))
+    for instance in e2e_instances():
+      machine.wait_for_unit(instance["unit"], timeout=60)
+      machine.wait_for_open_port(instance["port"], timeout=30)
+
   def wait_for_otel_receivers():
     # Complete capture belongs on the driver's disk-backed exchange, not the DB root.
     machine.succeed("test $(findmnt -n -o FSTYPE -T /var/lib/jaunder/capture) = 9p")
@@ -296,10 +318,23 @@ e2eOtelTestHelpers = identity: ''
       print(error)
     return errors
 
+  # Peak memory (page cache included) per server instance, the collector, the
+  # test shell (Playwright and its browsers) and all of them together, plus
+  # guest totals: sizing evidence (#2076). Read before the writers stop, since
+  # a stopped unit loses its peak.
+  def report_e2e_memory():
+    units = [instance["unit"] for instance in e2e_instances()] + ["otel-collector.service", "backdoor.service", "system.slice"]
+    for unit in units:
+      status, output = machine.execute("systemctl show -p MemoryPeak --value " + unit)
+      print("memory-peak", unit, output.strip() if status == 0 else "unavailable")
+    status, output = machine.execute("free -m")
+    print(output)
+
   def stop_e2e_capture_writers():
     errors = []
     # The application's provider drain needs the Collector alive until it exits.
-    for service in ["jaunder.service", "otel-collector.service"]:
+    writers = [instance["unit"] for instance in e2e_instances()] + ["otel-collector.service"]
+    for service in writers:
       try:
         status, output = machine.execute("systemctl stop " + service)
         print("capture-stop", service, status, output)
@@ -307,7 +342,7 @@ e2eOtelTestHelpers = identity: ''
           errors.append("capture writer stop failed: " + service)
       except Exception as error:
         errors.append("capture writer stop failed: " + service + ": " + str(error))
-    for service in ["jaunder.service", "otel-collector.service"]:
+    for service in writers:
       try:
         status, output = machine.execute("systemctl show " + service + " -p ActiveState -p SubState")
         print("capture-state", service, status, output)
@@ -339,12 +374,11 @@ e2eOtelTestHelpers = identity: ''
         raise AssertionError("seed-trace-verifier-timeout: verification exceeded ${toString e2eSeedTraceTimeout}s")
       raise AssertionError(verify_out)
 
+    # Stopping the collector also stopped every instance that requires it.
     machine.succeed("systemctl start otel-collector.service")
     machine.wait_for_unit("otel-collector.service", timeout=60)
     wait_for_otel_receivers()
-    machine.succeed("systemctl start jaunder.service")
-    machine.wait_for_unit("jaunder.service", timeout=60)
-    machine.wait_for_open_port(3000, timeout=30)
+    start_e2e_instances()
 '';
 
 # The NixOS test driver is a Python process, so monotonic timing is available
@@ -507,16 +541,38 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
       print("failed to write e2e phase manifest: " + manifest_out)
 '';
 
+# One Jaunder server unit per Playwright worker (#2076), each with its own
+# port, database, storage root and capture subdirectory. The collector's
+# files stay at the capture root. `instanceDb` maps an instance to its
+# backend's database URL.
+e2eInstances =
+  workers: instanceDb:
+  pkgs.lib.genList (
+    index:
+    let
+      port = 3000 + index;
+      storagePath = "/var/lib/jaunder/data-${toString index}";
+    in
+    {
+      name = "jaunder-${toString index}";
+      unit = "jaunder-${toString index}.service";
+      inherit port storagePath;
+      baseUrl = "http://localhost:${toString port}";
+      db = instanceDb { inherit index storagePath; };
+      captureDir = "/var/lib/jaunder/capture/instance-${toString index}";
+    }
+  ) workers;
+
 # Playwright's worker count and per-worker instance map (#2076) as a Python
 # string literal for the testScripts' shell commands. Each entry is one server
-# instance, bound by a worker's parallel index; `instance` holds the entry's
-# DB and any storage/capture paths that run exports.
+# instance, bound by a worker's parallel index; it holds the instance's base
+# URL, DB and any storage/capture paths that run exports.
 e2eInstancesEnv =
-  workers: instance:
+  entries:
   builtins.toJSON (
-    " JAUNDER_E2E_WORKERS=${toString workers} JAUNDER_E2E_INSTANCES="
+    " JAUNDER_E2E_WORKERS=${toString (builtins.length entries)} JAUNDER_E2E_INSTANCES="
     + pkgs.lib.escapeShellArg (
-      builtins.toJSON (pkgs.lib.genList (_: { baseUrl = "http://localhost:3000"; } // instance) workers)
+      builtins.toJSON (map (entry: removeAttrs entry [ "name" "unit" "port" ]) entries)
     )
   );
 
@@ -552,16 +608,12 @@ e2eUpgradeBaseline =
   {
     upgradeFrom,
     identity,
-    jaunderDb,
+    instances,
     schemaVersionQuery,
   }:
   let
-    # The one server both phases verify.
-    instance = {
-      db = jaunderDb;
-      storagePath = "/var/lib/jaunder/data";
-      captureDir = "/var/lib/jaunder/capture";
-    };
+    # The one server instance both phases verify.
+    instance = assert builtins.length instances == 1; builtins.head instances;
   in
   ''
     machine.succeed(
@@ -579,7 +631,7 @@ e2eUpgradeBaseline =
       + ${e2ePlaywrightEnv {
         inherit (upgradeFrom) browsers;
         jaunderExecutable = "${upgradeFrom.jaunder}/bin/jaunder";
-        instancesEnv = e2eInstancesEnv 1 instance;
+        instancesEnv = e2eInstancesEnv [ instance ];
       }}
       # An earlier build that predates the instance map (#2076) reads its seed
       # tools' paths from the environment instead.
@@ -603,16 +655,16 @@ e2eUpgradeBaseline =
       retain_e2e_capture()
     assert baseline_status == 0, "upgrade baseline phase failed on the earlier build (exit %d) for ${identity}" % baseline_status
 
-    schema_before = machine.succeed("${schemaVersionQuery}").strip()
+    schema_before = machine.succeed("${schemaVersionQuery instance}").strip()
     machine.succeed("/run/current-system/specialisation/upgraded/bin/switch-to-configuration test")
-    machine.wait_for_unit("jaunder.service", timeout=120)
-    machine.wait_for_open_port(3000, timeout=60)
-    schema_after = machine.succeed("${schemaVersionQuery}").strip()
+    machine.wait_for_unit("${instance.unit}", timeout=120)
+    machine.wait_for_open_port(${toString instance.port}, timeout=60)
+    schema_after = machine.succeed("${schemaVersionQuery instance}").strip()
     print("upgrade schema version: earlier=" + schema_before + " current=" + schema_after)
     # The switch must have replaced the running binary, and migrations only
     # move forward.
     machine.succeed(
-      "readlink /proc/$(systemctl show -p MainPID --value jaunder.service)/exe"
+      "readlink /proc/$(systemctl show -p MainPID --value ${instance.unit})/exe"
       + " | grep -q '^${jaunderBin}/'"
     )
     assert int(schema_after) >= int(schema_before), "upgrade lowered the schema version"
@@ -632,23 +684,15 @@ e2eRunAndCapture =
     expectedCensusTopology ? "${backend}-${browser}-experimental",
     traceId,
     traceParent,
-    # The same DB the running server uses, bound into each Playwright worker's
-    # env so the `test-support` seed helper it spawns points at that DB (it
-    # reads `JAUNDER_DB`). Backend-specific; see each check.
-    jaunderDb,
-    workers,
+    # The lane's server instances, one per worker (e2eInstances). Each worker
+    # binds its own instance's DB, storage and capture dir, so the
+    # `test-support` helpers it spawns reach that instance.
+    instances,
     extraEnv ? "",
     playwrightTimeout,
   }:
   let
-    # INTERIM (#2076): until Task 2 gives each worker its own `jaunder@<i>`
-    # unit, every entry names the VM's single jaunder.service, so the lane's
-    # workers keep sharing one server exactly as before.
-    instancesEnv = e2eInstancesEnv workers {
-      db = jaunderDb;
-      storagePath = "/var/lib/jaunder/data";
-      captureDir = "/var/lib/jaunder/capture";
-    };
+    instancesEnv = e2eInstancesEnv instances;
     # Bind only the final test recipe to its clean checkout, not product builds.
     # Dirty flakes cannot attest their entire working tree through a Git revision.
     producerInput = pkgs.writeText "e2e-producer-input-${identity}.json" (builtins.toJSON {
@@ -729,6 +773,7 @@ e2eRunAndCapture =
     # from build.log alone, even on a timeout and without --keep-failed.
     print(pw_out)
 
+    report_e2e_memory()
     # Collect failures without aborting the remaining diagnostic lifts.
     retention_errors.extend(stop_e2e_capture_writers())
 
@@ -791,7 +836,7 @@ e2eRunAndCapture =
     )
 
     post_gate_started_at = time.monotonic()
-    ${e2ePanicGate backend identity}
+    ${e2ePanicGate identity}
     record_e2e_phase(
       "post-gate-checks",
       post_gate_started_at,
@@ -805,7 +850,7 @@ e2eRunAndCapture =
     _grab("/tmp/e2e-phase-${identity}.json")
 
     # Preserve ADR-0032's panic assertion before the Playwright assertion.
-    assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${identity}; see jaunder-journal-${identity}.log + e2e-phase-${identity}.json + build.log" % panic_status
+    assert panic_status == 0, "e2e zero-panic gate failed (exit %d) for ${identity}; see jaunder-journal-instance-*-${identity}.log + e2e-phase-${identity}.json + build.log" % panic_status
 
     # A browser failure keeps its original assertion after best-effort capture.
     # Otherwise, missing drain/inventory/tar/copy integrity must not become green.
@@ -837,28 +882,32 @@ mkE2eCheck =
   assert (producer == null) != (lane == null);
   assert upgradeFrom == null || producer == null;
   let
+    # Measurement producers run one server; lanes run one per worker.
+    instances = e2eInstances (if lane == null then 1 else lane.workers) backendPolicy.instanceDb;
+    postgresName = index: "jaunder_${toString index}";
     backendPolicy =
       if backend == "sqlite" then
         {
           package = pkgs.sqlite;
-          jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
-          schemaVersionQuery = "${pkgs.sqlite}/bin/sqlite3 /var/lib/jaunder/data/jaunder.db 'SELECT MAX(version) FROM _sqlx_migrations'";
+          instanceDb = { storagePath, ... }: "sqlite:${storagePath}/jaunder.db";
+          schemaVersionQuery = instance: "${pkgs.sqlite}/bin/sqlite3 ${instance.storagePath}/jaunder.db 'SELECT MAX(version) FROM _sqlx_migrations'";
           nodeConfig = _: { };
           setupBeforeJaunder = "";
           seedBeforeStart = true;
           seedComments = [
-            "  # Seed the fresh VM's already-migrated DB. This VM is single-use and"
-            "  # jaunder.service's boot preStart (`jaunder init`) has already created"
+            "  # Seed each instance's fresh, already-migrated DB. This VM is single-use"
+            "  # and each instance's boot preStart (`jaunder init`) has already created"
             "  # and migrated an empty DB (incl. migration 0018 reference data);"
             "  # nothing writes user data before this point, so no wipe is needed"
-            "  # (#271). Seeding runs against the running boot service."
+            "  # (#271). Seeding runs against the running instances."
           ];
         }
       else if backend == "postgres" then
         {
           package = pkgs.postgresql_18;
-          jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
-          schemaVersionQuery = "${pkgs.postgresql_18}/bin/psql -tA postgres://jaunder:testpassword@127.0.0.1/jaunder -c 'SELECT MAX(version) FROM _sqlx_migrations'";
+          # One role and database per instance in the lane's one PostgreSQL.
+          instanceDb = { index, ... }: "postgres://${postgresName index}:testpassword@127.0.0.1/${postgresName index}";
+          schemaVersionQuery = instance: "${pkgs.postgresql_18}/bin/psql -tA ${instance.db} -c 'SELECT MAX(version) FROM _sqlx_migrations'";
           nodeConfig = lib: {
             services.postgresql = {
               enable = true;
@@ -871,22 +920,22 @@ mkE2eCheck =
                 listen_addresses = lib.mkForce "*";
               };
             };
-            services.jaunder.db = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
           };
           setupBeforeJaunder = ''
             machine.wait_for_unit("postgresql.service", timeout=60)
+          '' + pkgs.lib.concatMapStringsSep "" (index: ''
 
             machine.succeed(
               "${jaunderBin}/bin/jaunder create-pg-db"
               + " --bootstrap-db postgres://postgres@127.0.0.1/postgres"
-              + " --app-db postgres://jaunder@127.0.0.1/jaunder"
+              + " --app-db postgres://${postgresName index}@127.0.0.1/${postgresName index}"
               + " --app-role-password testpassword"
             )
-          '';
+          '') (pkgs.lib.genList (index: index) (builtins.length instances));
           seedBeforeStart = false;
           seedComments = [
-            "  # Seed the fresh VM's already-migrated DB. This VM is single-use;"
-            "  # create-pg-db + the delayed jaunder.service boot preStart"
+            "  # Seed each instance's fresh, already-migrated DB. This VM is single-use;"
+            "  # create-pg-db + each instance's delayed boot preStart"
             "  # (`jaunder init`) have already created and migrated an empty DB"
             "  # (incl. migration 0018 reference data), and nothing writes user data"
             "  # before this point, so no TRUNCATE is needed (#271)."
@@ -900,18 +949,64 @@ mkE2eCheck =
       ]
       ++ backendPolicy.seedComments
       ++ [
-        "  machine.succeed("
-        "    \"JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 test-support seed-e2e\""
-        "    + \" --db ${backendPolicy.jaunderDb}\""
-        "    + \" --jaunder-bin jaunder\""
-        "  )"
-        "  assert_seed_storage_spans()"
+        "  # The collector truncates its trace file on each restart, so each"
+        "  # verification sees only the spans of the instance just seeded."
+        "  for instance in e2e_instances():"
+        "    machine.succeed("
+        "      \"JAUNDER_CAPTURE_DIR=\" + instance[\"captureDir\"]"
+        "      + \" JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 test-support seed-e2e\""
+        "      + \" --db \" + instance[\"db\"]"
+        "      + \" --jaunder-bin jaunder\""
+        "    )"
+        "    assert_seed_storage_spans()"
       ]
     );
-    # These separators preserve the existing generated Python byte-for-byte:
+    instanceUnits =
+      { config, ... }:
+      {
+        # One unit per instance, each the module's unit with its own port,
+        # database, storage root and capture subdirectory (#2076). The test
+        # script starts them only after the collector receivers and any
+        # backend-specific database setup are ready.
+        systemd.services = builtins.listToAttrs (map (instance: {
+          inherit (instance) name;
+          value = {
+            description = "Jaunder E2E instance ${instance.name}";
+            after = [ "otel-collector.service" ];
+            requires = [ "otel-collector.service" ];
+            unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
+            inherit (config.systemd.services.jaunder) preStart;
+            serviceConfig = {
+              inherit (config.systemd.services.jaunder.serviceConfig)
+                User
+                Group
+                StateDirectory
+                WorkingDirectory
+                ExecStart
+                Restart
+                RestartSec
+                TimeoutStopSec
+                ;
+            };
+            environment = {
+              JAUNDER_BIND = "127.0.0.1:${toString instance.port}";
+              JAUNDER_DB = instance.db;
+              JAUNDER_STORAGE_PATH = instance.storagePath;
+              JAUNDER_CAPTURE_DIR = instance.captureDir;
+              RUST_LOG = "info";
+              JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
+              # The SDK's 2048-span queue overflows when a loaded host stalls export,
+              # and a lost request span orphans its server-fn child (#2029). Coverage
+              # refuses any capture whose diag.log reports such a loss; this headroom
+              # keeps ordinary load from causing one. The SDK allocates every slot up
+              # front, so it stays a moderate multiple of the default.
+              OTEL_BSP_MAX_QUEUE_SIZE = "16384";
+            };
+          };
+        }) instances);
+      };
     # SQLite defines its seed helper before VM start, while PostgreSQL does so
-    # after package copy. Keeping the bytes stable keeps all eight derivation
-    # paths stable, which proves this refactor changes no NixOS-test input.
+    # after package copy.
     beforeMachineStart = if backendPolicy.seedBeforeStart then "\n\n${seedDefinition}\n\n\n" else "\n";
     setupBeforeJaunder =
       if backendPolicy.setupBeforeJaunder == "" then
@@ -941,9 +1036,11 @@ mkE2eCheck =
           self.nixosModules.jaunder
           (backendPolicy.nodeConfig lib)
           (extraNodeConfig { inherit pkgs lib; })
+          instanceUnits
         ] ++ lib.optional (upgradeFrom != null) {
           # The earlier build serves first; the `upgraded` specialisation swaps
-          # in the current build in place, as an operator's upgrade does.
+          # in the current build in place, as an operator's upgrade does. The
+          # instance unit inherits the module unit's package.
           services.jaunder.package = upgradeFrom.jaunder;
           specialisation.upgraded.configuration.services.jaunder.package = lib.mkForce jaunderBin;
         };
@@ -978,7 +1075,12 @@ mkE2eCheck =
           target = "/var/lib/jaunder/capture";
           securityModel = "mapped-file";
         };
-        systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0700 jaunder jaunder -" ];
+        # The module supplies the jaunder user and the unit each instance runs;
+        # its own single-server unit is masked in favour of the instances.
+        services.jaunder.enable = true;
+        systemd.services.jaunder.enable = false;
+        systemd.tmpfiles.rules = [ "d /var/lib/jaunder/capture 0700 jaunder jaunder -" ]
+          ++ map (instance: "d ${instance.captureDir} 0700 jaunder jaunder -") instances;
         systemd.services.otel-collector = {
           unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
           description = "Jaunder e2e OTel Collector";
@@ -992,25 +1094,6 @@ mkE2eCheck =
             Restart = "on-failure";
             RestartSec = "2s";
           };
-        };
-
-        services.jaunder.enable = true;
-        services.jaunder.bind = "127.0.0.1:3000";
-        # The test script starts Jaunder only after the collector receivers
-        # and any backend-specific database setup are ready.
-        systemd.services.jaunder.wantedBy = lib.mkForce [ ];
-        systemd.services.jaunder.after = [ "otel-collector.service" ];
-        systemd.services.jaunder.requires = [ "otel-collector.service" ];
-        systemd.services.jaunder.unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
-        systemd.services.jaunder.environment = captureEnv // {
-          RUST_LOG = "info";
-          JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4317";
-          # The SDK's 2048-span queue overflows when a loaded host stalls export,
-          # and a lost request span orphans its server-fn child (#2029). Coverage
-          # refuses any capture whose diag.log reports such a loss; this headroom
-          # keeps ordinary load from causing one. The SDK allocates every slot up
-          # front, so it stays a moderate multiple of the default.
-          OTEL_BSP_MAX_QUEUE_SIZE = "16384";
         };
       };
 
@@ -1028,32 +1111,28 @@ mkE2eCheck =
             shardArg
             expectedCensusProjectArgs
             expectedCensusTopology
-            workers
             ;
         in
         ''
-          ${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity}${beforeMachineStart}vm_startup_started_at = time.monotonic()
+          ${e2ePhaseTimingHelpers backend browser identity}${e2eOtelTestHelpers identity instances}${beforeMachineStart}vm_startup_started_at = time.monotonic()
           machine.start()
           machine.wait_for_unit("otel-collector.service", timeout=60)
           # `active` precedes the OTLP receiver binds; seeding immediately can
           # export into that gap and leave no trace population to verify.
-          wait_for_otel_receivers()${setupBeforeJaunder}machine.succeed("systemctl start jaunder.service")
-          machine.wait_for_unit("jaunder.service", timeout=60)
-          machine.wait_for_open_port(3000, timeout=30)
+          wait_for_otel_receivers()${setupBeforeJaunder}start_e2e_instances()
           record_e2e_phase(
             "vm-startup-readiness",
             vm_startup_started_at,
             "success",
-            "${backend}/${browser}: VM booted and the Jaunder HTTP readiness port opened.",
+            "${backend}/${browser}: VM booted and every Jaunder instance's HTTP readiness port opened.",
           )
 
-          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
+          machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed fresh DBs and run the one browser this derivation targets.
           # Browsers run as separate derivations (one VM each) so their state
           # mutations cannot interfere; that also lets CI fan them out.
           ${if upgradeFrom == null then "seed_db()" else e2eUpgradeBaseline {
-            inherit upgradeFrom identity;
-            jaunderDb = backendPolicy.jaunderDb;
-            schemaVersionQuery = backendPolicy.schemaVersionQuery;
+            inherit upgradeFrom identity instances;
+            inherit (backendPolicy) schemaVersionQuery;
           }}
           ${e2eRunAndCapture {
             inherit
@@ -1067,17 +1146,16 @@ mkE2eCheck =
               shardArg
               expectedCensusProjectArgs
               expectedCensusTopology
-              workers
+              instances
               traceId
               traceParent
               extraEnv
               playwrightTimeout
               ;
-            jaunderDb = backendPolicy.jaunderDb;
           }}
         ''
       else
-        producer { inherit backendPolicy; };
+        producer { inherit backendPolicy instances; };
   });
 
 # Cache-busting salt for e2e measurement runs (#792). Nix caches the e2e
@@ -1323,34 +1401,33 @@ mkPerformanceProducer =
     vmGlobalTimeout =
       assert performanceBrowserTimeout < performanceGlobalTimeout;
       performanceGlobalTimeout;
-    extraNodeConfig = { lib, ... }: {
+    extraNodeConfig = _: {
       # Performance fixtures need runtime data capacity beyond the closure-sized test disk.
       virtualisation.diskSize = performanceDiskSize;
-      systemd.services.jaunder.environment.JAUNDER_STORAGE_PATH = "/var/lib/jaunder/media";
     };
-    producer = { backendPolicy }: ''
+    # The producer measures one server: the single instance's unit, whose
+    # boot preStart initializes its storage root.
+    producer = { backendPolicy, instances }: let instance = builtins.head instances; in ''
       import json
       import shlex
       import time
 
-      ${e2eOtelTestHelpers "performance-${backend}-${producerKind}"}
+      ${e2eOtelTestHelpers "performance-${backend}-${producerKind}" instances}
       machine.start()
       provisioning_started = time.monotonic_ns()
       machine.wait_for_unit("otel-collector.service", timeout=60)
       wait_for_otel_receivers()
       ${backendPolicy.setupBeforeJaunder}
-      machine.succeed("install -d -o jaunder -g jaunder /var/lib/jaunder/data /var/lib/jaunder/media && mkdir -p /var/lib/jaunder/performance/fragments /var/lib/jaunder/performance/diagnostics")
-      machine.succeed("systemctl start jaunder.service")
-      machine.wait_for_unit("jaunder.service", timeout=60)
-      machine.wait_for_open_port(3000, timeout=30)
+      machine.succeed("mkdir -p /var/lib/jaunder/performance/fragments /var/lib/jaunder/performance/diagnostics")
+      start_e2e_instances()
       provisioning_us = (time.monotonic_ns() - provisioning_started) // 1000
 
       seeding_started = time.monotonic_ns()
       machine.succeed(
-        "JAUNDER_DB=${backendPolicy.jaunderDb}"
+        "JAUNDER_DB=${instance.db}"
         + " test-support perf-seed --profile ${profile}"
         + " --output /var/lib/jaunder/performance"
-        + " --storage-path /var/lib/jaunder/media"
+        + " --storage-path ${instance.storagePath}"
         + "${pkgs.lib.optionalString (posts != null) " --posts ${toString posts}"}"
         + "${pkgs.lib.optionalString (authors != null) " --authors ${toString authors}"}"
         + "${pkgs.lib.optionalString (revisions != null) " --revisions ${toString revisions}"}"
@@ -1388,7 +1465,7 @@ mkPerformanceProducer =
           + " > /var/lib/jaunder/performance/identity.json"
         )
         storage_status, storage_output = machine.execute(
-          "perf-producer storage --db ${backendPolicy.jaunderDb} --backend ${backend}"
+          "perf-producer storage --db ${instance.db} --backend ${backend}"
           + " --manifest /var/lib/jaunder/performance/dataset-manifest-v1.json"
           + " --output /var/lib/jaunder/performance/fragments"
           + " --provisioning-us " + str(setup["provisioning_us"])
@@ -1430,7 +1507,7 @@ mkPerformanceProducer =
           "cd /tmp/e2e"
           + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-          + ${e2eInstancesEnv 1 { db = backendPolicy.jaunderDb; }}
+          + ${e2eInstancesEnv instances}
           + " JAUNDER_PERF_MANIFEST_PATH=/var/lib/jaunder/performance/dataset-manifest-v1.json"
           + " JAUNDER_PERF_FRAGMENT_DIR=/var/lib/jaunder/performance/fragments"
           + " JAUNDER_PERF_BACKEND=${backend}"
@@ -1625,7 +1702,7 @@ mkWasmCoverageProducer =
         status, output = machine.execute(
           # The instance map is exported to bash rather than spliced into its
           # single-quoted script, whose quoting the map's own quotes would break.
-          ${e2eInstancesEnv 1 { db = "sqlite:/var/lib/jaunder/data/jaunder.db"; }}
+          ${e2eInstancesEnv [ { baseUrl = "http://localhost:3000"; db = "sqlite:/var/lib/jaunder/data/jaunder.db"; } ]}
           + " bash -o pipefail -c 'cd /tmp/e2e"
           + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
@@ -1706,7 +1783,7 @@ mkWasmCoverageMeasurementProducer =
         "cd /tmp/e2e"
         + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
         + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-        + ${e2eInstancesEnv 1 { db = "sqlite:/var/lib/jaunder/data/jaunder.db"; }}
+        + ${e2eInstancesEnv [ { baseUrl = "http://localhost:3000"; db = "sqlite:/var/lib/jaunder/data/jaunder.db"; } ]}
         + " FONTCONFIG_FILE=${visualFontConfig}"
         + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
         + " JAUNDER_WASM_COVERAGE_CSR=${if mode == "baseline" then diagnosticBaselineCsrWasmBundle else diagnosticCsrWasmBundle}"
@@ -1973,9 +2050,11 @@ mkWasmCoverageMeasurementProducer =
     assert minimalTrustedProxyTypeFails;
     assert sqliteStack.config.services.jaunder.trustedProxies == [ "127.0.0.1/32" ];
     assert sqliteStack.config.systemd.services.jaunder.environment.JAUNDER_TRUSTED_PROXIES == "127.0.0.1/32";
-    # #2029: the E2E server keeps span-queue headroom under host load. Every lane
-    # shares mkE2eCheck's node module, so one lane represents them all.
-    assert (builtins.head (builtins.attrValues e2eGateChecks)).nodes.machine.systemd.services.jaunder.environment.OTEL_BSP_MAX_QUEUE_SIZE == "16384";
+    # #2029: every E2E server instance (#2076) keeps span-queue headroom under
+    # host load. Every lane shares mkE2eCheck's node module, so one two-worker
+    # lane represents them all; the module's own unit stays masked.
+    assert builtins.all (index: (builtins.head (builtins.attrValues e2eGateChecks)).nodes.machine.systemd.services."jaunder-${toString index}".environment.OTEL_BSP_MAX_QUEUE_SIZE == "16384") [ 0 1 ];
+    assert !(builtins.head (builtins.attrValues e2eGateChecks)).nodes.machine.systemd.services.jaunder.enable;
     assert postgresStack.config.services.jaunder.db == "postgresql://jaunder@localhost/jaunder?host=/run/postgresql";
     assert postgresStack.config.services.postgresql.enable;
     assert postgresStack.config.services.postgresql.ensureDatabases == [ "jaunder" ];
