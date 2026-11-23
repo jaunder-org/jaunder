@@ -5556,7 +5556,7 @@ verdict for the commit it lands. The `push` run for a queue-tested SHA runs only
 `Validation host`, which writes `main`'s kache store, and skips the other lanes.
 A push without a passing `merge_group` run, such as an admin bypass, validates
 in full
-([merge-queue verdict draft](adr/drafts/merge-queue-verdict-covers-landed-commit.md)).
+([merge-queue verdict draft](adr/0260-merge-queue-verdict-covers-landed-commit.md)).
 
 Because green checks are only phase one under a queue — and an ejected PR leaves
 the queue silently — the focused host-only `tools/pr-observer` owns ordinary PR

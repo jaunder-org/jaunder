@@ -288,6 +288,7 @@ convention). See the Status column below for each ADR's current status.
 | [0257](adr/0257-html5ever-parser-stepping-dropped-at-log-bridge.md)      | html5ever parser stepping records are dropped at the log bridge                                              | accepted   |
 | [0258](adr/0258-dev-runs-nix-built-host-tools.md)                        | `dev` runs Nix-built host tools                                                                              | accepted   |
 | [0259](adr/0259-devtool-retirement-owners.md)                            | Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source         | accepted   |
+| [0260](adr/0260-merge-queue-verdict-covers-landed-commit.md)             | A merge-queue verdict covers the commit it lands                                                             | accepted   |
 
 <!-- adr-table:end -->
 
