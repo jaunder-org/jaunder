@@ -7,6 +7,7 @@
  * provisioning in `provisioning.ts`.
  */
 
+import "./instance";
 import { expect, test as base } from "@playwright/test";
 import { autoBootBudgetFixture } from "./bootBudget";
 import {

@@ -44,6 +44,7 @@ fn evaluate_e2e_expression(result: &str) -> std::process::Output {
               optionalString = condition: value: if condition then value else "";
               optionalAttrs = condition: value: if condition then value else {};
               removeSuffix = suffix: value: builtins.substring 0 (builtins.stringLength value - builtins.stringLength suffix) value;
+              escapeShellArg = arg: "'${builtins.replaceStrings [ "'" ] [ "'\\''" ] arg}'";
             };
             outputs = import (builtins.toPath CHECKS_PATH) {
               self = {};

@@ -26,7 +26,7 @@ exactly once.
 
 ### Deliverable A — instance mechanism
 
-- [ ] Task 1: Workers bind to their own instance; the host driver starts N
+- [x] Task 1: Workers bind to their own instance; the host driver starts N
       instances
   - Contract:
     - `JAUNDER_E2E_INSTANCES` is a JSON array with one entry per instance index:

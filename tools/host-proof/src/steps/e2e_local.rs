@@ -1,13 +1,13 @@
 //! Host e2e loop driver (#249): this driver OWNS the whole loop —
-//! select immutable server/seed artifacts, start `jaunder serve` on an ephemeral port with
-//! the VM's capture env, discover the port from the canonical
-//! `<storage>/runtime.json`, seed via the shared `test-support seed-e2e`, run
-//! Playwright against the discovered URL, and tear
-//! the server down on every exit path. Each run gets a fresh temp storage dir + DB
-//! (distinct ephemeral port + DB ⇒ concurrent runs don't collide at the server/DB
-//! layer, and the dev `data/jaunder.db` is never touched). Loads the same
-//! `playwright.config.ts` the CI VM loads, so "passes locally" == "passes in CI".
-//! Host only.
+//! select immutable server/seed artifacts, start one `jaunder serve` per
+//! Playwright worker (#2076) on an ephemeral port with the VM's capture env,
+//! discover each port from its canonical `<storage>/runtime.json`, seed each via
+//! the shared `test-support seed-e2e`, run Playwright against the instances,
+//! and tear every server down on every exit path. Each instance gets a fresh
+//! temp storage dir + DB (distinct ephemeral port + DB ⇒ neither workers nor
+//! concurrent runs collide at the server/DB layer, and the dev
+//! `data/jaunder.db` is never touched). Loads the same `playwright.config.ts`
+//! the CI VM loads, so "passes locally" == "passes in CI". Host only.
 //!
 //! Canonical e2e-server env-var set the host driver and the flake both provide
 //! (names shared, values per-environment; see also `nix/nixos.nix` `captureEnv`):
@@ -15,12 +15,14 @@
 //! contract, #227) — plus `JAUNDER_STORAGE_PATH` host-side only (the VM instead
 //! relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data` default).
 //! Values differ per environment (host: a temp dir + ephemeral port; VM:
-//! `/var/lib/jaunder` + `:3000`). The DB + capture-dir vars are ALSO set on the
-//! Playwright process (with the retained bundle's bin directory on PATH) so
-//! `mail.ts`/`websub.ts` resolve the same capture paths (via `test-support
-//! capture-path`) the server writes, and `seed.ts`'s bare-`test-support`
-//! `seedPostsViaTool` resolves the same binary + DB — VM parity for the
-//! mail/websub/pagination specs.
+//! `/var/lib/jaunder` + `:3000`). Each server writes its capture streams to its
+//! own `instance-<i>/` subdirectory of the shared collector capture. Playwright
+//! receives the instances as `JAUNDER_E2E_INSTANCES` (with the retained
+//! bundle's bin directory on PATH); each worker binds its own entry's DB,
+//! storage and capture dir, so `mail.ts`/`websub.ts` resolve the capture paths
+//! (via `test-support capture-path`) its server writes, and `seed.ts`'s
+//! bare-`test-support` `seedPostsViaTool` resolves the same binary + DB — VM
+//! parity for the mail/websub/pagination specs.
 mod capture;
 mod process;
 
@@ -233,16 +235,24 @@ fn resolve_e2e_env(
     workers: Result<String, env::VarError>,
     path: Option<OsString>,
     stderr: &mut impl Write,
-) -> anyhow::Result<(String, OsString)> {
+) -> anyhow::Result<(usize, OsString)> {
+    // The driver starts one server instance per worker, so the count must be
+    // a real positive integer rather than whatever Playwright would coerce.
     let workers = match workers {
-        Ok(value) => value,
-        Err(env::VarError::NotPresent) => "1".to_owned(),
+        Ok(value) => value
+            .parse::<usize>()
+            .ok()
+            .filter(|workers| *workers > 0)
+            .with_context(|| {
+                format!("JAUNDER_E2E_WORKERS must be a positive integer, got {value:?}")
+            })?,
+        Err(env::VarError::NotPresent) => 1,
         Err(env::VarError::NotUnicode(_)) => {
             let _ = writeln!(
                 stderr,
                 "e2e-local: warning: e2e-local.e2e.workers_config: ignored invalid-Unicode JAUNDER_E2E_WORKERS; using 1"
             );
-            "1".to_owned()
+            1
         }
     };
     let inherited = path
@@ -256,7 +266,7 @@ fn resolve_e2e_env_for_run(
     workers: Result<String, env::VarError>,
     path: Option<OsString>,
     stderr: &mut impl Write,
-) -> Option<(String, OsString)> {
+) -> Option<(usize, OsString)> {
     match resolve_e2e_env(workers, path, stderr) {
         Ok(values) => Some(values),
         Err(error) => {
@@ -312,41 +322,66 @@ fn step_name(browser: &str, suffix: &str) -> String {
     format!("e2e-local-{browser}-{suffix}")
 }
 
-fn record_post_playwright_results(
-    result: &mut CommandResult,
-    browser: &str,
-    playwright_result: Result<(), String>,
-    playwright_duration: Duration,
-    panic_gate_result: Result<(), String>,
-    panic_gate_duration: Duration,
-) {
-    let playwright_step = step_name(browser, "playwright");
-    match playwright_result {
-        Ok(()) => result.push(StepResult::ok(&playwright_step).with_duration(playwright_duration)),
-        Err(detail) => result.push(
-            StepResult::fail(&playwright_step)
-                .detail(detail)
-                .with_duration(playwright_duration),
-        ),
-    }
-
-    record_panic_gate_result(result, browser, panic_gate_result, panic_gate_duration);
+fn instance_step_name(browser: &str, index: usize, suffix: &str) -> String {
+    step_name(browser, &format!("instance-{index}-{suffix}"))
 }
 
-fn record_panic_gate_result(
+/// Each instance's server-written capture streams live in their own
+/// subdirectory of the shared collector capture.
+fn instance_capture(capture: &Path, index: usize) -> PathBuf {
+    capture.join(format!("instance-{index}"))
+}
+
+fn record_step(
     result: &mut CommandResult,
-    browser: &str,
-    panic_gate_result: Result<(), String>,
+    step: &str,
+    outcome: Result<(), String>,
     duration: Duration,
 ) {
-    let panic_step = step_name(browser, "panic-gate");
-    match panic_gate_result {
-        Ok(()) => result.push(StepResult::ok(&panic_step).with_duration(duration)),
+    match outcome {
+        Ok(()) => result.push(StepResult::ok(step).with_duration(duration)),
         Err(detail) => result.push(
-            StepResult::fail(&panic_step)
+            StepResult::fail(step)
                 .detail(detail)
                 .with_duration(duration),
         ),
+    }
+}
+
+/// Run the shared zero-panic verifier once per instance, each over its own
+/// retained capture subdirectory and server stderr.
+fn record_panic_gates(
+    result: &mut CommandResult,
+    verification: &LifecycleVerification<'_>,
+    capture: Option<&Path>,
+    instances: usize,
+) {
+    for index in 0..instances {
+        let started = Instant::now();
+        let outcome = match capture {
+            Some(capture) => {
+                let sh = verification.sh;
+                let test_support = verification.test_support;
+                let capture = instance_capture(capture, index);
+                let server_stderr = capture.join("server-stderr.log");
+                cmd!(
+                    sh,
+                    "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
+                )
+                .run()
+                .map_err(|_| "shared zero-panic verifier failed".to_owned())
+            }
+            None => Err(
+                "zero-panic verification skipped because capture writers could not be stopped"
+                    .to_owned(),
+            ),
+        };
+        record_step(
+            result,
+            &instance_step_name(verification.browser, index, "panic-gate"),
+            outcome,
+            started.elapsed(),
+        );
     }
 }
 
@@ -521,40 +556,40 @@ fn record_collector_start_failure(
     }
 }
 
-fn finish_server_setup_failure(
-    result: &mut CommandResult,
-    browser: &str,
-    retained: &RetainedCapture,
-    collector: &mut CollectorGuard,
-) {
-    stop_and_finalize_collector(result, browser, retained, collector, true);
-}
-
+/// Stop every started instance, then the collector, then verify each
+/// instance's retained capture.
 fn finish_lifecycle(
     result: &mut CommandResult,
-    server: &mut HostServerSession,
+    instances: &mut [Instance],
     collector: &mut CollectorGuard,
     retained: &RetainedCapture,
     verification: &LifecycleVerification<'_>,
     playwright_result: Option<(Result<(), String>, Duration)>,
     signals: &mut ServerSignals,
 ) {
-    let server_log_step = step_name(verification.browser, "server-log");
-    let mut shutdown_signal = None;
-    let server_stopped = match server.stop_interruptible(async {
-        shutdown_signal = Some(signals.next_signal_code().await);
-    }) {
-        Ok(()) => true,
-        Err(error) => {
-            result.push(
-                StepResult::fail(&server_log_step)
+    let mut servers_stopped = true;
+    for (index, instance) in instances.iter_mut().enumerate() {
+        let mut shutdown_signal = None;
+        let stopped = match instance.server.stop_interruptible(async {
+            shutdown_signal = Some(signals.next_signal_code().await);
+        }) {
+            Ok(()) => true,
+            Err(error) => {
+                result.push(
+                    StepResult::fail(&instance_step_name(
+                        verification.browser,
+                        index,
+                        "server-log",
+                    ))
                     .detail(format!("failed to finalize server stderr capture: {error}")),
-            );
-            server.is_stopped()
+                );
+                instance.server.is_stopped()
+            }
+        };
+        servers_stopped &= stopped;
+        if result.exit_override.is_none() {
+            result.exit_override = shutdown_signal;
         }
-    };
-    if result.exit_override.is_none() {
-        result.exit_override = shutdown_signal;
     }
 
     let capture = stop_and_finalize_collector(
@@ -562,45 +597,18 @@ fn finish_lifecycle(
         verification.browser,
         retained,
         collector,
-        server_stopped,
+        servers_stopped,
     );
 
-    let panic_gate_start = Instant::now();
-    let panic_gate_result = if let Some(capture) = capture {
-        let sh = verification.sh;
-        let test_support = verification.test_support;
-        let server_stderr = capture.join("server-stderr.log");
-        cmd!(
-            sh,
-            "{test_support} verify-no-panics --capture-dir {capture} --server-log {server_stderr}"
-        )
-        .run()
-        .map_err(|_| "shared zero-panic verifier failed".to_owned())
-    } else {
-        Err(
-            "zero-panic verification skipped because capture writers could not be stopped"
-                .to_owned(),
-        )
-    };
-    let panic_gate_duration = panic_gate_start.elapsed();
-    if let Some(playwright_result) = playwright_result {
-        let (playwright_result, playwright_duration) = playwright_result;
-        record_post_playwright_results(
+    if let Some((playwright_result, playwright_duration)) = playwright_result {
+        record_step(
             result,
-            verification.browser,
+            &step_name(verification.browser, "playwright"),
             playwright_result,
             playwright_duration,
-            panic_gate_result,
-            panic_gate_duration,
-        );
-    } else {
-        record_panic_gate_result(
-            result,
-            verification.browser,
-            panic_gate_result,
-            panic_gate_duration,
         );
     }
+    record_panic_gates(result, verification, capture.as_deref(), instances.len());
 }
 
 fn seed_command<'a>(
@@ -608,17 +616,171 @@ fn seed_command<'a>(
     db: &str,
     test_support: &str,
     jaunder: &Path,
+    storage: &Path,
     capture: &str,
     endpoint: &str,
 ) -> xshell::Cmd<'a> {
     // The already-selected immutable test-support artifact owns the canonical
     // seed list and runs its own user/mail steps; no tools-workspace build.
+    // Its `jaunder` steps use the instance's storage root, not `./data` under
+    // whatever directory the shell is in.
     cmd!(
         sh,
         "{test_support} seed-e2e --db {db} --test-support-bin {test_support} --jaunder-bin {jaunder}"
     )
+    .env("JAUNDER_STORAGE_PATH", storage)
     .env("JAUNDER_CAPTURE_DIR", capture)
     .env("JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT", endpoint)
+}
+
+/// One Playwright worker's server: its own storage root, SQLite database,
+/// capture subdirectory and seeded `jaunder serve` (#2076).
+struct Instance {
+    // Owned until the lifecycle ends, after the server has stopped.
+    storage: tempfile::TempDir,
+    db: String,
+    capture: PathBuf,
+    server: HostServerSession,
+}
+
+/// The harness's description of one instance, as `JAUNDER_E2E_INSTANCES`
+/// carries it to Playwright workers by parallel index.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InstanceEntry<'a> {
+    base_url: String,
+    db: &'a str,
+    storage_path: &'a Path,
+    capture_dir: &'a Path,
+}
+
+fn instance_map(entries: &[InstanceEntry<'_>]) -> String {
+    serde_json::to_string(entries).expect("instance entries serialize to JSON")
+}
+
+/// Start and seed the next instance. Any instance whose server process exists
+/// joins `instances`, ready or not, so the caller's teardown stops and verifies
+/// it; returns whether the new instance is ready for Playwright.
+fn start_instance(
+    sh: &Shell,
+    result: &mut CommandResult,
+    artifacts: &HostArtifacts,
+    browser: &str,
+    collector: &CollectorGuard,
+    signals: &mut ServerSignals,
+    instances: &mut Vec<Instance>,
+) -> bool {
+    let index = instances.len();
+    let step = |suffix: &str| instance_step_name(browser, index, suffix);
+    let setup_start = Instant::now();
+    let storage = match tempfile::tempdir() {
+        Ok(storage) => storage,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&step("tmpdir"))
+                    .detail(format!("cannot create temp storage dir: {error}"))
+                    .with_duration(setup_start.elapsed()),
+            );
+            return false;
+        }
+    };
+    let capture = instance_capture(collector.capture_dir(), index);
+    let stderr_capture = match std::fs::create_dir(&capture)
+        .and_then(|()| File::create(capture.join("server-stderr.log")))
+    {
+        Ok(file) => file,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&step("server-log"))
+                    .detail(format!("failed to create server stderr capture: {error}"))
+                    .with_duration(setup_start.elapsed()),
+            );
+            return false;
+        }
+    };
+    let db = format!("sqlite:{}/jaunder.db", storage.path().display());
+
+    let server_start = Instant::now();
+    let config = ServerSessionConfig {
+        shell: sh,
+        jaunder: artifacts.jaunder.clone(),
+        storage: storage.path().to_path_buf(),
+        runtime_file: storage.path().join("runtime.json"),
+        database_url: db.clone(),
+        stderr: stderr_capture,
+        extra_env: vec![
+            ("JAUNDER_CAPTURE_DIR".into(), capture.clone().into()),
+            ("RUST_LOG".into(), "info".into()),
+            (
+                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT".into(),
+                collector.grpc_exporter_url().into(),
+            ),
+        ],
+    };
+    let server =
+        match HostServerSession::start_interruptible(config, || interrupted(result, signals)) {
+            Ok(server) => server,
+            Err(failure) => {
+                let detail = match failure.phase() {
+                    ServerStartPhase::Spawn => {
+                        format!("failed to spawn jaunder serve: {}", failure.error())
+                    }
+                    ServerStartPhase::RuntimeFile => {
+                        format!(
+                            "server runtime file not ready within 15s: {}",
+                            failure.error()
+                        )
+                    }
+                    ServerStartPhase::Http => failure.error().to_string(),
+                    ServerStartPhase::Interrupted => "E2E server startup interrupted".to_owned(),
+                };
+                result.push(
+                    StepResult::fail(&step("server"))
+                        .detail(detail)
+                        .with_duration(server_start.elapsed()),
+                );
+                instances.extend(failure.into_session().map(|server| Instance {
+                    storage,
+                    db,
+                    capture,
+                    server,
+                }));
+                return false;
+            }
+        };
+    result.push(StepResult::ok(&step("server")).with_duration(server_start.elapsed()));
+
+    let test_support = artifacts.test_support.display().to_string();
+    let seed_start = Instant::now();
+    let seeded = run_consumer(
+        seed_command(
+            sh,
+            &db,
+            &test_support,
+            &artifacts.jaunder,
+            storage.path(),
+            &capture.display().to_string(),
+            &collector.grpc_exporter_url(),
+        ),
+        result,
+        signals,
+    );
+    instances.push(Instance {
+        storage,
+        db,
+        capture,
+        server,
+    });
+    if seeded.is_err() {
+        result.push(
+            StepResult::fail(&step("seed"))
+                .detail("test-support seed-e2e failed".to_owned())
+                .with_duration(seed_start.elapsed()),
+        );
+        return false;
+    }
+    result.push(StepResult::ok(&step("seed")).with_duration(seed_start.elapsed()));
+    true
 }
 
 fn run_lifecycle(
@@ -626,16 +788,12 @@ fn run_lifecycle(
     result: &mut CommandResult,
     artifacts: &HostArtifacts,
     lifecycle: &BrowserLifecycle,
-    workers: &str,
+    workers: usize,
     path: &OsString,
     signals: &mut ServerSignals,
 ) {
     let root = &artifacts.root;
     let browser = lifecycle.browser;
-    let tmpdir_step = step_name(browser, "tmpdir");
-    let server_log_step = step_name(browser, "server-log");
-    let server_step = step_name(browser, "server");
-    let seed_step = step_name(browser, "seed");
     let test_support_path = artifacts.test_support.as_path();
     let test_support = test_support_path.display().to_string();
     let retained = match allocate_retained_capture(root, browser, test_support_path) {
@@ -649,34 +807,6 @@ fn run_lifecycle(
         }
     };
 
-    // A distinct temp storage directory gives every browser a fresh database,
-    // capture directory, runtime file, port, server, and teardown.
-    let tmpdir_start = std::time::Instant::now();
-    let storage = match tempfile::tempdir() {
-        Ok(storage) => storage,
-        Err(error) => {
-            result.push(
-                StepResult::fail(&tmpdir_step)
-                    .detail(format!(
-                        "cannot create temp storage dir: {error}; retained run: {}",
-                        retained.run_dir.display()
-                    ))
-                    .with_duration(tmpdir_start.elapsed()),
-            );
-            result.push(
-                StepResult::fail(&step_name(browser, "capture"))
-                    .detail(format!(
-                        "collector produced no trace file; retained capture directory: {}; expected: {}",
-                        retained.run_dir.display(),
-                        retained.trace_path.display()
-                    ))
-                    .with_duration(tmpdir_start.elapsed()),
-            );
-            return;
-        }
-    };
-    let sp = storage.path().display();
-    let db = format!("sqlite:{sp}/jaunder.db");
     let collector_start = Instant::now();
     let collector_capture = match tempfile::tempdir() {
         Ok(capture) => capture,
@@ -710,6 +840,11 @@ fn run_lifecycle(
             return;
         }
     };
+    let verification = LifecycleVerification {
+        sh,
+        browser,
+        test_support: &test_support,
+    };
     let trace_id = match new_trace_id() {
         Ok(trace_id) => trace_id,
         Err(error) => {
@@ -717,130 +852,57 @@ fn run_lifecycle(
                 StepResult::fail(&step_name(browser, "trace-context"))
                     .detail(format!("cannot create E2E trace context: {error:#}")),
             );
-            finish_server_setup_failure(result, browser, &retained, &mut collector);
-            return;
-        }
-    };
-    let capture = collector.capture_dir().display().to_string();
-    let server_stderr = collector.capture_dir().join("server-stderr.log");
-    let server_log_start = std::time::Instant::now();
-    let stderr_capture = match File::create(&server_stderr) {
-        Ok(file) => file,
-        Err(error) => {
-            result.push(
-                StepResult::fail(&server_log_step)
-                    .detail(format!("failed to create server stderr capture: {error}"))
-                    .with_duration(server_log_start.elapsed()),
+            finish_lifecycle(
+                result,
+                &mut [],
+                &mut collector,
+                &retained,
+                &verification,
+                None,
+                signals,
             );
-            finish_server_setup_failure(result, browser, &retained, &mut collector);
             return;
         }
     };
 
-    let server_start = std::time::Instant::now();
-    let config = ServerSessionConfig {
-        shell: sh,
-        jaunder: artifacts.jaunder.clone(),
-        storage: storage.path().to_path_buf(),
-        runtime_file: storage.path().join("runtime.json"),
-        database_url: db.clone(),
-        stderr: stderr_capture,
-        extra_env: vec![
-            ("JAUNDER_CAPTURE_DIR".into(), capture.clone().into()),
-            ("RUST_LOG".into(), "info".into()),
-            (
-                "JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT".into(),
-                collector.grpc_exporter_url().into(),
-            ),
-        ],
-    };
-    let mut server =
-        match HostServerSession::start_interruptible(config, || interrupted(result, signals)) {
-            Ok(server) => server,
-            Err(failure) => {
-                let detail = match failure.phase() {
-                    ServerStartPhase::Spawn => {
-                        format!("failed to spawn jaunder serve: {}", failure.error())
-                    }
-                    ServerStartPhase::RuntimeFile => {
-                        format!(
-                            "server runtime file not ready within 15s: {}",
-                            failure.error()
-                        )
-                    }
-                    ServerStartPhase::Http => failure.error().to_string(),
-                    ServerStartPhase::Interrupted => "E2E server startup interrupted".to_owned(),
-                };
-                result.push(
-                    StepResult::fail(&server_step)
-                        .detail(detail)
-                        .with_duration(server_start.elapsed()),
-                );
-                if let Some(mut server) = failure.into_session() {
-                    let verification = LifecycleVerification {
-                        sh,
-                        browser,
-                        test_support: &test_support,
-                    };
-                    finish_lifecycle(
-                        result,
-                        &mut server,
-                        &mut collector,
-                        &retained,
-                        &verification,
-                        None,
-                        signals,
-                    );
-                } else {
-                    finish_server_setup_failure(result, browser, &retained, &mut collector);
-                }
-                return;
-            }
-        };
-    let base_url = playwright_base_url(&server.base_url);
-    result.push(StepResult::ok(&server_step).with_duration(server_start.elapsed()));
-    let verification = LifecycleVerification {
-        sh,
-        browser,
-        test_support: &test_support,
-    };
-
-    let jaunder = &artifacts.jaunder;
-    let seed_start = std::time::Instant::now();
-    if run_consumer(
-        seed_command(
+    // One fresh, seeded server per Playwright worker; every browser lifecycle
+    // starts its own set.
+    let mut instances = Vec::with_capacity(workers);
+    for _ in 0..workers {
+        if !start_instance(
             sh,
-            &db,
-            &test_support,
-            jaunder,
-            &capture,
-            &collector.grpc_exporter_url(),
-        ),
-        result,
-        signals,
-    )
-    .is_err()
-    {
-        result.push(
-            StepResult::fail(&seed_step)
-                .detail("test-support seed-e2e failed".to_owned())
-                .with_duration(seed_start.elapsed()),
-        );
-        finish_lifecycle(
             result,
-            &mut server,
-            &mut collector,
-            &retained,
-            &verification,
-            None,
+            artifacts,
+            browser,
+            &collector,
             signals,
-        );
-        return;
+            &mut instances,
+        ) {
+            finish_lifecycle(
+                result,
+                &mut instances,
+                &mut collector,
+                &retained,
+                &verification,
+                None,
+                signals,
+            );
+            return;
+        }
     }
-    result.push(StepResult::ok(&seed_step).with_duration(seed_start.elapsed()));
+    let entries: Vec<_> = instances
+        .iter()
+        .map(|instance| InstanceEntry {
+            base_url: playwright_base_url(&instance.server.base_url),
+            db: &instance.db,
+            storage_path: instance.storage.path(),
+            capture_dir: &instance.capture,
+        })
+        .collect();
+    let instance_map = instance_map(&entries);
 
-    // Playwright uses the same DB, storage root, capture directory, and
-    // selected immutable seed executable on PATH, matching the VM contract.
+    // Each worker binds its own instance's DB, storage root and capture
+    // directory from the map; the selected immutable seed executable is on PATH.
     sh.change_dir(root.join("end2end"));
     let playwright_start = std::time::Instant::now();
     let mut playwright_result = Ok(());
@@ -848,23 +910,20 @@ fn run_lifecycle(
         if run_consumer(
             cmd!(sh, "playwright")
                 .args(&invocation.args)
-                .env("JAUNDER_E2E_BASE_URL", &base_url)
+                .env("JAUNDER_E2E_INSTANCES", &instance_map)
                 .env(
                     "JAUNDER_E2E_PRODUCER_INPUT",
                     root.join(
                         ".xtask/diagnostics/e2e-host-local/producer-checkout-host-local.json",
                     ),
                 )
-                .env("JAUNDER_DB", &db)
-                .env("JAUNDER_STORAGE_PATH", storage.path())
-                .env("JAUNDER_TEST_EXECUTABLE", jaunder)
-                .env("JAUNDER_CAPTURE_DIR", &capture)
+                .env("JAUNDER_TEST_EXECUTABLE", &artifacts.jaunder)
                 .env(
                     "JAUNDER_E2E_OTLP_HTTP_ENDPOINT",
                     collector.browser_http_trace_url(),
                 )
                 .env("JAUNDER_E2E_TRACE_ID", &trace_id)
-                .env("JAUNDER_E2E_WORKERS", workers)
+                .env("JAUNDER_E2E_WORKERS", workers.to_string())
                 .env("PLAYWRIGHT_HTML_OPEN", "never")
                 .env("PATH", path),
             result,
@@ -882,7 +941,7 @@ fn run_lifecycle(
 
     finish_lifecycle(
         result,
-        &mut server,
+        &mut instances,
         &mut collector,
         &retained,
         &verification,
@@ -966,7 +1025,7 @@ pub fn run(
             result,
             &artifacts,
             lifecycle,
-            &workers,
+            workers,
             &path,
             &mut signals,
         );
@@ -1168,6 +1227,7 @@ while :; do :; done"#;
             "sqlite:/tmp/local.db",
             "/repo/target/debug/test-support",
             Path::new("/repo/target/debug/jaunder"),
+            Path::new("/tmp/local"),
             "/tmp/local/capture",
             "http://127.0.0.1:54317",
         )
@@ -1195,6 +1255,7 @@ while :; do :; done"#;
             "sqlite:/tmp/local.db",
             "/repo/target/debug/test-support",
             Path::new("/repo/target/debug/jaunder"),
+            Path::new("/tmp/local"),
             "/tmp/local/capture",
             "http://127.0.0.1:54317",
         )
@@ -1207,6 +1268,10 @@ while :; do :; done"#;
         assert_eq!(
             environment.get(OsStr::new("JAUNDER_CAPTURE_DIR")),
             Some(&Some(OsStr::new("/tmp/local/capture")))
+        );
+        assert_eq!(
+            environment.get(OsStr::new("JAUNDER_STORAGE_PATH")),
+            Some(&Some(OsStr::new("/tmp/local")))
         );
     }
 
@@ -1356,21 +1421,123 @@ while :; do :; done"#;
         );
     }
 
+    fn step_outcomes(result: &CommandResult) -> Vec<(&str, bool)> {
+        result
+            .steps
+            .iter()
+            .map(|step| (step.name.as_str(), step.ok))
+            .collect()
+    }
+
     #[test]
-    fn playwright_and_panic_failures_are_aggregated() {
+    fn each_instance_gets_its_own_panic_gate() {
+        let temp = tempfile::tempdir().expect("verifier workspace");
+        // `sh` reads the fake verifier as a script named by the subcommand, so
+        // nothing executes a freshly written file (ETXTBSY under parallel
+        // tests). It records each invocation's arguments in the capture
+        // directory it was given, and reports a panic only for instance 1.
+        std::fs::write(
+            temp.path().join("verify-no-panics"),
+            "printf '%s\\n' \"$0\" \"$@\" > \"$2/argv\"\ncase \"$2\" in */instance-1) exit 1;; esac\n",
+        )
+        .expect("write fake verifier");
+        let capture = temp.path().join("capture");
+        for index in 0..2 {
+            std::fs::create_dir_all(instance_capture(&capture, index)).expect("instance capture");
+        }
+        let sh = Shell::new().expect("test shell");
+        sh.change_dir(temp.path());
+        let verification = LifecycleVerification {
+            sh: &sh,
+            browser: "chromium",
+            test_support: "sh",
+        };
         let mut result = CommandResult::new("e2e-local");
-        record_post_playwright_results(
-            &mut result,
-            "chromium",
-            Err("playwright failed".to_owned()),
-            Duration::ZERO,
-            Err("panic verifier failed".to_owned()),
-            Duration::ZERO,
+
+        record_panic_gates(&mut result, &verification, Some(&capture), 2);
+
+        assert_eq!(
+            step_outcomes(&result),
+            [
+                ("e2e-local-chromium-instance-0-panic-gate", true),
+                ("e2e-local-chromium-instance-1-panic-gate", false),
+            ]
         );
         assert!(!result.ok);
-        let encoded = serde_json::to_string(&result).expect("result serialization");
-        assert!(encoded.contains("playwright failed"));
-        assert!(encoded.contains("panic verifier failed"));
+        let instance = capture.join("instance-0");
+        assert_eq!(
+            std::fs::read_to_string(instance.join("argv")).expect("instance 0 verifier argv"),
+            format!(
+                "verify-no-panics\n--capture-dir\n{}\n--server-log\n{}\n",
+                instance.display(),
+                instance.join("server-stderr.log").display()
+            )
+        );
+    }
+
+    #[test]
+    fn unstoppable_capture_writers_fail_every_instance_panic_gate() {
+        let sh = Shell::new().expect("test shell");
+        let verification = LifecycleVerification {
+            sh: &sh,
+            browser: "firefox",
+            test_support: "/nonexistent/test-support",
+        };
+        let mut result = CommandResult::new("e2e-local");
+
+        record_panic_gates(&mut result, &verification, None, 2);
+
+        assert_eq!(
+            step_outcomes(&result),
+            [
+                ("e2e-local-firefox-instance-0-panic-gate", false),
+                ("e2e-local-firefox-instance-1-panic-gate", false),
+            ]
+        );
+    }
+
+    #[test]
+    fn instance_map_lists_each_worker_instance_in_index_order() {
+        let entries = [
+            InstanceEntry {
+                base_url: "http://localhost:4100".to_owned(),
+                db: "sqlite:/tmp/a/jaunder.db",
+                storage_path: Path::new("/tmp/a"),
+                capture_dir: Path::new("/tmp/capture/instance-0"),
+            },
+            InstanceEntry {
+                base_url: "http://localhost:4200".to_owned(),
+                db: "sqlite:/tmp/b/jaunder.db",
+                storage_path: Path::new("/tmp/b"),
+                capture_dir: Path::new("/tmp/capture/instance-1"),
+            },
+        ];
+        assert_eq!(
+            instance_map(&entries),
+            concat!(
+                r#"[{"baseUrl":"http://localhost:4100","db":"sqlite:/tmp/a/jaunder.db","#,
+                r#""storagePath":"/tmp/a","captureDir":"/tmp/capture/instance-0"},"#,
+                r#"{"baseUrl":"http://localhost:4200","db":"sqlite:/tmp/b/jaunder.db","#,
+                r#""storagePath":"/tmp/b","captureDir":"/tmp/capture/instance-1"}]"#,
+            )
+        );
+    }
+
+    #[test]
+    fn worker_count_selects_how_many_instances_start() {
+        let path = || Some(OsString::from("/bin"));
+        let workers = |value: Result<String, env::VarError>| {
+            resolve_e2e_env(value, path(), &mut Vec::new()).map(|(workers, _)| workers)
+        };
+        assert_eq!(workers(Err(env::VarError::NotPresent)).unwrap(), 1);
+        assert_eq!(workers(Ok("2".to_owned())).unwrap(), 2);
+        for invalid in ["0", "two", "-1", ""] {
+            let error = workers(Ok(invalid.to_owned())).unwrap_err();
+            assert!(
+                error.to_string().contains("positive integer"),
+                "{invalid:?}: {error:#}"
+            );
+        }
     }
 
     #[test]
