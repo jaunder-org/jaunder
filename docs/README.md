@@ -291,6 +291,7 @@ convention). See the Status column below for each ADR's current status.
 | [0260](adr/0260-merge-queue-verdict-covers-landed-commit.md)             | A merge-queue verdict covers the commit it lands                                                             | accepted   |
 | [0261](adr/0261-tool-language-by-maintainability.md)                     | Infrastructure language is chosen by maintainability                                                         | accepted   |
 | [0262](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md)            | Give the Theme specs their own serial E2E lane and weight ordinary shards                                    | accepted   |
+| [0263](adr/0263-dev-traces-producer-timed-phases.md)                     | Dev traces the phases a sandboxed producer timed itself                                                      | accepted   |
 
 <!-- adr-table:end -->
 

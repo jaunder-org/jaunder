@@ -1,6 +1,6 @@
-# ADR-DRAFT: Dev traces the phases a sandboxed producer timed itself
+# ADR-0263: Dev traces the phases a sandboxed producer timed itself
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-23
 - Issue: [#2031](https://github.com/jaunder-org/jaunder/issues/2031)
 
@@ -16,9 +16,9 @@ reconstructed by hand from log timestamps and `status.json`. An E2E lane's
 producer step hid its VM phases the same way. #2030 traced those phases from the
 lane's lifted `e2e-phase-<lane>.json`.
 
-[ADR-0254](../0254-dev-trace-step-accounting.md) decided that a span times one
-kind of work. It added no new trace framework, only attributes on the existing
-span records. Producers already time their own phases in their sidecars.
+[ADR-0254](0254-dev-trace-step-accounting.md) decided that a span times one kind
+of work. It added no new trace framework, only attributes on the existing span
+records. Producers already time their own phases in their sidecars.
 
 ## Decision
 
