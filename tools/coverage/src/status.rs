@@ -88,6 +88,10 @@ pub struct StageResult {
     pub outcome: ProcessOutcome,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u128>,
+    /// Wall-clock start (Unix epoch milliseconds), recorded with
+    /// `duration_ms` so `dev` can place the stage in its trace.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_unix_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,6 +346,13 @@ impl CoverageStatus {
             matches!(result.outcome, ProcessOutcome::NotRun) && result.duration_ms.is_some()
         }) {
             bail!("unstarted stages must not have durations");
+        }
+        if self
+            .stages
+            .iter()
+            .any(|result| result.duration_ms.is_some() != result.started_unix_ms.is_some())
+        {
+            bail!("a stage records its start and duration together");
         }
         let stages_ok = self.stages.iter().all(|result| result.outcome.is_success());
         let population_ok = self.population.expected > 0
@@ -724,6 +735,7 @@ mod tests {
                         ProcessOutcome::success()
                     },
                     duration_ms: Some(42),
+                    started_unix_ms: Some(1_700_000_000_000),
                 })
                 .collect(),
             population: Population {
@@ -758,6 +770,7 @@ mod tests {
                         ProcessOutcome::success()
                     },
                     duration_ms: Some(42),
+                    started_unix_ms: Some(1_700_000_000_000),
                 })
                 .collect(),
             population: Population {
@@ -788,6 +801,7 @@ mod tests {
             stage: RequiredStage::WorkspaceResolution,
             outcome: ProcessOutcome::NotRun,
             duration_ms: None,
+            started_unix_ms: None,
         };
         let json = serde_json::to_value(stage).expect("stage serializes");
         assert!(json.get("duration_ms").is_none());
@@ -798,12 +812,33 @@ mod tests {
         let mut status = CoverageStatus::from_json(&complete_tests_ok_status().to_string())
             .expect("status fixture parses");
         status.stages[0].duration_ms = Some(42);
+        status.stages[0].started_unix_ms = Some(1_700_000_000_000);
         assert!(status.validate().is_ok());
-        assert!(status.to_json().contains("\"duration_ms\": 42"));
+        let json = status.to_json();
+        assert!(json.contains("\"duration_ms\": 42"));
+        assert!(json.contains("\"started_unix_ms\": 1700000000000"));
 
         status.stages[1].outcome = ProcessOutcome::NotRun;
         status.stages[1].duration_ms = Some(0);
+        status.stages[1].started_unix_ms = Some(1_700_000_000_000);
         assert!(status.validate().is_err());
+    }
+
+    /// A stage span needs both where it started and how long it took, so the
+    /// producer records them together or not at all.
+    #[test]
+    fn rejects_a_start_or_duration_recorded_alone() {
+        let complete = || {
+            CoverageStatus::from_json(&complete_tests_ok_status().to_string())
+                .expect("status fixture parses")
+        };
+        let mut duration_only = complete();
+        duration_only.stages[0].duration_ms = Some(42);
+        assert!(duration_only.validate().is_err());
+
+        let mut start_only = complete();
+        start_only.stages[0].started_unix_ms = Some(1_700_000_000_000);
+        assert!(start_only.validate().is_err());
     }
 
     #[test]

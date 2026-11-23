@@ -1297,6 +1297,20 @@ in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
 or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
 
+A producer that times its own phases inside the sandbox gets them traced
+afterwards
+([producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)).
+When the `coverage` step's output is `built`, `dev` reads its `status.json`.
+Every stage that started records `started_unix_ms` (wall clock) beside
+`duration_ms`, and `dev` writes it as a finished child of that step's `build`
+span, at those times, `ok` if the stage succeeded and `failed` otherwise. So
+`build`'s untraced time is the Nix overhead (fetch, unpack, install). A `reused`
+output, a stage that never started, or a missing or malformed `status.json`
+yields no stage spans, and reading it never changes the step. The census build
+also writes Cargo's `--timings` report, copied to the output's
+`diagnostics/cargo-timing.html` when present; CI uploads it in
+`validate-coverage-diagnostics`.
+
 A Rust host tool comes from its flake package
 ([`dev` runs Nix-built host tools](docs/adr/0258-dev-runs-nix-built-host-tools.md)).
 `dev` builds the package as its own Nix step, `<package>-build`
@@ -1335,7 +1349,7 @@ devShell entry). Only "Set up job" and checkout precede the mark, and the
 trace-summary step, uploads and post-job cleanup follow the root. Spans go only
 to these files; `dev` exports nothing over OTLP. Inside a Nix check the trace
 lands in the build directory and is discarded; the host-side Nix step records
-the cache result.
+the cache result and, for coverage, the stages its producer timed.
 
 Tracing never changes a step's exit status, stdout or stderr. If the trace
 directory cannot be written, `dev` warns once on stderr and otherwise behaves

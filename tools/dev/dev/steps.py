@@ -259,8 +259,11 @@ def _run(
     refusal: Refusal | None = None,
     realizes: Callable[[], str] | None = None,
     finished: Callable[[Span, int], None] | None = None,
+    opened: Callable[[Span], None] | None = None,
 ) -> bytes:
     with _step(name, argv) as span:
+        if opened is not None:
+            opened(span)
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
         code, signalled, output = _supervise(argv, capture, environment, stdin)
@@ -345,14 +348,18 @@ def text(
     argv: Sequence[str],
     environment: Environment | None = None,
     refusal: Callable[[str], str | None] | None = None,
+    opened: Callable[[Span], None] | None = None,
 ) -> str:
     """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed.
 
     `refusal`, if given, judges that text: a reason it returns is printed and
-    fails the step with status 1.
+    fails the step with status 1. `opened`, if given, receives the step's span
+    as it opens.
     """
     judge = None if refusal is None else lambda output: refusal(_shell_text(output))
-    return _shell_text(_run(name, argv, True, environment, refusal=judge))
+    return _shell_text(
+        _run(name, argv, True, environment, refusal=judge, opened=opened)
+    )
 
 
 class _QueryFailed(Exception):
@@ -455,6 +462,7 @@ def nix_build(
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
     refusal: Callable[[str], str | None] | None = None,
+    phases: Callable[[str], Sequence[trace.Phase]] | None = None,
 ) -> str:
     """Builds one installable as the step `name`; returns its output path.
 
@@ -470,11 +478,15 @@ def nix_build(
     the bytes the build fetched from substituters. Several printed paths, an
     undecidable registration or a failed query record less rather than guess,
     and never change the step.
+
+    `phases`, if given, reads the work an output's builder timed itself; for an
+    output this build made (`built`), it is traced under the `build` step.
     """
     if keep:
         Path(GCROOTS).mkdir(parents=True, exist_ok=True)
     link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
     argv = ["nix", "build", "-L", *flags, "--print-out-paths", *link, installable]
+    build: list[Span] = []
     with trace.tracer().start_as_current_span(name) as span:
         try:
             if installable.startswith("/"):
@@ -484,12 +496,15 @@ def nix_build(
                 derivation = text("eval", evaluate)
             # After the evaluation, which registers what it writes.
             start = int(time.time())
-            paths = text("build", argv, refusal=refusal)
+            paths = text("build", argv, refusal=refusal, opened=build.append)
             _record_outcome(span, 0, False)
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)
                 with contextlib.suppress(_QueryFailed):
-                    if _record_cache(span, paths, start) is not Cache.REUSED:
+                    cache = _record_cache(span, paths, start)
+                    if cache is Cache.BUILT and phases is not None:
+                        trace.record_phases(build[0].get_span_context(), phases(paths))
+                    if cache is not Cache.REUSED:
                         fetched = _fetched_bytes(derivation, start)
                         span.set_attribute(FETCHED_BYTES, fetched)
         except StepFailed as failure:
@@ -518,6 +533,7 @@ def nix_check(
     check: str,
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
+    phases: Callable[[str], Sequence[trace.Phase]] | None = None,
 ) -> None:
     """Builds one flake check as `nix_build` does, as the step `check`."""
-    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep)
+    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep, phases=phases)

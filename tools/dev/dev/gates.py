@@ -7,11 +7,13 @@ verdict.
 """
 
 import fcntl
+import json
 import os
+from collections.abc import Callable, Sequence
 from enum import StrEnum
 from pathlib import Path
 
-from dev import e2e, index, report, static, steps
+from dev import e2e, index, report, static, steps, trace
 from dev.checkout import clean_tree
 from dev.commands import (
     COVERAGE_CHECK,
@@ -266,14 +268,55 @@ def wasm_tests() -> None:
     steps.nix_check("wasm-tests")
 
 
-def _producer_and_gate(check: str) -> None:
+def _producer_and_gate(
+    check: str, phases: Callable[[str], Sequence[trace.Phase]] | None = None
+) -> None:
     """Realizes a hermetic producer as a GC root, then its hard status gate."""
-    steps.nix_check(check, steps.NIX_LOCK_FLAGS)
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS, phases=phases)
     steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
 
 
+def _milliseconds(value: object) -> bool:
+    # bool is an int to Python, never to the producer.
+    return type(value) is int and value >= 0
+
+
+def coverage_stages(output: str) -> list[trace.Phase]:
+    """The stages the coverage producer timed, from its output's `status.json`.
+
+    Only what places a stage is read: a stage that never started has neither
+    start nor duration and is skipped. A file that cannot be read whole yields
+    nothing rather than a partial picture.
+    """
+    try:
+        stages = json.loads((Path(output) / "status.json").read_text("utf-8"))["stages"]
+        phases = []
+        for stage in stages:
+            start, duration = stage.get("started_unix_ms"), stage.get("duration_ms")
+            if start is None and duration is None:
+                continue
+            name = stage["stage"]
+            if not (
+                isinstance(name, str)
+                and _milliseconds(start)
+                and _milliseconds(duration)
+            ):
+                return []
+            phases.append(
+                trace.Phase(
+                    name,
+                    start * 1_000_000,
+                    (start + duration) * 1_000_000,
+                    stage["outcome"] == "success",
+                )
+            )
+    except OSError, ValueError, LookupError, TypeError, AttributeError:
+        return []
+    return phases
+
+
 def coverage_workflow() -> None:
-    _producer_and_gate("coverage")
+    _producer_and_gate("coverage", coverage_stages)
     steps.run(
         "coverage-policy",
         [*steps.tool(COVERAGE_CHECK), "policy", "--out", f"{steps.GCROOTS}/coverage"],

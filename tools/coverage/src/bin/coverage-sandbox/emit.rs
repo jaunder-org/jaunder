@@ -2,7 +2,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::time::Instant;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
 use coverage::status::{
@@ -55,6 +55,9 @@ fn required_stage_commands() -> Vec<CommandSpec> {
                 "--workspace",
                 "--message-format",
                 "json",
+                // The census is the workspace's instrumented build; its HTML
+                // timings attribute compile time per unit (stable, unlike JSON).
+                "--timings",
             ],
         },
         CommandSpec {
@@ -98,6 +101,7 @@ fn new_status() -> CoverageStatus {
                 stage,
                 outcome: ProcessOutcome::NotRun,
                 duration_ms: None,
+                started_unix_ms: None,
             })
             .collect(),
         population: Population {
@@ -120,13 +124,39 @@ fn set_stage(status: &mut CoverageStatus, stage: RequiredStage, outcome: Process
         .outcome = outcome;
 }
 
-fn record_duration(status: &mut CoverageStatus, stage: RequiredStage, started: Instant) {
-    status
+/// When a stage started, by both clocks: the monotonic one times the stage, and
+/// the wall clock lets `dev` place it in the run's trace.
+#[derive(Clone, Copy)]
+struct Started {
+    instant: Instant,
+    wall: SystemTime,
+}
+
+impl Started {
+    fn now() -> Self {
+        Self {
+            instant: Instant::now(),
+            wall: SystemTime::now(),
+        }
+    }
+}
+
+/// Records a stage's start and duration together, as `validate` requires; a
+/// wall clock that cannot be expressed in Unix milliseconds records neither.
+fn record_duration(status: &mut CoverageStatus, stage: RequiredStage, started: Started) {
+    let result = status
         .stages
         .iter_mut()
         .find(|result| result.stage == stage)
-        .expect("required stage")
-        .duration_ms = Some(started.elapsed().as_millis());
+        .expect("required stage");
+    result.started_unix_ms = started
+        .wall
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|since| u64::try_from(since.as_millis()).ok());
+    result.duration_ms = result
+        .started_unix_ms
+        .map(|_| started.instant.elapsed().as_millis());
 }
 
 #[cfg(test)]
@@ -272,7 +302,7 @@ fn emit_reports(
     coverage_root: &str,
     analysis_root: &str,
 ) -> Result<()> {
-    let text_started = Instant::now();
+    let text_started = Started::now();
     let Some(text) = report_command(
         RequiredStage::TextReport,
         Command::new("sh").args(coverage_report_arguments("--text")),
@@ -299,7 +329,7 @@ fn emit_reports(
     }
     record_duration(status, RequiredStage::TextReport, text_started);
 
-    let lcov_started = Instant::now();
+    let lcov_started = Started::now();
     let lcov = out.join("coverage-report.lcov");
     let Some(lcov_path) = lcov.to_str() else {
         record_evidence_error(
@@ -342,7 +372,7 @@ fn emit_reports(
     }
     record_duration(status, RequiredStage::LcovReport, lcov_started);
 
-    let crap_started = Instant::now();
+    let crap_started = Started::now();
     let raw_crap = out.join("crap-report.raw.json");
     let Some(raw_crap_path) = raw_crap.to_str() else {
         record_evidence_error(
@@ -406,11 +436,7 @@ fn emit_reports(
 fn census_executable(census: &str) -> Result<PathBuf> {
     let value: Value = serde_json::from_str(census).context("parsing nextest census")?;
     let meta = &value["rust-build-meta"];
-    let target = meta["target-directory"]
-        .as_str()
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute())
-        .context("census has no absolute target directory")?;
+    let target = census_target_directory(meta)?;
     let mut executable = None;
     for binaries in meta["non-test-binaries"]
         .as_object()
@@ -431,6 +457,30 @@ fn census_executable(census: &str) -> Result<PathBuf> {
     executable.context("census did not list the instrumented Jaunder executable")
 }
 
+/// The census build's target directory, as nextest reports it: `llvm-cov
+/// show-env` may redirect Cargo's, so the census is the authority.
+fn census_target_directory(meta: &Value) -> Result<PathBuf> {
+    meta["target-directory"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
+        .context("census has no absolute target directory")
+}
+
+/// Copies Cargo's HTML timings for the census build into `diag`, best-effort:
+/// a missing report is a diagnostic gap, never a stage failure.
+fn copy_census_timings(census: &str, diag: &Path) {
+    let target = serde_json::from_str::<Value>(census)
+        .ok()
+        .and_then(|value| census_target_directory(&value["rust-build-meta"]).ok());
+    if let Some(target) = target {
+        let _ = fs::copy(
+            target.join("cargo-timings/cargo-timing.html"),
+            diag.join("cargo-timing.html"),
+        );
+    }
+}
+
 /// Run the instrumented suite and emit reports + status + diagnostics into `out`.
 ///
 /// Required stages always leave a validated, red `status.json` when they can be
@@ -444,7 +494,7 @@ pub fn run(out: &str) -> Result<()> {
     let commands = required_stage_commands();
 
     let metadata = &commands[0];
-    let metadata_started = Instant::now();
+    let metadata_started = Started::now();
     let mut command = Command::new(metadata.program);
     command.args(&metadata.arguments);
     let metadata_result = command_failure(
@@ -460,7 +510,7 @@ pub fn run(out: &str) -> Result<()> {
         return Ok(());
     };
 
-    let cleanup_started = Instant::now();
+    let cleanup_started = Started::now();
     let cleanup = run_capture(Command::new("cargo").args(["llvm-cov", "clean", "--profraw-only"]));
     let cleanup_result = command_failure(
         &mut status,
@@ -489,7 +539,7 @@ pub fn run(out: &str) -> Result<()> {
     record_duration(&mut status, RequiredStage::ProfileCleanup, cleanup_started);
 
     let census = &commands[1];
-    let census_started = Instant::now();
+    let census_started = Started::now();
     let mut command = Command::new(census.program);
     command.args(&census.arguments);
     let census_result = command_failure(
@@ -504,6 +554,7 @@ pub fn run(out: &str) -> Result<()> {
         write_status(out, &status)?;
         return Ok(());
     };
+    copy_census_timings(&census_output.stdout, &diag);
     let census = status::parse_nextest_census(&census_output.stdout)
         .context("invalid nextest census")
         .and_then(|expected| Ok((expected, census_executable(&census_output.stdout)?)));
@@ -524,7 +575,7 @@ pub fn run(out: &str) -> Result<()> {
     record_duration(&mut status, RequiredStage::TestCensus, census_started);
 
     let run = &commands[2];
-    let test_run_started = Instant::now();
+    let test_run_started = Started::now();
     // The PostgreSQL URLs are inherited from the enclosing `pg-run`.
     let test_run = run_capture(
         Command::new(run.program)
@@ -560,7 +611,7 @@ pub fn run(out: &str) -> Result<()> {
     let test_run = instrumented_outcome.is_success();
     let _ = fs::copy(JUNIT_PATH, diag.join("nextest.junit.xml"));
 
-    let reconciliation_started = Instant::now();
+    let reconciliation_started = Started::now();
     let actual = match load_junit_census() {
         Ok(actual) => actual,
         Err(_) => {
@@ -765,6 +816,51 @@ mod tests {
     }
 
     #[test]
+    fn copies_the_census_build_timings_into_diagnostics_when_present() {
+        let temp = tempfile::tempdir().unwrap();
+        let target = temp.path().join("target");
+        let diag = temp.path().join("diagnostics");
+        fs::create_dir_all(target.join("cargo-timings")).unwrap();
+        fs::create_dir_all(&diag).unwrap();
+        let census = census_with(target.to_str().unwrap(), serde_json::json!({}));
+
+        copy_census_timings(&census, &diag);
+        assert!(!diag.join("cargo-timing.html").exists());
+
+        fs::write(target.join("cargo-timings/cargo-timing.html"), "<html/>").unwrap();
+        copy_census_timings(&census, &diag);
+        assert_eq!(
+            fs::read_to_string(diag.join("cargo-timing.html")).unwrap(),
+            "<html/>"
+        );
+
+        copy_census_timings("not json", &diag);
+    }
+
+    #[test]
+    fn recorded_stage_carries_its_wall_clock_start_with_its_duration() {
+        let before = SystemTime::now();
+        let started = Started::now();
+        let after = SystemTime::now();
+        let mut status = new_status();
+        set_stage(
+            &mut status,
+            RequiredStage::WorkspaceResolution,
+            ProcessOutcome::success(),
+        );
+        record_duration(&mut status, RequiredStage::WorkspaceResolution, started);
+
+        let stage = &status.stages[0];
+        let unix_ms = |time: SystemTime| {
+            u64::try_from(time.duration_since(UNIX_EPOCH).unwrap().as_millis()).unwrap()
+        };
+        let start = stage.started_unix_ms.expect("start recorded");
+        assert!((unix_ms(before)..=unix_ms(after)).contains(&start));
+        assert!(stage.duration_ms.is_some());
+        assert!(status.validate().is_ok());
+    }
+
+    #[test]
     fn report_commands_use_normal_llvm_cov_population_without_exclusions() {
         let text = coverage_report_arguments("--text");
         let lcov = coverage_report_arguments("--lcov");
@@ -833,6 +929,7 @@ mod tests {
                 "--workspace",
                 "--message-format",
                 "json",
+                "--timings",
             ]
         );
 
