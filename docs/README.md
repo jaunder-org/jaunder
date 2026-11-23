@@ -289,6 +289,7 @@ convention). See the Status column below for each ADR's current status.
 | [0258](adr/0258-dev-runs-nix-built-host-tools.md)                        | `dev` runs Nix-built host tools                                                                              | accepted   |
 | [0259](adr/0259-devtool-retirement-owners.md)                            | Devtool retirement: experiment endpoints retired, owners named, tools kept out of the product source         | accepted   |
 | [0260](adr/0260-merge-queue-verdict-covers-landed-commit.md)             | A merge-queue verdict covers the commit it lands                                                             | accepted   |
+| [0261](adr/0261-tool-language-by-maintainability.md)                     | Infrastructure language is chosen by maintainability                                                         | accepted   |
 
 <!-- adr-table:end -->
 

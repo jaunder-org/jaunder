@@ -1,6 +1,6 @@
-# ADR-DRAFT: Infrastructure language is chosen by maintainability
+# ADR-0261: Infrastructure language is chosen by maintainability
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-23
 - Issue: [#1977](https://github.com/jaunder-org/jaunder/issues/1977)
 
@@ -9,15 +9,15 @@
 `CONTRIBUTING.md` said to use Rust "by default for infrastructure", allowing
 Python "when it produces more focused, easier-to-maintain code". Most host tools
 became Rust when the scripts were moved uniformly
-([ADR-0028](../0028-devtool-vs-xtask-boundary.md)), without asking what each one
+([ADR-0028](0028-devtool-vs-xtask-boundary.md)), without asking what each one
 did.
 
-Two things changed that. [ADR-0258](../0258-dev-runs-nix-built-host-tools.md)
+Two things changed that. [ADR-0258](0258-dev-runs-nix-built-host-tools.md)
 serves Rust host tools as prebuilt Nix packages, so compile and startup time no
 longer separate the languages. And the #1976 pilot
-([ADR-0249](../0249-pg-run-python-unix-socket.md)) showed what a default had
-cost: about 390 non-test Rust lines of `pg-run` became 232 lines of Python,
-because much of the Rust existed only to be Rust.
+([ADR-0249](0249-pg-run-python-unix-socket.md)) showed what a default had cost:
+about 390 non-test Rust lines of `pg-run` became 232 lines of Python, because
+much of the Rust existed only to be Rust.
 
 #1977 reviewed the remaining candidates: the `e2e-local` lifecycle, the
 `pr-observer`, `qualification`, and the host side of `performance`
@@ -45,7 +45,7 @@ instead of linking.
 **Cross-language formats.** A format written by Rust and read in another
 language does not make the reader Rust. The writer publishes a JSON Schema
 generated from its own types, committed with a drift check
-([ADR-0109](../0109-cross-language-literal-agreement.md)), and every reader
+([ADR-0109](0109-cross-language-literal-agreement.md)), and every reader
 validates against it.
 
 **Shell** is allowed only for host scripts in `scripts/`. Shell inside Nix
@@ -79,13 +79,13 @@ fixed indentation, which is data shaping beyond `jq`. It moves to Python
   dates, reimplements GitHub Actions' job graph and matrix expansion, and
   string-matches a `jq` command in `ci.yml`. Rust types add little there, and
   much of the hard-to-follow code is scope rather than language. Behavior that
-  is kept still honors [ADR-0087](../0087-xtask-github-pr-observation.md),
-  [ADR-0135](../0135-pr-watch-actionable-handoff.md),
-  [ADR-0195](../0195-dynamic-pr-check-classification.md),
-  [ADR-0198](../0198-active-workflow-incomplete-pr-evidence.md),
-  [ADR-0220](../0220-explicit-one-shot-pr-reenqueue.md) and
-  [ADR-0240](../0240-just-frontdoors-host-pr-observer.md), including the
-  exit-code and JSON contract that `pr-land.sh` relies on.
+  is kept still honors [ADR-0087](0087-xtask-github-pr-observation.md),
+  [ADR-0135](0135-pr-watch-actionable-handoff.md),
+  [ADR-0195](0195-dynamic-pr-check-classification.md),
+  [ADR-0198](0198-active-workflow-incomplete-pr-evidence.md),
+  [ADR-0220](0220-explicit-one-shot-pr-reenqueue.md) and
+  [ADR-0240](0240-just-frontdoors-host-pr-observer.md), including the exit-code
+  and JSON contract that `pr-land.sh` relies on.
 - **`perf-data` moves to Python, against generated schemas.** The host CLI links
   no product code. The `performance` writer side stays Rust: the dataset plan,
   the manifest and fragment types, `test-support`'s seeder and `perf-producer`,
@@ -100,20 +100,20 @@ fixed indentation, which is data shaping beyond `jq`. It moves to Python
   current commit, keeps one browser across the upgrade, and compares the result
   against golden files that each commit regenerates. The synthetic
   `a`/`b-app`/`b-theme` styling fixtures
-  ([ADR-0239](../0239-qualification-workflow-ownership.md)) are dropped. Their
+  ([ADR-0239](0239-qualification-workflow-ownership.md)) are dropped. Their
   rules are already tested in ordinary CI on both backends.
 
 ## Consequences
 
 - `CONTRIBUTING.md`'s language rule states this criterion and the shell rule.
 - Each move is its own follow-up issue, which amends the ADRs it touches:
-  - `e2e-local`: [ADR-0246](../0246-retire-xtask-devtool-endpoints.md),
-    [ADR-0247](../0247-host-tool-json-report-contract.md), ADR-0258.
+  - `e2e-local`: [ADR-0246](0246-retire-xtask-devtool-endpoints.md),
+    [ADR-0247](0247-host-tool-json-report-contract.md), ADR-0258.
   - `pr-observer`: ADR-0240, ADR-0258.
-  - `perf-data`: [ADR-0241](../0241-performance-workflow-ownership.md),
-    [ADR-0251](../0251-dev-runner-replaces-just.md), ADR-0258, and the
+  - `perf-data`: [ADR-0241](0241-performance-workflow-ownership.md),
+    [ADR-0251](0251-dev-runner-replaces-just.md), ADR-0258, and the
     `performance` description in `docs/ARCHITECTURE.md`.
-  - `qualification`: ADR-0239, [ADR-0225](../0225-nix-cached-host-tooling.md),
+  - `qualification`: ADR-0239, [ADR-0225](0225-nix-cached-host-tooling.md),
     ADR-0247, ADR-0251, ADR-0258.
 - Until each follow-up lands, the current tool stays in place.
 - `e2e-local` in Python loses the Rust aarch64-darwin start-time token from
