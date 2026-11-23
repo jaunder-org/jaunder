@@ -4878,8 +4878,8 @@ requests the narrow Clippy aggregate once; its six independently buildable
 terminal leaves run lint and the aggregate does not rerun it. Each leaf inherits
 a crane dependency build that runs the same `dev static` unit over a dummy
 source, keyed on manifests, lockfiles, toolchain, vendored inputs and `dev`;
-only workspace and path crates are re-linted from real source. `static-elisp`
-runs the shared `elisp-fmt` Verify and `byte-compile` checks over the complete
+only workspace crates are re-linted from real source. `static-elisp` runs the
+shared `elisp-fmt` Verify and `byte-compile` checks over the complete
 non-Markdown Elisp source tree in a writable copy. The sandbox `dev` package,
 `emacsForCi` and `TZDIR` replace its former compiled build input. It needs no
 offline Cargo home, Node/Playwright, or Git. Like every static verdict, it may
