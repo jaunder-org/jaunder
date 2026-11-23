@@ -4,16 +4,17 @@
 
 use std::path::Path;
 
-use crate::traces::run::{DIAG_MEMBER, TRACE_MEMBER};
+use crate::traces::run::{TRACE_MEMBER, instance_diag_member};
 
 /// Write a `capture-*.tar.gz` shaped like a VM capture: the given trace beside
-/// the server's `diag.log`, which every real capture carries (#2029). `None`
-/// omits the log, for the fail-closed case.
+/// one server instance's `diag.log`, which every real capture carries (#2029,
+/// #2076). `None` omits the log, for the fail-closed case.
 pub fn write_capture(path: &Path, trace: &str, diag_log: Option<&str>) {
     let file = std::fs::File::create(path).unwrap();
     let encoder = flate2::write::GzEncoder::new(file, flate2::Compression::default());
     let mut archive = tar::Builder::new(encoder);
-    let diag = diag_log.map(|log| (DIAG_MEMBER, log));
+    let diag_member = instance_diag_member(0);
+    let diag = diag_log.map(|log| (diag_member.as_str(), log));
     for (member, contents) in std::iter::once((TRACE_MEMBER, trace)).chain(diag) {
         let mut header = tar::Header::new_gnu();
         header.set_size(contents.len().try_into().unwrap());

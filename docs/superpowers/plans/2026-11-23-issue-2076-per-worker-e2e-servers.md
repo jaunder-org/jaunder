@@ -63,7 +63,7 @@ exactly once.
     - The census and reporter output contain no instance values.
     - `--update-visual-snapshots` leaves the PNGs unchanged.
 
-- [ ] Task 2: Hermetic VM lanes run N instances with every gate covering each
+- [x] Task 2: Hermetic VM lanes run N instances with every gate covering each
   - Contract:
     - `checks.nix` defines the `jaunder@<i>` template units. The production
       module `nix/nixos.nix` is unchanged.

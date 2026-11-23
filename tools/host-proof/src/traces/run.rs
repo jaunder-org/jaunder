@@ -7,6 +7,7 @@
 //! the in-process `traces::analyze` / `render` seam. The pure helpers below are
 //! unit-tested; the nix/filesystem I/O in `collect_trace_files` is manual.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -127,41 +128,90 @@ pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
     PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
-/// The server's WARN-and-above diagnostic log inside every capture bundle. It may
-/// legitimately be empty: a clean run warns about nothing.
-pub const DIAG_MEMBER: &str = "capture/diag.log";
+/// One server instance's WARN-and-above diagnostic log inside a capture bundle:
+/// each Playwright worker's server writes its own `capture/instance-<i>/`
+/// subdirectory (#2076). It may legitimately be empty: a clean run warns about
+/// nothing.
+pub fn instance_diag_member(index: usize) -> String {
+    format!("capture/instance-{index}/diag.log")
+}
 
 /// Read the single required `member` from a capture archive.
-///
-/// Every archive consumer uses this seam so malformed evidence has the same
-/// missing, ambiguous, file-type, and UTF-8 failure modes.
 pub fn read_capture_member(tarball: &Path, member: &str) -> Result<String> {
+    read_capture_members(tarball, |path| path == member)?
+        .remove(member)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "capture member `{member}` is missing from {}",
+                tarball.display()
+            )
+        })
+}
+
+/// Read every server instance's `diag.log`, in instance order. The instances
+/// must be numbered contiguously from 0, so a lost instance's log cannot pass
+/// unnoticed, and at least one must exist.
+pub fn read_instance_diag_logs(tarball: &Path) -> Result<Vec<String>> {
+    let mut logs = read_capture_members(tarball, |path| {
+        path.strip_prefix("capture/instance-")
+            .and_then(|rest| rest.strip_suffix("/diag.log"))
+            .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
+    })?;
+    ensure!(
+        !logs.is_empty(),
+        "capture has no `{}` member: {}",
+        instance_diag_member(0),
+        tarball.display()
+    );
+    (0..logs.len())
+        .map(|index| {
+            let member = instance_diag_member(index);
+            logs.remove(&member).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "capture member `{member}` is missing from {}",
+                    tarball.display()
+                )
+            })
+        })
+        .collect()
+}
+
+/// Read every regular-file member `select`ed by its path. Every archive
+/// consumer uses this seam so malformed evidence has the same ambiguous,
+/// file-type, and UTF-8 failure modes.
+fn read_capture_members(
+    tarball: &Path,
+    select: impl Fn(&str) -> bool,
+) -> Result<BTreeMap<String, String>> {
     let file =
         File::open(tarball).with_context(|| format!("opening capture {}", tarball.display()))?;
     let mut archive = tar::Archive::new(GzDecoder::new(file));
-    let mut found = None;
+    let mut found = BTreeMap::new();
     for entry in archive.entries()? {
         let mut entry = entry?;
-        if entry.path()?.as_ref() != Path::new(member) {
+        let Some(member) = entry
+            .path()?
+            .to_str()
+            .filter(|path| select(path))
+            .map(str::to_owned)
+        else {
             continue;
-        }
+        };
         ensure!(
             entry.header().entry_type().is_file(),
             "capture member `{member}` is not a regular file"
         );
-        ensure!(found.is_none(), "capture has ambiguous member `{member}`");
+        ensure!(
+            !found.contains_key(&member),
+            "capture has ambiguous member `{member}`"
+        );
         let mut contents = String::new();
         entry
             .read_to_string(&mut contents)
             .with_context(|| format!("reading capture member `{member}`"))?;
-        found = Some(contents);
+        found.insert(member, contents);
     }
-    found.ok_or_else(|| {
-        anyhow::anyhow!(
-            "capture member `{member}` is missing from {}",
-            tarball.display()
-        )
-    })
+    Ok(found)
 }
 
 /// Read the capture's trace, which unlike other members must not be empty.
@@ -258,8 +308,53 @@ mod tests {
     fn capture_member_reader_accepts_an_empty_member() {
         let temp = tempfile::tempdir().unwrap();
         let capture = temp.path().join("capture.tar.gz");
-        write_capture(&capture, &[(DIAG_MEMBER, b"", tar::EntryType::Regular)]);
-        assert_eq!(read_capture_member(&capture, DIAG_MEMBER).unwrap(), "");
+        let member = instance_diag_member(0);
+        write_capture(&capture, &[(member.as_str(), b"", tar::EntryType::Regular)]);
+        assert_eq!(read_capture_member(&capture, &member).unwrap(), "");
+    }
+
+    #[test]
+    fn instance_diag_logs_read_every_instance_in_order() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture.tar.gz");
+        let (first, second) = (instance_diag_member(0), instance_diag_member(1));
+        write_capture(
+            &capture,
+            &[
+                (second.as_str(), b"two", tar::EntryType::Regular),
+                (TRACE_MEMBER, b"trace", tar::EntryType::Regular),
+                ("capture/diag.log", b"unscoped", tar::EntryType::Regular),
+                (first.as_str(), b"", tar::EntryType::Regular),
+            ],
+        );
+        assert_eq!(read_instance_diag_logs(&capture).unwrap(), ["", "two"]);
+    }
+
+    #[test]
+    fn instance_diag_logs_reject_missing_or_gapped_instances() {
+        let temp = tempfile::tempdir().unwrap();
+        let capture = temp.path().join("capture.tar.gz");
+        write_capture(
+            &capture,
+            &[(TRACE_MEMBER, b"trace", tar::EntryType::Regular)],
+        );
+        let error = read_instance_diag_logs(&capture).unwrap_err().to_string();
+        assert!(error.contains("capture/instance-0/diag.log"), "{error}");
+
+        let third = instance_diag_member(2);
+        write_capture(
+            &capture,
+            &[
+                (
+                    instance_diag_member(0).as_str(),
+                    b"",
+                    tar::EntryType::Regular,
+                ),
+                (third.as_str(), b"", tar::EntryType::Regular),
+            ],
+        );
+        let error = read_instance_diag_logs(&capture).unwrap_err().to_string();
+        assert!(error.contains("capture/instance-1/diag.log"), "{error}");
     }
 
     #[test]

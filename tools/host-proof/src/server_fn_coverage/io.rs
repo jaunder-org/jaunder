@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use super::span_loss::refuse_span_loss;
 use super::{Coverage, Snapshot, extract, render};
 use crate::traces::parse::{Filters, parse_spans};
-use crate::traces::run::{DIAG_MEMBER, read_capture_member, read_trace_member};
+use crate::traces::run::{read_instance_diag_logs, read_trace_member};
 use repository_policy::server_fns::ServerFn;
 
 #[cfg(test)]
@@ -36,8 +36,8 @@ pub fn coverage_from_jsonl(jsonl: &str, inventory: &[ServerFn]) -> Result<Covera
 
 /// Derive coverage from a `capture-*.tar.gz` bundle through the archive reader
 /// every capture consumer shares. A capture whose server reported losing spans is
-/// refused first (#2029); its `diag.log` is required, because without it the loss
-/// cannot be ruled out.
+/// refused first (#2029); every server instance's `diag.log` is required (#2076),
+/// because without it the loss cannot be ruled out.
 fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Coverage> {
     if !tarball.exists() {
         bail!(
@@ -46,8 +46,9 @@ fn coverage_from_capture(tarball: &Path, inventory: &[ServerFn]) -> Result<Cover
             tarball.display()
         );
     }
-    let diag_log = read_capture_member(tarball, DIAG_MEMBER)?;
-    refuse_span_loss(&diag_log).with_context(|| format!("refusing {}", tarball.display()))?;
+    for diag_log in read_instance_diag_logs(tarball)? {
+        refuse_span_loss(&diag_log).with_context(|| format!("refusing {}", tarball.display()))?;
+    }
     let jsonl = read_trace_member(tarball)
         .with_context(|| format!("reading the otel trace from {}", tarball.display()))?;
     coverage_from_jsonl(&jsonl, inventory)

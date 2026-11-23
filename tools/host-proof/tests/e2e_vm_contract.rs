@@ -205,17 +205,72 @@ print(json.dumps(sorted(timeouts)))
     }
 }
 
+/// The zero-panic gate (ADR-0032) covers every server instance (#2076): each
+/// instance's own journal and capture subdirectory reach the verifier under a
+/// lane-qualified name, and a panic in any one instance fails the lane.
 #[test]
-fn e2e_panic_gate_verifies_the_lane_qualified_journal() {
-    let checks = std::fs::read_to_string(
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../..")
-            .join("nix")
-            .join("checks.nix"),
-    )
-    .expect("nix/checks.nix");
-    assert!(checks.contains("--server-log /tmp/jaunder-journal-${identity}.log"));
-    assert!(!checks.contains("--server-log /tmp/jaunder-journal-${backend}.log"));
+fn e2e_panic_gate_verifies_every_instance() {
+    let lanes = evaluated_e2e_lanes();
+    let helper = lanes["e2e-sqlite-firefox-ordinary-1-of-2"]["testScript"]
+        .as_str()
+        .expect("evaluated VM script");
+    let script = format!(
+        r#"
+import ast
+import contextlib
+import json
+import sys
+
+class Machine:
+  def __init__(self, panicking):
+    self.panicking = panicking
+    self.verified = []
+  def succeed(self, command):
+    return ""
+  def execute(self, command):
+    if command.startswith("test-support verify-no-panics"):
+      self.verified.append(command)
+      return (1 if self.panicking in command else 0, "")
+    return (0, "")
+  def copy_from_machine(self, path, target):
+    pass
+
+module = ast.parse({helper:?})
+statuses = {{}}
+for panicking in ["capture/instance-0 ", "capture/instance-1 ", "no instance"]:
+  namespace = {{"machine": Machine(panicking), "retention_errors": []}}
+  exec(compile(ast.Module(body=[node for node in module.body if isinstance(node, ast.FunctionDef)], type_ignores=[]), "<evaluated VM helpers>", "exec"), namespace)
+  with contextlib.redirect_stdout(sys.stderr):
+    statuses[panicking] = namespace["verify_instance_panics"]()
+  verified = namespace["machine"].verified
+print(json.dumps({{"statuses": statuses, "verified": verified}}))
+"#
+    );
+    let output = std::process::Command::new("python3")
+        .args(["-B", "-c", &script])
+        .output()
+        .expect("launching Python panic-gate harness");
+    assert!(
+        output.status.success(),
+        "panic-gate harness failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("panic-gate harness JSON");
+    assert_eq!(
+        result["statuses"],
+        serde_json::json!({"capture/instance-0 ": 1, "capture/instance-1 ": 1, "no instance": 0})
+    );
+    let identity = "sqlite-firefox-ordinary-1-of-2";
+    assert_eq!(
+        result["verified"],
+        serde_json::json!((0..2)
+            .map(|index| format!(
+                "test-support verify-no-panics --capture-dir /var/lib/jaunder/capture/instance-{index} \
+                 --server-log /tmp/jaunder-journal-instance-{index}-{identity}.log"
+            ))
+            .collect::<Vec<_>>())
+    );
 }
 
 #[test]
