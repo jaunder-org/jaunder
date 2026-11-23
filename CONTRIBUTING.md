@@ -1269,7 +1269,7 @@ directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
 phases into the same run; no other host-proof executable joins it. An
 `e2e-producer` step adds its VM run's measured phases, read from the lifted
 phase manifest, and the `coverage` step adds its producer's stages (below), both
-as [producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)
+as [producer-timed phases](docs/adr/0263-dev-traces-producer-timed-phases.md)
 ([observability](docs/observability.md)). A step span records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the

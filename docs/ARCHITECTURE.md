@@ -4617,7 +4617,7 @@ it cannot trace (the Rust coverage producer's `status.json` stages, an E2E
 lane's VM phase manifest), `dev` writes them afterwards as children of the step
 that ran it, at the producer's recorded start and duration. Only phases inside
 that step are written, so a reused output's or an earlier run's are left out
-([producer-timed phases](adr/drafts/dev-traces-producer-timed-phases.md)). Rust
+([producer-timed phases](adr/0263-dev-traces-producer-timed-phases.md)). Rust
 host tools come from their flake packages, each built as its own
 `<package>-build` Nix step and run from its output
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)),
