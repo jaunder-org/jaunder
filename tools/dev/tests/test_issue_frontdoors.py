@@ -527,19 +527,28 @@ def test_a_blocker_that_is_not_an_open_issue_or_not_recorded_fails(
 # discovery this front door keeps the behaviour of: every malformed, partial or
 # ambiguous answer exits 5, a failed gh keeps its status, and a docs path that
 # is not a directory exits 1.
-STATUS_QUERY = (
+BACKLOG_QUERY = (
     'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
     "issue(number:$number){projectItems(first:100){nodes{id project{id} "
     'status:fieldValueByName(name:"Status"){... on '
+    "ProjectV2ItemFieldSingleSelectValue{name}} "
+    'priority:fieldValueByName(name:"Priority"){... on '
     "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
 )
 MILESTONES = {"body": [[{"number": 3, "title": "Developer tooling & DX"}]]}
 
 
-def status(name: str | None) -> dict[str, Any]:
-    value = None if name is None else {"name": name}
+def status(name: str | None, priority: str | None = None) -> dict[str, Any]:
+    """An issue's one Backlog item with this Status and Priority."""
     return project_items(
-        [{"id": "PVTI_1", "project": {"id": PROJECT}, "status": value}]
+        [
+            {
+                "id": "PVTI_1",
+                "project": {"id": PROJECT},
+                "status": None if name is None else {"name": name},
+                "priority": None if priority is None else {"name": priority},
+            }
+        ]
     )
 
 
@@ -565,9 +574,9 @@ def discovery_responses() -> list[Any]:
                 ]
             ]
         },
-        status("Todo"),
+        status("Todo", "P2"),
         {"body": [[]]},
-        status("In Progress"),
+        status("In Progress", "P1"),
         {"body": [[]]},
         status("Todo"),
         {"body": [[{"number": 42, "state": "open"}]]},
@@ -596,6 +605,7 @@ DISCOVERED = """\
         "tooling"
       ],
       "status": "Todo",
+      "priority": "P2",
       "blocked_by": [],
       "local": {
         "branch": null,
@@ -611,12 +621,14 @@ DISCOVERED = """\
       "number": 732,
       "title": "claimed",
       "reason": "claimed",
+      "priority": "P1",
       "blocked_by": []
     },
     {
       "number": 733,
       "title": "blocked",
       "reason": "blocked",
+      "priority": null,
       "blocked_by": [
         42
       ]
@@ -631,7 +643,7 @@ def inventory(endpoint: str) -> list[str]:
 
 
 def project(number: int) -> list[str]:
-    return ["api", "graphql", "-F", f"number={number}", "-f", STATUS_QUERY]
+    return ["api", "graphql", "-F", f"number={number}", "-f", BACKLOG_QUERY]
 
 
 @pytest.mark.parametrize("milestone", ["3", "Developer tooling & DX"])
@@ -682,6 +694,7 @@ def test_discovery_consumes_every_page_before_filtering_closed_prerequisites(
         "number": 733,
         "title": "blocked",
         "reason": "blocked",
+        "priority": None,
         "blocked_by": [42, 43],
     }
 
@@ -704,10 +717,59 @@ def test_an_issue_without_a_backlog_status_is_skipped(
                 "number": 731,
                 "title": "available",
                 "reason": "missing-project-status",
+                "priority": None,
                 "blocked_by": [],
             }
         ],
     }
+
+
+def test_candidates_come_out_by_priority_then_number(tracker: Tracker) -> None:
+    priorities = {731: "P3", 732: None, 733: "P1", 734: "P3", 735: "P2", 736: None}
+    tracker.reply(
+        [
+            MILESTONES,
+            {"body": [[issue(number, "t", []) for number in priorities]]},
+            *(
+                reply
+                for priority in priorities.values()
+                for reply in [status("Todo", priority), {"body": [[]]}]
+            ),
+        ]
+    )
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    assert [
+        (row["number"], row["priority"])
+        for row in json.loads(result.stdout)["candidates"]
+    ] == [
+        (733, "P1"),
+        (735, "P2"),
+        (731, "P3"),
+        (734, "P3"),
+        (732, None),
+        (736, None),
+    ]
+
+
+def test_skipped_issues_stay_in_number_order_whatever_their_priority(
+    tracker: Tracker,
+) -> None:
+    tracker.reply(
+        [
+            MILESTONES,
+            {"body": [[issue(731, "t", []), issue(732, "t", [])]]},
+            status("In Progress", "P4"),
+            {"body": [[]]},
+            status("In Progress", "P1"),
+            {"body": [[]]},
+        ]
+    )
+    result = tracker.discover()
+    assert result.returncode == 0, result
+    assert [
+        (row["number"], row["priority"]) for row in json.loads(result.stdout)["skipped"]
+    ] == [(731, "P4"), (732, "P1")]
 
 
 def test_closed_blockers_do_not_block(tracker: Tracker) -> None:
@@ -823,6 +885,23 @@ ITEM = {"id": "PVTI_1", "project": {"id": PROJECT}}
             "invalid status",
         ),
         (
+            one_issue(project_items([ITEM | {"status": {"name": "Todo"}}])),
+            5,
+            "missing priority evidence",
+        ),
+        (one_issue(status("Todo", "P5")), 5, "invalid priority"),
+        (
+            one_issue(
+                project_items(
+                    [ITEM | {"status": {"name": "Todo"}, "priority": {"name": 2}}]
+                )
+            ),
+            5,
+            "invalid priority",
+        ),
+        # A skipped issue's priority is checked too.
+        (one_issue(status("In Progress", "P5")), 5, "invalid priority"),
+        (
             one_issue(
                 project_items(
                     [ITEM | {"status": None}, ITEM | {"id": "B", "status": None}]
@@ -890,6 +969,7 @@ RESUMED = """\
       "url": "https://github.com/jaunder-org/jaunder/issues/731",
       "labels": [],
       "status": "Todo",
+      "priority": null,
       "blocked_by": [],
       "local": {
         "branch": "issue-731-example",

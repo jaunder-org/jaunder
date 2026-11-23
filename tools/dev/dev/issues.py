@@ -42,14 +42,17 @@ POSITIVE = re.compile(r"[1-9][0-9]*")
 ISSUE_URL = f"https://github.com/{REPO}/issues/"
 
 
-def _project_items_query(field: str) -> str:
-    """An issue's project items, each with `field` under its lowercase name."""
-    return (
-        'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
-        "issue(number:$number){projectItems(first:100){nodes{id project{id} "
-        f'{field.lower()}:fieldValueByName(name:"{field}"){{... on '
-        "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
-    )
+# Candidates are worked in this order; an issue without a priority comes last.
+PRIORITY_RANK = {name: rank for rank, name in enumerate(PRIORITY_OPTIONS)}
+# An issue's project items, each with its Status and Priority, in one read.
+PROJECT_ITEMS_QUERY = (
+    'query=query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
+    "issue(number:$number){projectItems(first:100){nodes{id project{id} "
+    'status:fieldValueByName(name:"Status"){... on '
+    "ProjectV2ItemFieldSingleSelectValue{name}} "
+    'priority:fieldValueByName(name:"Priority"){... on '
+    "ProjectV2ItemFieldSingleSelectValue{name}}} pageInfo{hasNextPage}}}}}"
+)
 
 
 # Exit statuses by class of failure.
@@ -257,7 +260,7 @@ def _add_to_backlog(operation: _Operation, url: str) -> str:
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
-        backlog = _backlog_items(operation, operation.number, "Priority", "listing")
+        backlog = _backlog_items(operation, operation.number, "listing")
         if not backlog:
             raise
         if len(backlog) > 1:
@@ -344,15 +347,16 @@ def _matches(readback: Any, number: Any, expected: dict[str, Any]) -> bool:
 
 
 def _backlog_items(
-    operation: _Operation, number: str, field: str, purpose: str
+    operation: _Operation, number: str, purpose: str
 ) -> list[dict[str, Any]]:
-    """Issue `number`'s Backlog project items, each carrying `field`.
+    """Issue `number`'s Backlog project items, each carrying its Status and
+    Priority.
 
     Only a complete, well-formed listing is answered; `purpose` names what was
     being read when it is not.
     """
     project = operation.gh(
-        "api", "graphql", "-F", f"number={number}", "-f", _project_items_query(field)
+        "api", "graphql", "-F", f"number={number}", "-f", PROJECT_ITEMS_QUERY
     )
     items = _get(project, "data", "repository", "issue", "projectItems")
     nodes = _get(items, "nodes")
@@ -374,7 +378,7 @@ def _backlog_items(
 
 def _backlog(operation: _Operation, item_id: str, priority: str) -> Any:
     """The issue's one Backlog item, which must carry the requested priority."""
-    backlog = _backlog_items(operation, operation.number, "Priority", "readback")
+    backlog = _backlog_items(operation, operation.number, "readback")
     if not (
         len(backlog) == 1
         and backlog[0]["id"] == item_id
@@ -449,21 +453,31 @@ def edit(number: str, decisions: Decisions, blockers: Sequence[str]) -> None:
     _reporting(operation, body)
 
 
-def _status(operation: _Operation, number: str) -> str:
-    """The issue's Backlog Status, or "" when it has no item or no status."""
-    backlog = _backlog_items(operation, number, "Status", "inventory")
+def _field(operation: _Operation, item: dict[str, Any], field: str) -> str | None:
+    """A Backlog item's single-select `field`, or None when it is unset."""
+    if field not in item:
+        operation.fail(ERROR, f"missing {field} evidence")
+    if item[field] is None:
+        return None
+    name = _get(item, field, "name")
+    if not isinstance(name, str):
+        operation.fail(ERROR, f"invalid {field}")
+    return name
+
+
+def _backlog_state(operation: _Operation, number: str) -> tuple[str, str | None]:
+    """The issue's Backlog Status ("" when unset) and Priority (None when
+    unset); an issue with no Backlog item has neither."""
+    backlog = _backlog_items(operation, number, "inventory")
     if not backlog:
-        return ""
+        return "", None
     if len(backlog) > 1:
         operation.fail(ERROR, "ambiguous Backlog item")
-    if "status" not in backlog[0]:
-        operation.fail(ERROR, "missing status evidence")
-    if backlog[0]["status"] is None:
-        return ""
-    name = _get(backlog[0], "status", "name")
-    if not isinstance(name, str):
-        operation.fail(ERROR, "invalid status")
-    return name
+    status = _field(operation, backlog[0], "status")
+    priority = _field(operation, backlog[0], "priority")
+    if priority is not None and priority not in PRIORITY_RANK:
+        operation.fail(ERROR, "invalid priority")
+    return status or "", priority
 
 
 def _open_blockers(operation: _Operation, number: str) -> list[Any]:
@@ -604,13 +618,15 @@ def discover(milestone: str) -> None:
 
     An issue is skipped as claimed (In Progress), as lacking a Backlog status,
     or as blocked by an open issue; every other issue is a candidate.
+    Candidates come in the order to work them: by Backlog priority, then by
+    number.
     """
     operation = _Operation("issue-discover")
     number = operation.milestone(milestone)
     candidates, skipped = [], []
     for row in _issue_rows(operation, number):
         issue = json.dumps(row["number"])
-        status = _status(operation, issue)
+        status, priority = _backlog_state(operation, issue)
         blockers = _open_blockers(operation, issue)
         reason = (
             "claimed"
@@ -627,6 +643,7 @@ def discover(milestone: str) -> None:
                     "number": row["number"],
                     "title": row["title"],
                     "reason": reason,
+                    "priority": priority,
                     "blocked_by": blockers,
                 }
             )
@@ -638,13 +655,20 @@ def discover(milestone: str) -> None:
                 "url": row["html_url"],
                 "labels": [label["name"] for label in row["labels"]],
                 "status": status,
+                "priority": priority,
                 "blocked_by": blockers,
                 "local": _resume_evidence(operation, issue),
             }
         )
     report = {
         "milestone": number,
-        "candidates": sorted(candidates, key=lambda row: row["number"]),
+        "candidates": sorted(
+            candidates,
+            key=lambda row: (
+                PRIORITY_RANK.get(row["priority"], len(PRIORITY_RANK)),
+                row["number"],
+            ),
+        ),
         "skipped": sorted(skipped, key=lambda row: row["number"]),
     }
     print(json.dumps(report, indent=2, ensure_ascii=False))
