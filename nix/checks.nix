@@ -395,11 +395,16 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
     },
   ]
 
+  # The wall-clock start places the phase in the host `dev` trace (#2030). It is
+  # derived from the same monotonic elapsed time, so a clock step can shift the
+  # phase but never change its duration.
   def record_e2e_phase(name, started_at, outcome, detail):
+    elapsed = time.monotonic() - started_at
     e2e_phases.append(
       {
         "name": name,
-        "duration_ms": int((time.monotonic() - started_at) * 1000),
+        "started_at_unix_ns": time.time_ns() - int(elapsed * 1_000_000_000),
+        "duration_ms": int(elapsed * 1000),
         "outcome": outcome,
         "detail": detail,
       }

@@ -201,6 +201,83 @@ def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     ]
 
 
+# A failed producer that leaves this run's phase manifest, unless PHASES is
+# empty; "@NOW@" is the producer's own clock.
+PHASE_PRODUCER = f"""#!{sys.executable}
+import os, pathlib, sys, time
+lane = sys.argv[-1]
+directory = pathlib.Path(".xtask", "diagnostics", f"e2e-{{lane}}")
+directory.mkdir(parents=True, exist_ok=True)
+if os.environ["PHASES"]:
+    text = os.environ["PHASES"].replace("@NOW@", str(time.time_ns()))
+    (directory / f"e2e-phase-{{lane}}.json").write_text(text)
+sys.exit(1)
+"""
+NOW = "@NOW@"
+MEASURED = json.dumps(
+    {
+        "phases": [
+            {
+                "name": "vm-startup-readiness",
+                "started_at_unix_ns": NOW,
+                "duration_ms": 3,
+                "outcome": "success",
+            },
+            {
+                "name": "gate-execution",
+                "started_at_unix_ns": NOW,
+                "duration_ms": 2,
+                "outcome": "failed",
+            },
+            {"name": "nix-evaluation", "duration_ms": None, "outcome": "unavailable"},
+            {
+                "name": "earlier-run",
+                "started_at_unix_ns": 1,
+                "duration_ms": 1,
+                "outcome": "success",
+            },
+            "not a phase",
+        ]
+    }
+).replace(f'"{NOW}"', NOW)
+
+
+@pytest.mark.parametrize(
+    ("phases", "children", "warned"),
+    [
+        (
+            MEASURED,
+            {"vm-startup-readiness": (3000, "ok"), "gate-execution": (2000, "failed")},
+            False,
+        ),
+        ("", {}, False),
+        ('{"phases": 3}', {}, False),
+        ("{", {}, True),
+    ],
+    ids=["measured", "missing", "not-a-list", "malformed"],
+)
+def test_a_failed_producer_shows_only_this_runs_measured_phases(
+    workflow: Workflow,
+    phases: str,
+    children: dict[str, tuple[int, str]],
+    warned: bool,
+) -> None:
+    workflow.checkout.executable("bash", PHASE_PRODUCER)
+    lane = "sqlite-chromium-ordinary-1-of-2"
+    result = workflow.dev("e2e-producer", lane, PHASES=phases)
+    assert result.returncode == 1, result
+    assert (b"no phase spans" in result.stderr) == warned, result.stderr
+    events = workflow.checkout.events()
+    (step,) = [event for event in events if event["name"] == "e2e-producer"]
+    assert step["args"]["jaunder.status"] == "failed"
+    shown = {
+        event["name"]: (event["dur"], event["args"]["jaunder.status"])
+        for event in events
+        if event["args"]["parent_id"] == step["args"]["span_id"]
+    }
+    assert shown == children
+
+
 @pytest.mark.parametrize(("args", "expected"), FORWARDED)
 def test_each_entry_point_runs_its_command_with_arguments_kept_as_argv(
     workflow: Workflow, args: list[str], expected: Commands

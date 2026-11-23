@@ -418,6 +418,18 @@ is opaque time inside the step that started it. These spans are process timing,
 written only to files: they are not OpenTelemetry request attribution and are
 never exported over OTLP.
 
+An `e2e-producer` step's children are its VM run's measured phases (#2030):
+`vm-startup-readiness`, `gate-execution`, `result-lift` and `post-gate-checks`.
+They are read from the lifted `e2e-phase-<lane>.json`, each placed at its
+`started_at_unix_ns` and lasting its `duration_ms`, and are `failed` where the
+manifest says so. A phase gets no span when it is `unavailable` (the `nix-*`
+entries), when it has no start or duration, or when it does not fall inside the
+step, as for a reused or substituted output whose manifest is from an earlier
+run. A missing manifest, as after a timed-out lane, gives no children; an
+unreadable or malformed one gives none either, with one `dev:` warning. The Nix
+build and the work between phases (package copy, seeding, census preflight) stay
+the step's untraced time.
+
 Tracing never changes a step's exit status, stdout or stderr; a trace directory
 that cannot be written produces one warning on stderr. `traced-run -- PROGRAM`
 remains a separate output-parking runner and records no spans. This trace is

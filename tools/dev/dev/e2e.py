@@ -5,10 +5,17 @@ does not depend on where it ran.
 """
 
 import json
+import sys
+import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
-from dev import report, steps
+from opentelemetry.trace import Span, set_span_in_context
+
+from dev import report, steps, trace
 from dev.commands import E2E_EVIDENCE
+from dev.spans import STATUS, Status
 
 CATALOG = "end2end/e2e-lanes.json"
 # Where `scripts/e2e-workflow` keeps each producer's build record and artifacts.
@@ -36,17 +43,80 @@ def _selected_output(check: str) -> str:
     return output
 
 
+class _Phase(NamedTuple):
+    """One measured VM phase: wall-clock nanoseconds and whether it failed."""
+
+    name: str
+    start_ns: int
+    end_ns: int
+    failed: bool
+
+
+def _measured(entry: object) -> _Phase | None:
+    """A manifest phase entry as a `_Phase`, if the VM measured it."""
+    if not isinstance(entry, dict):
+        return None
+    name, start = entry.get("name"), entry.get("started_at_unix_ns")
+    duration, outcome = entry.get("duration_ms"), entry.get("outcome")
+    # bool is an int to Python, never to the manifest's writer.
+    if (
+        not isinstance(name, str)
+        or type(start) is not int
+        or type(duration) is not int
+        or outcome not in ("success", "failed")
+    ):
+        return None
+    return _Phase(name, start, start + duration * 1_000_000, outcome == "failed")
+
+
+def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
+    """Adds the lane's VM phases, from its lifted manifest, under the step.
+
+    Only phases this step's own run measured are shown: a reused output's
+    manifest, or one from another run, falls outside the step. Anything
+    unmeasured or unreadable is left out, never shown as zero, and never
+    changes the step. A failed lane may leave no manifest at all; any other
+    read failure is reported.
+    """
+
+    def add(step: Span, started_ns: int) -> None:
+        ended_ns = time.time_ns()
+        path = Path(DIAGNOSTICS, check, f"e2e-phase-{lane}.json")
+        try:
+            entries = json.loads(path.read_bytes()).get("phases")
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, AttributeError, RecursionError) as error:
+            print(f"dev: {path}: no phase spans: {error}", file=sys.stderr, flush=True)
+            return
+        parent = set_span_in_context(step)
+        for phase in map(_measured, entries if isinstance(entries, list) else []):
+            if (
+                phase is not None
+                and started_ns <= phase.start_ns <= phase.end_ns <= ended_ns
+            ):
+                span = trace.tracer().start_span(
+                    phase.name, parent, start_time=phase.start_ns
+                )
+                span.set_attribute(STATUS, Status.FAILED if phase.failed else Status.OK)
+                span.end(end_time=phase.end_ns)
+
+    return add
+
+
 def producer(lane: str) -> None:
     """One lane's producer, then its verification, whose report is rendered.
 
     The script builds the lane's check and lifts its artifacts, and the step
-    records where that output came from; only a successful lift is verified.
+    records where that output came from and the VM phases its run measured;
+    only a successful lift is verified.
     """
     check = f"e2e-{lane}"
     steps.run(
         "e2e-producer",
         ["bash", "scripts/e2e-workflow", "producer", lane],
         realizes=lambda: _selected_output(check),
+        finished=_phase_spans(check, lane),
     )
     output = _selected_output(check)
     steps.run(
