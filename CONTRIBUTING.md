@@ -2454,7 +2454,7 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
 - Use Rust for product code. End-to-end tests use Playwright and TypeScript.
   Choose the language for development and CI tools by how maintainable the code
   will be, not by startup, compile or port cost
-  ([docs/adr/drafts/tool-language-by-maintainability.md](docs/adr/drafts/tool-language-by-maintainability.md)):
+  ([docs/adr/0261-tool-language-by-maintainability.md](docs/adr/0261-tool-language-by-maintainability.md)):
   - A tool is Python, unless it links product crates it genuinely needs or needs
     Rust-specific parsing (`syn`, wasm sections).
   - A tool that needs a product fact (an inventory, a manifest, a format

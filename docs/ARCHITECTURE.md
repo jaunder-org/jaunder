@@ -5300,7 +5300,7 @@ dissolved by the [Python `dev` runner](adr/0251-dev-runner-replaces-just.md)
 decision).
 
 Maintainability chooses the language of infrastructure
-([infrastructure language by maintainability](adr/drafts/tool-language-by-maintainability.md)).
+([infrastructure language by maintainability](adr/0261-tool-language-by-maintainability.md)).
 A tool is Python unless it links product crates it genuinely needs or needs
 Rust-specific parsing. Product facts come from product commands or files rather
 than linked product code, and a format that Rust writes and another language
