@@ -1194,17 +1194,20 @@ and the
   `client-host-clippy`, `wasm-clippy`, and `tools-clippy`. The local host ladder
   and hooks run them with host-local Cargo, the devshell toolchain and
   compile-cache environment. Hermetic Nix exposes one terminal derivation per
-  unit and a narrow aggregate, which is CI's only Clippy verdict. Product core
-  excludes web, client, and csr as selected lint roots; their applicable server,
-  featureless, host-CSR, and wasm targets are checked separately. `wasm-clippy`
-  deliberately excludes `--all-targets`, because web's host-oriented test
-  dependencies cannot compile for `wasm32-unknown-unknown`. Root and tools
-  workspaces retain separate lock/test contexts (including `csr_bundle` and
-  `performance` in tools). The former combined root web(server+CSR)
-  configuration is intentionally not retained under approved request
-  `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`. The former `xtask-clippy` host step
-  and Nix verdict are retired with the xtask workspace; host tools are linted by
-  `tools-clippy`.
+  unit and a narrow aggregate, which is CI's only Clippy verdict. Each unit
+  derivation inherits a crane dependency build that runs the same `dev static`
+  unit over a dummy source, so a Rust-only edit re-lints just the workspace
+  crates; manifest, lockfile, toolchain or `tools/dev/` edits rebuild it
+  (#2038). Product core excludes web, client, and csr as selected lint roots;
+  their applicable server, featureless, host-CSR, and wasm targets are checked
+  separately. `wasm-clippy` deliberately excludes `--all-targets`, because web's
+  host-oriented test dependencies cannot compile for `wasm32-unknown-unknown`.
+  Root and tools workspaces retain separate lock/test contexts (including
+  `csr_bundle` and `performance` in tools). The former combined root
+  web(server+CSR) configuration is intentionally not retained under approved
+  request `2f0929a1-ebbd-4735-9a6c-b53e99a7a141`. The former `xtask-clippy` host
+  step and Nix verdict are retired with the xtask workspace; host tools are
+  linted by `tools-clippy`.
 - `cargo nextest run` runs the default Rust unit and integration test suite.
 - Whole-test budgets are **ambient** — an auto fixture gives every test a scaled
   `DEFAULT_TEST_BUDGET_MS`, which covers the entire suite (#270). Don't set one
@@ -2310,10 +2313,11 @@ server-function coverage verification to `dev validate-no-e2e`.
   formatting, cargo-deny, and repository scanners), executed with existing
   offline Cargo homes. It requests the narrow Clippy aggregate once; that
   aggregate depends on six independently buildable terminal verdicts and
-  executes no lint itself. `dev static-all` runs the ordered, duplicate-free
-  union of TypeScript, Rust formatting, Elisp, ast-grep, cargo-deny, the six
-  Clippy units and ERT; Prettier is outside this inventory and called directly
-  by `dev`/Nix.
+  executes no lint itself. Each verdict reuses its own cached dependency build
+  and re-lints only workspace and path crates. `dev static-all` runs the
+  ordered, duplicate-free union of TypeScript, Rust formatting, Elisp, ast-grep,
+  cargo-deny, the six Clippy units and ERT; Prettier is outside this inventory
+  and called directly by `dev`/Nix.
 - `checks.x86_64-linux.static-elisp` — shared `elisp-fmt` Verify followed by
   shared `byte-compile`, over the complete non-Markdown Elisp source tree in a
   writable copy. The sandbox `dev` package, `emacsForCi`, and `TZDIR` replace

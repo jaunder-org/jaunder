@@ -4875,7 +4875,10 @@ dependency setup, `rust-format` runs `dev static rust-format`, and `static-code`
 runs the residual non-Clippy shared checks outside TypeScript, Rust formatting
 and standalone ERT with workspace-specific offline Cargo homes. Static-code
 requests the narrow Clippy aggregate once; its six independently buildable
-terminal leaves run lint and the aggregate does not rerun it. `static-elisp`
+terminal leaves run lint and the aggregate does not rerun it. Each leaf inherits
+a crane dependency build that runs the same `dev static` unit over a dummy
+source, keyed on manifests, lockfiles, toolchain, vendored inputs and `dev`;
+only workspace and path crates are re-linted from real source. `static-elisp`
 runs the shared `elisp-fmt` Verify and `byte-compile` checks over the complete
 non-Markdown Elisp source tree in a writable copy. The sandbox `dev` package,
 `emacsForCi` and `TZDIR` replace its former compiled build input. It needs no
@@ -4984,10 +4987,9 @@ remain final-consumer inputs. Nested tools Cargo and archive export/import share
 the repository-root target directory, and ordinary and qualification tool builds
 require a nonempty dependency archive. Imported external artifacts do not
 justify treating changed local code as fresh. Release artifacts remain distinct
-from dev-profile clippy preparation. The delivered correction is release-tooling
-artifact/source reuse, not a production dev/all-targets clippy preparation
-layer. Linux evidence does not establish Darwin execution or cross-platform
-artifact reuse.
+from dev-profile clippy preparation, which the Nix Clippy leaves own as one
+dev-profile dependency build per leaf (#2038). Linux evidence does not establish
+Darwin execution or cross-platform artifact reuse.
 
 The source filters above assert representative membership inline; no tool
 watches derivation identities for over-inclusion or wiring drift
