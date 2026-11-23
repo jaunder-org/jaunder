@@ -276,7 +276,7 @@ def _producer_and_gate(
     steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
 
 
-def _milliseconds(value: object) -> bool:
+def _non_negative_int(value: object) -> bool:
     # bool is an int to Python, never to the producer.
     return type(value) is int and value >= 0
 
@@ -298,8 +298,8 @@ def coverage_stages(output: str) -> list[trace.Phase]:
             name = stage["stage"]
             if not (
                 isinstance(name, str)
-                and _milliseconds(start)
-                and _milliseconds(duration)
+                and _non_negative_int(start)
+                and _non_negative_int(duration)
             ):
                 return []
             phases.append(

@@ -23,7 +23,9 @@ durations in their sidecars.
 ## Decision
 
 A `dev` step may write **after-the-fact child spans** from the timed evidence of
-a Nix output that this run built.
+a Nix output that this run built. This amends ADR-0254's "attributes only" rule
+for that case alone. Every span still times one kind of work, and no new trace
+framework is added.
 
 - The producer records each phase's wall-clock start (Unix milliseconds) beside
   its duration, and records the two together or not at all. A phase that never

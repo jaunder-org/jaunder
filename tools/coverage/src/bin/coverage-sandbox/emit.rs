@@ -834,7 +834,9 @@ mod tests {
             "<html/>"
         );
 
+        fs::remove_file(diag.join("cargo-timing.html")).unwrap();
         copy_census_timings("not json", &diag);
+        assert!(!diag.join("cargo-timing.html").exists());
     }
 
     #[test]
