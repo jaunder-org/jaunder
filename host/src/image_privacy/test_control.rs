@@ -117,19 +117,23 @@ fn worker_override_with_pause_release(
     };
     private_file(&spool.join(READY_FILE), b"ready")?;
     match mode.as_str() {
-        "pause" => loop {
-            park_worker_once();
-            if pause_release() {
-                return Ok(Some(false));
+        "pause" | "oversize" => {
+            if mode == "oversize" {
+                // The JSON is otherwise usable. Invalid JSON would let a parser
+                // failure pass the bound test even if the byte limit were absent.
+                output.write_all(&vec![b' '; 128 * 1024])?;
+                output.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
+                output.flush()?;
             }
-        },
-        "oversize" => {
-            // The JSON is otherwise usable. Invalid JSON would let a parser
-            // failure pass the bound test even if the byte limit were absent.
-            output.write_all(&vec![b' '; 128 * 1024])?;
-            output.write_all(br#"{"version":1,"result":{"Ok":null}}"#)?;
-            output.flush()?;
-            Ok(Some(true))
+            // Stay alive until the owner kills us. An oversized response must
+            // be rejected by killing a live child, and a SIGKILL landing while
+            // an instrumented child exits truncates its coverage profile (#2056).
+            loop {
+                park_worker_once();
+                if pause_release() {
+                    return Ok(Some(false));
+                }
+            }
         }
         "expanded-output" | "verification-failure" => {
             // Fixed fault witnesses in the real child, never alternate production
@@ -196,23 +200,6 @@ mod tests {
     }
 
     #[test]
-    fn oversized_control_emits_valid_json_after_the_bounded_prefix() {
-        let root = spool();
-        set_mode(root.path(), "oversize");
-        let mut output = Vec::new();
-        assert_eq!(
-            worker_override(root.path(), &mut output).unwrap(),
-            Some(true)
-        );
-        assert_eq!(&output[..128 * 1024], vec![b' '; 128 * 1024]);
-        let status: serde_json::Value = serde_json::from_slice(&output[128 * 1024..])
-            .expect("oversized response still has valid wire JSON");
-        assert_eq!(status["version"], 1);
-        assert_eq!(status["result"]["Ok"], serde_json::Value::Null);
-        assert!(root.path().join(READY_FILE).exists());
-    }
-
-    #[test]
     fn output_growth_and_verification_faults_use_the_worker_wire() {
         for (mode, expected_success) in [("expanded-output", true), ("verification-failure", false)]
         {
@@ -251,10 +238,27 @@ mod tests {
         );
     }
 
+    /// Both parking arms return only through the unit-test release predicate,
+    /// so the real child never exits on its own and its owner always kills a
+    /// live process (#2056).
     #[test]
-    fn paused_override_releases_only_through_its_private_unit_test_predicate() {
+    fn parked_overrides_release_only_through_their_private_unit_test_predicate() {
+        let output = parked_override_output("pause");
+        assert!(output.is_empty());
+
+        let output = parked_override_output("oversize");
+        assert_eq!(&output[..128 * 1024], vec![b' '; 128 * 1024]);
+        let status: serde_json::Value = serde_json::from_slice(&output[128 * 1024..])
+            .expect("oversized response still has valid wire JSON");
+        assert_eq!(status["version"], 1);
+        assert_eq!(status["result"]["Ok"], serde_json::Value::Null);
+    }
+
+    /// Drives `mode` through one retained park and one release, returning what
+    /// the worker wrote before parking.
+    fn parked_override_output(mode: &str) -> Vec<u8> {
         let root = spool();
-        set_mode(root.path(), "pause");
+        set_mode(root.path(), mode);
         let spool = root.path().to_path_buf();
         let (entered_tx, entered_rx) = mpsc::sync_channel(0);
         let (release_tx, release_rx) = mpsc::sync_channel(0);
@@ -299,7 +303,7 @@ mod tests {
             .expect("release the actual paused arm");
         let (result, output) = worker.join().expect("paused unit worker exits cleanly");
         assert_eq!(result.unwrap(), Some(false));
-        assert!(output.is_empty());
+        output
     }
 
     #[test]
