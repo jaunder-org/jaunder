@@ -4607,11 +4607,11 @@ path before the build started, otherwise `built` or `substituted` by
 `build` child, so it is evaluated once and the evaluation is timed; the value
 describes only the output, which the step records as `jaunder.nix.output`, with
 `jaunder.nix.fetched_bytes` for what substituters supplied to the build's
-closure unless the output was reused. When a step builds an output whose
-producer timed its own phases in the sandbox (the Rust coverage producer's
-`status.json` stages), `dev` writes those phases afterwards as children of the
-`build` span, at the producer's recorded start and duration, and never from a
-reused output
+closure unless the output was reused. When a producer times its own phases where
+it cannot trace (the Rust coverage producer's `status.json` stages, an E2E
+lane's VM phase manifest), `dev` writes them afterwards as children of the step
+that ran it, at the producer's recorded start and duration. Only phases inside
+that step are written, so a reused output's or an earlier run's are left out
 ([producer-timed phases](adr/drafts/dev-traces-producer-timed-phases.md)). Rust
 host tools come from their flake packages, each built as its own
 `<package>-build` Nix step and run from its output

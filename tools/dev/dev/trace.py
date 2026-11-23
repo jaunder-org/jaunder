@@ -26,13 +26,7 @@ from opentelemetry.sdk.trace.export import (
     SpanExportResult,
 )
 from opentelemetry.sdk.trace.id_generator import IdGenerator
-from opentelemetry.trace import (
-    NonRecordingSpan,
-    NoOpTracer,
-    SpanContext,
-    Tracer,
-    set_span_in_context,
-)
+from opentelemetry.trace import NoOpTracer, Tracer, set_span_in_context
 from opentelemetry.trace import Span as ApiSpan
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
@@ -176,13 +170,20 @@ class Phase:
     ok: bool
 
 
-def record_phases(parent: SpanContext, phases: Iterable[Phase]) -> None:
-    """Writes `phases` as finished children of `parent`, which may have ended."""
-    context = set_span_in_context(NonRecordingSpan(parent))
+def record_phases(step: ApiSpan, started_ns: int, phases: Iterable[Phase]) -> None:
+    """Writes `phases` as finished children of the still-open `step`.
+
+    `started_ns` is the wall-clock nanosecond the step started. Only phases
+    inside the step so far are its own work: one outside it, as from a reused
+    output or an earlier run, is left out rather than misplaced.
+    """
+    ended_ns = time.time_ns()
+    context = set_span_in_context(step)
     for phase in phases:
-        span = tracer().start_span(phase.name, context, start_time=phase.start_ns)
-        span.set_attribute(STATUS, Status.OK if phase.ok else Status.FAILED)
-        span.end(end_time=phase.end_ns)
+        if started_ns <= phase.start_ns <= phase.end_ns <= ended_ns:
+            span = tracer().start_span(phase.name, context, start_time=phase.start_ns)
+            span.set_attribute(STATUS, Status.OK if phase.ok else Status.FAILED)
+            span.end(end_time=phase.end_ns)
 
 
 def cap_command_line(command_line: str) -> str:

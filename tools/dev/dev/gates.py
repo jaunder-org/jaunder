@@ -9,9 +9,11 @@ verdict.
 import fcntl
 import json
 import os
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from enum import StrEnum
 from pathlib import Path
+
+from opentelemetry.trace import Span
 
 from dev import e2e, index, report, static, steps, trace
 from dev.checkout import clean_tree
@@ -269,10 +271,13 @@ def wasm_tests() -> None:
 
 
 def _producer_and_gate(
-    check: str, phases: Callable[[str], Sequence[trace.Phase]] | None = None
+    check: str, finished: Callable[[Span, int], None] | None = None
 ) -> None:
-    """Realizes a hermetic producer as a GC root, then its hard status gate."""
-    steps.nix_check(check, steps.NIX_LOCK_FLAGS, phases=phases)
+    """Realizes a hermetic producer as a GC root, then its hard status gate.
+
+    `finished` is as for the producer's `build` step (`steps.nix_build`).
+    """
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished)
     steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
 
 
@@ -315,8 +320,18 @@ def coverage_stages(output: str) -> list[trace.Phase]:
     return phases
 
 
+def _coverage_stage_spans(build: Span, started_ns: int) -> None:
+    """Traces the stages the producer's run timed under its `build` step.
+
+    They are read from the GC root, which a failed build leaves on an earlier
+    output whose stages fall outside the step, as a reused output's do.
+    """
+    stages = coverage_stages(f"{steps.GCROOTS}/coverage")
+    trace.record_phases(build, started_ns, stages)
+
+
 def coverage_workflow() -> None:
-    _producer_and_gate("coverage", coverage_stages)
+    _producer_and_gate("coverage", _coverage_stage_spans)
     steps.run(
         "coverage-policy",
         [*steps.tool(COVERAGE_CHECK), "policy", "--out", f"{steps.GCROOTS}/coverage"],

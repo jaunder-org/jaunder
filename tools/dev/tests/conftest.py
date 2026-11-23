@@ -319,7 +319,8 @@ REGISTERED_LATER = 4102444800
 # NIX_VALID, registered long ago; otherwise a build registers it later. A later
 # build first moves that registration to long ago: the earlier step registered
 # it before this one started. An evaluation prints DERIVATION, whose closure
-# is that output, the derivations and CLOSURE's dependencies. The other
+# is that output, the derivations and CLOSURE's dependencies. A build writes
+# NIX_BUILD_STATUS, if set, as the output's `status.json`. The other
 # variables inject evaluation, query and build failures.
 OUTPUT_SIZE = 1000
 DERIVATION = "/nix/store/fake-build.drv"
@@ -393,6 +394,16 @@ elif command == "path-info":
     print(json.dumps({path: entry(path) for path in paths}))
     print("info-warning", file=sys.stderr)
 else:
+    status = env("NIX_BUILD_STATUS")
+    if status is not None:
+        # A producer's own timings, from inside this build: "@T0_MS@" is a
+        # millisecond after it started, and the build lasts 20 ms more.
+        import time
+        started_ms = time.time_ns() // 1_000_000 + 1
+        time.sleep(0.02)
+        pathlib.Path("build-out", "status.json").write_text(
+            status.replace("@T0_MS@", str(started_ms))
+        )
     print("build-out")
     if env("NIX_TWO_OUTPUTS"):
         print("build-out-dev")

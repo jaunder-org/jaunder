@@ -1300,15 +1300,16 @@ dependencies, and no other step records a cache value.
 A producer that times its own phases inside the sandbox gets them traced
 afterwards
 ([producer-timed phases](docs/adr/drafts/dev-traces-producer-timed-phases.md)).
-When the `coverage` step's output is `built`, `dev` reads its `status.json`.
-Every stage that started records `started_unix_ms` (wall clock) beside
-`duration_ms`, and `dev` writes it as a finished child of that step's `build`
-span, at those times, `ok` if the stage succeeded and `failed` otherwise. So
-`build`'s untraced time is the Nix overhead (fetch, unpack, install). A `reused`
-output, a stage that never started, or a missing or malformed `status.json`
-yields no stage spans, and reading it never changes the step. The census build
-also writes Cargo's `--timings` report, copied to the output's
-`diagnostics/cargo-timing.html` when present; CI uploads it in
+Once the `coverage` step's `build` ends, `dev` reads `status.json` through the
+`coverage` GC root. Every stage that started records `started_unix_ms` (wall
+clock) beside `duration_ms`. `dev` writes each such stage that falls inside the
+`build` step as a finished child of it, at those times, `ok` if the stage
+succeeded and `failed` otherwise. So `build`'s untraced time is the Nix overhead
+(fetch, unpack, install). A reused output's or an earlier run's stages fall
+outside the step and are left out. A stage that never started, or a missing or
+malformed `status.json`, yields no stage spans, and reading it never changes the
+step. The census build also writes Cargo's `--timings` report, copied to the
+output's `diagnostics/cargo-timing.html` when present; CI uploads it in
 `validate-coverage-diagnostics`.
 
 A Rust host tool comes from its flake package
