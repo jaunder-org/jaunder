@@ -191,14 +191,17 @@ when the script:
   `tee` the script waits for.
 
 Signal forwarding, supervising long-lived children, or data shaping beyond `jq`
-means Python. All six current scripts conform:
+means Python. Five of the six current scripts conform:
 
 - `pr-land.sh` (polling is delegated to `dev pr-watch`);
 - `pr-cleanup.sh`;
 - `build-csr-assets.sh`;
 - `e2e-workflow` (`xargs -P`, plus a `tee` it waits for);
-- `git-add`;
-- `test-theme-repository-release-version.sh` (`RETURN` cleanup traps).
+- `git-add`.
+
+`test-theme-repository-release-version.sh` does not conform: it cuts a regex and
+a `run:` block out of a workflow file with `sed` by fixed indentation. It moves
+to Python in its own follow-up (#2070).
 
 These amend ADR-0249's "no shell exception is added". ADR-0249 rejected bash for
 exactly the capability this rule excludes: forwarding signals to a child.
@@ -226,6 +229,8 @@ exactly the capability this rule excludes: forwarding signals to a child.
   - perf-data: ADR-0241, ADR-0251, ADR-0258, and the `performance` description
     in `docs/ARCHITECTURE.md`.
   - qualification: ADR-0239, ADR-0225, ADR-0247, ADR-0251, ADR-0258.
+- File a fifth follow-up (#2070) to port the non-conforming
+  `test-theme-repository-release-version.sh` to Python.
 - Comment on the existing issues:
   - **#1974:** e2e-local and its supervision code leave host-proof.
     `csr-prerequisite` and `admit-inputs` stay. host-proof sheds tokio,

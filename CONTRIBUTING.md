@@ -2436,11 +2436,11 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
 ## Code conventions
 
 - Use Rust for product code. End-to-end tests use Playwright and TypeScript.
-  Choose the language for infrastructure by how maintainable the code will be,
-  not by startup, compile or port cost
+  Choose the language for development and CI tools by how maintainable the code
+  will be, not by startup, compile or port cost
   ([docs/adr/drafts/tool-language-by-maintainability.md](docs/adr/drafts/tool-language-by-maintainability.md)):
-  - Infrastructure is Python, unless it links product crates it genuinely needs
-    or needs Rust-specific parsing (`syn`, wasm sections).
+  - A tool is Python, unless it links product crates it genuinely needs or needs
+    Rust-specific parsing (`syn`, wasm sections).
   - A tool that needs a product fact (an inventory, a manifest, a format
     version) gets it from a product command or file, not by linking product
     code. If there is no such interface, add one.
@@ -2450,7 +2450,8 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
     check their results, use traps only to remove temporary files or report the
     failed step, and get concurrency only from a standard tool (bounded
     `xargs -P`, a `tee` the script waits for). Signal forwarding, supervising
-    long-lived children, or data shaping beyond `jq` means Python.
+    long-lived children, or data shaping beyond `jq` means Python. Shell inside
+    Nix builders and in GitHub workflow `run:` steps is outside this rule.
 - All Rust code is formatted with `cargo fmt`.
 - Files containing Leptos `view!` macros are additionally formatted with
   `leptosfmt` (run it first, then `cargo fmt`).

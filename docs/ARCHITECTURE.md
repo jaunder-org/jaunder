@@ -5305,10 +5305,12 @@ than linked product code, and a format that Rust writes and another language
 reads is validated against a JSON Schema generated from the writer's types. Bash
 is limited to `scripts/` host scripts that run commands and check their results,
 with traps only for cleanup or failed-step reporting and concurrency only from
-standard tools; signal forwarding or child supervision means Python. Under that
-decision `e2e-local`, `pr-observer` and `perf-data` move to Python and
-`qualification` is retired for a scheduled upgrade test, each in its own
-follow-up. Until then the placements below describe the current tree:
+standard tools; signal forwarding, supervising long-lived children, or data
+shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
+steps is outside the rule. Under that decision `e2e-local`, `pr-observer` and
+`perf-data` move to Python and `qualification` is retired for a scheduled
+upgrade test, each in its own follow-up. Until then the placements below
+describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`

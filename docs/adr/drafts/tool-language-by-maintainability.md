@@ -27,7 +27,7 @@ because much of the Rust existed only to be Rust.
 
 **Criterion.** The deciding question is ongoing maintainability: how readable
 and changeable the code is for what it actually does. Port cost is noted but
-does not decide a verdict. Infrastructure is Python unless it:
+does not decide a verdict. A development or CI tool is Python unless it:
 
 - links product crates it genuinely needs, such as a storage benchmark driving
   `storage`; or
@@ -59,9 +59,12 @@ conforms when it:
 
 Signal forwarding, supervising long-lived children, or data shaping beyond `jq`
 means Python. This amends ADR-0249's "no shell exception is added". ADR-0249
-rejected bash for exactly the capability this rule excludes. All six current
-scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
-`e2e-workflow`, `git-add` and `test-theme-repository-release-version.sh`.
+rejected bash for exactly the capability this rule excludes. Five of the six
+current scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
+`e2e-workflow` and `git-add`. `test-theme-repository-release-version.sh` does
+not: it cuts a regex and a `run:` block out of a workflow file with `sed` by
+fixed indentation, which is data shaping beyond `jq`. It moves to Python
+([#2070](https://github.com/jaunder-org/jaunder/issues/2070)).
 
 **Verdicts.**
 
@@ -69,7 +72,8 @@ scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
   sequence (collector, server, seed, Playwright) with cleanup and signal
   handling, the `pg-run` shape. The Rust needs two Tokio runtimes as a
   sync/async bridge, error types that carry the session back for cleanup, and
-  about 400 lines of per-branch failure records. It shares no product types.
+  about 400 lines of per-branch failure records. It shares no product types, and
+  it is host-proof's only user of tokio, processkit and xshell.
 - **`pr-observer` is rewritten in Python, starting with a feature audit.** It
   calls `gh api` as a subprocess, walks untyped JSON by hand, hand-rolls RFC3339
   dates, reimplements GitHub Actions' job graph and matrix expansion, and
@@ -80,7 +84,8 @@ scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
   [ADR-0195](../0195-dynamic-pr-check-classification.md),
   [ADR-0198](../0198-active-workflow-incomplete-pr-evidence.md),
   [ADR-0220](../0220-explicit-one-shot-pr-reenqueue.md) and
-  [ADR-0240](../0240-just-frontdoors-host-pr-observer.md).
+  [ADR-0240](../0240-just-frontdoors-host-pr-observer.md), including the
+  exit-code and JSON contract that `pr-land.sh` relies on.
 - **`perf-data` moves to Python, against generated schemas.** The host CLI links
   no product code. The `performance` writer side stays Rust: the dataset plan,
   the manifest and fragment types, `test-support`'s seeder and `perf-producer`,
@@ -106,7 +111,8 @@ scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
     [ADR-0247](../0247-host-tool-json-report-contract.md), ADR-0258.
   - `pr-observer`: ADR-0240, ADR-0258.
   - `perf-data`: [ADR-0241](../0241-performance-workflow-ownership.md),
-    [ADR-0251](../0251-dev-runner-replaces-just.md), ADR-0258.
+    [ADR-0251](../0251-dev-runner-replaces-just.md), ADR-0258, and the
+    `performance` description in `docs/ARCHITECTURE.md`.
   - `qualification`: ADR-0239, [ADR-0225](../0225-nix-cached-host-tooling.md),
     ADR-0247, ADR-0251, ADR-0258.
 - Until each follow-up lands, the current tool stays in place.
