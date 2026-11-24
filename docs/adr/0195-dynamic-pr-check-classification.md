@@ -1,6 +1,9 @@
 # ADR-0195: Classify PR check failures from the workflow dependency graph
 
-- Status: accepted
+- Status: superseded
+- Note: as of 2026-11-24 the job-graph classification was replaced by workflow
+  membership (`docs/adr/drafts/pr-watch-native-python-observer.md`, #2067),
+  which restates the check-state rules that still hold
 - Date: 2026-09-15
 - Issue: [#1498](https://github.com/jaunder-org/jaunder/issues/1498)
 

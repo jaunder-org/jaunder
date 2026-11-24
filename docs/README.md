@@ -223,10 +223,10 @@ convention). See the Status column below for each ADR's current status.
 | [0192](adr/0192-split-ci-non-e2e-validation-lanes.md)                    | Split CI non-e2e validation into core and coverage lanes                                                     | accepted   |
 | [0193](adr/0193-authenticated-root-redirects-home.md)                    | Authenticated root visits redirect to Home                                                                   | accepted   |
 | [0194](adr/0194-passkeys-are-additive-cookie-session-credentials.md)     | Passkeys are additive cookie-Session credentials                                                             | accepted   |
-| [0195](adr/0195-dynamic-pr-check-classification.md)                      | Classify PR check failures from the workflow dependency graph                                                | accepted   |
+| [0195](adr/0195-dynamic-pr-check-classification.md)                      | Classify PR check failures from the workflow dependency graph                                                | superseded |
 | [0196](adr/0196-single-host-nixos-deployment-stack.md)                   | Single-Host NixOS Deployment Stack                                                                           | accepted   |
 | [0197](adr/0197-theme-repository-authoring-contract.md)                  | Theme repositories use the Jaunder CLI for canonical artifacts                                               | accepted   |
-| [0198](adr/0198-active-workflow-incomplete-pr-evidence.md)               | Active-workflow missing PR targets are incomplete evidence                                                   | accepted   |
+| [0198](adr/0198-active-workflow-incomplete-pr-evidence.md)               | Active-workflow missing PR targets are incomplete evidence                                                   | superseded |
 | [0199](adr/0199-durable-atompub-create-intent.md)                        | Make AtomPub create intent durable across client restarts                                                    | accepted   |
 | [0200](adr/0200-revalidated-matched-post-pull.md)                        | Permit revalidated replacement when pulling a matched Post                                                   | accepted   |
 | [0201](adr/0201-emacs-local-post-link-round-trip.md)                     | Emacs Local Post Links Round-Trip Through Canonical URLs                                                     | accepted   |

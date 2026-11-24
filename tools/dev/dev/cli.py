@@ -2,6 +2,7 @@
 
 import dataclasses
 import functools
+import re
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ from dev import (
     gates,
     issues,
     perf,
+    pr_watch,
     qualification,
     static,
     steps,
@@ -246,11 +248,6 @@ for _binary, _summary in {
         _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
     )
 _forwarding(
-    "pr-watch",
-    forwarding.pr_watch,
-    "Read-only caller-actionable PR observation; only this tool polls GitHub.",
-)
-_forwarding(
     "org-timezone-manifest",
     forwarding.org_timezone_manifest,
     "Timezone manifest of explicit local Org originals; no checkout admission.",
@@ -376,6 +373,87 @@ def issue_create(blockers: tuple[str, ...], **decisions: str) -> None:
 def issue_edit(number: str, blockers: tuple[str, ...], **decisions: str) -> None:
     """Replace issue NUMBER's metadata with explicit decisions; readback verifies."""
     _gate(lambda: issues.edit(number, issues.Decisions(**decisions), blockers))
+
+
+_SHA = re.compile("[0-9a-f]{40}")
+_RUN_URL = re.compile(r"https://github\.com/[^/]+/[^/]+/actions/runs/[0-9]+")
+
+
+def _matching(
+    pattern: re.Pattern[str], expected: str
+) -> Callable[[click.Context, click.Parameter, str | None], str | None]:
+    def validate(
+        _context: click.Context, _parameter: click.Parameter, value: str | None
+    ) -> str | None:
+        if value is not None and not pattern.fullmatch(value):
+            raise click.BadParameter(f"expected {expected}")
+        return value
+
+    return validate
+
+
+_full_sha = _matching(_SHA, "a full lowercase 40-hex head SHA")
+
+
+@cli.command("pr-watch")
+@click.argument("number", required=False, type=click.IntRange(min=0))
+@click.option(
+    "--interval",
+    type=click.IntRange(min=5),
+    default=pr_watch.Watch.interval,
+    show_default=True,
+    metavar="SECONDS",
+    help="Seconds between polls.",
+)
+@click.option(
+    "--timeout",
+    type=click.IntRange(min=1),
+    default=pr_watch.Watch.timeout,
+    show_default=True,
+    metavar="MINUTES",
+    help="Minutes to observe before reporting timed-out.",
+)
+@click.option("--once", is_flag=True, help="Observe one snapshot instead of polling.")
+@click.option(
+    "--until",
+    type=click.Choice(["merged"]),
+    help="Continue across ready-to-land while another actor may arm the merge.",
+)
+@click.option(
+    "--expected-head",
+    callback=_full_sha,
+    help="Bind every verdict, even merged, to this approved head.",
+)
+@click.option(
+    "--acknowledged-ejection",
+    callback=_matching(_RUN_URL, "a GitHub Actions run URL"),
+    help="A historical failed merge-group run URL, disregarded as an ejection "
+    "only; needs --expected-head and authorizes nothing.",
+)
+@click.option(
+    "--observed-queued-head",
+    callback=_full_sha,
+    help="Positive same-head queue readback from a separate action; must "
+    "equal --expected-head.",
+)
+def pr_watch_command(**options: Any) -> None:
+    """Read-only caller-actionable PR observation. Never merges or mutates.
+
+    Omit NUMBER to observe the open PR for the current branch.
+    """
+    watch = pr_watch.Watch(**options)
+    if watch.once and watch.until:
+        raise click.UsageError("--once conflicts with --until")
+    if watch.expected_head is None and (
+        watch.acknowledged_ejection or watch.observed_queued_head
+    ):
+        raise click.UsageError(
+            "--acknowledged-ejection and --observed-queued-head require --expected-head"
+        )
+    # Queue history is evidence about one head only.
+    if watch.observed_queued_head not in (None, watch.expected_head):
+        raise click.UsageError("observed queued head must equal expected head")
+    _gate(lambda: pr_watch.run(watch))
 
 
 @cli.command("pr-land", context_settings={"ignore_unknown_options": True})

@@ -170,11 +170,13 @@ def _supervise(
     capture: bool,
     environment: Environment | None = None,
     stdin: bytes | None = None,
-) -> tuple[int, bool, bytes]:
+    capture_stderr: bool = False,
+) -> tuple[int, bool, bytes, bytes]:
     """Runs the child to completion, relaying termination requests to it.
 
-    With `capture`, the child's stdout is returned instead of passed through;
-    `stdin`, if given, is the child's whole standard input.
+    With `capture`, the child's stdout is returned instead of passed through,
+    and with `capture_stderr` its stderr likewise; `stdin`, if given, is the child's
+    whole standard input.
     """
     child_environment = changed(
         changed(trace.child_environment(), WITHOUT_GIT_OVERRIDES), environment
@@ -189,30 +191,31 @@ def _supervise(
                 env=child_environment,
                 stdin=None if stdin is None else subprocess.PIPE,
                 stdout=subprocess.PIPE if capture else None,
+                stderr=subprocess.PIPE if capture_stderr else None,
             )
         except FileNotFoundError as error:
             print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
-            return 127, False, b""
+            return 127, False, b"", b""
         except OSError as error:
             # Found but not runnable (not executable, bad interpreter): a
             # shell's 126.
             print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
-            return 126, False, b""
+            return 126, False, b"", b""
         _signals.child = child
         for signum in _signals.pending:
             child.send_signal(signum)
-        output, _ = child.communicate(stdin)
+        output, diagnostics = child.communicate(stdin)
     finally:
         _signals.supervising = False
         _signals.child = None
-    output = output or b""
+    output, diagnostics = output or b"", diagnostics or b""
     if child.returncode < 0:
-        return 128 - child.returncode, True, output
+        return 128 - child.returncode, True, output, diagnostics
     if child.returncode == 0 and _signals.forwarded:
         # The request was for the whole gate, not just this step: a child that
         # handles it by exiting cleanly must not let the next step start.
-        return 128 + _signals.forwarded[0], True, output
-    return child.returncode, False, output
+        return 128 + _signals.forwarded[0], True, output, diagnostics
+    return child.returncode, False, output, diagnostics
 
 
 @contextlib.contextmanager
@@ -263,7 +266,7 @@ def _run(
     with _step(name, argv) as span:
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
-        code, signalled, output = _supervise(argv, capture, environment, stdin)
+        code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
         if render is not None:
             rendered = render(output)
             sys.stdout.buffer.write(output if rendered is None else rendered.encode())
@@ -334,6 +337,22 @@ def output(
     `stdin`, if given, is the step's whole standard input.
     """
     return _run(name, argv, True, environment, stdin=stdin)
+
+
+def captured(name: str, argv: Sequence[str]) -> tuple[int, bytes, bytes]:
+    """Runs one step for its status, stdout and stderr, which the user never sees.
+
+    Unlike `output`, a failing child is an answer for the caller to judge, not
+    the end of the gate; only a termination request still stops it.
+    """
+    with _step(name, argv) as span:
+        code, signalled, output, diagnostics = _supervise(
+            argv, True, capture_stderr=True
+        )
+        _record_outcome(span, code, signalled)
+    if signalled:
+        raise StepFailed(code, signalled)
+    return code, output, diagnostics
 
 
 def _shell_text(output: bytes) -> str:

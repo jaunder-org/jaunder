@@ -202,7 +202,6 @@ TOOL_PACKAGES = {
     ),
     "coverage-check": ("coverage-check",),
     "perf-data": ("perf-data",),
-    "pr-observer": ("pr-observer",),
     "system-artifacts": ("system-artifacts",),
 }
 

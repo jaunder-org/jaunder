@@ -105,13 +105,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         ],
     ),
     (
-        ["pr-watch", "731", "--once", "--expected-head", "f" * 40],
-        [
-            *build("pr-observer"),
-            words("pr-observer watch 731 --once --expected-head", "f" * 40),
-        ],
-    ),
-    (
         ["org-timezone-manifest", "a.org", SHELL_SYNTAX],
         [
             *build("repository-policy"),
