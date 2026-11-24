@@ -492,72 +492,37 @@ fn compile_inventory(
     })
 }
 
-/// Qualification-only A/B system artifact inputs.
-///
-/// This module exists only in host tests and explicit internal qualification
-/// builds. Normal releases cannot name a fixture or select alternate styling.
-#[cfg(any(test, feature = "qualification"))]
-pub mod qualification {
-    use super::*;
+/// Test-only inventories that each change one declared artifact of the
+/// release inventory, for tests of what an upgrade between releases retains.
+#[cfg(any(test, feature = "test-utils"))]
+pub mod test_variants {
+    use super::{
+        APPLICATION_CSS, READER_CSS, STUDIO_CSS, SystemArtifactInventory, SystemThemeError,
+        TERMINAL_CSS, compile_inventory,
+    };
 
-    /// Closed fixture selection for the later deployment-transition proof.
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum Fixture {
-        A,
-        BApplication,
-        BTheme,
-    }
-
-    impl Fixture {
-        /// Parses only the three internal qualification fixture tokens.
-        ///
-        /// # Errors
-        ///
-        /// Returns an error for every token outside the closed A/B fixture set.
-        pub fn parse(value: &str) -> Result<Self, String> {
-            match value {
-                "a" => Ok(Self::A),
-                "b-app" => Ok(Self::BApplication),
-                "b-theme" => Ok(Self::BTheme),
-                _ => Err(format!(
-                    "unknown system-artifact qualification fixture `{value}`"
-                )),
-            }
-        }
-
-        #[must_use]
-        pub const fn token(self) -> &'static str {
-            match self {
-                Self::A => "a",
-                Self::BApplication => "b-app",
-                Self::BTheme => "b-theme",
-            }
-        }
-    }
-
-    /// Produces a fixture inventory through the same closed release producer.
+    /// The release inventory with one more application stylesheet declaration.
     ///
     /// # Errors
     ///
-    /// Returns the normal package-validation/compiler failure when a fixture
-    /// source cannot pass the ordinary bundled Theme Package boundary.
-    pub fn compile(fixture: Fixture) -> Result<SystemArtifactInventory, SystemThemeError> {
-        const APPLICATION_DECLARATION: &[u8] = b"\n.j-topbar { border-bottom-color: #4f46e5; }\n";
-        const STUDIO_DECLARATION: &[u8] = b"\nbody { --accent: #0f766e; }\n";
+    /// Returns the normal compiler failure when the altered source cannot pass
+    /// the ordinary bundled Theme Package boundary.
+    pub fn changed_application() -> Result<SystemArtifactInventory, SystemThemeError> {
+        let mut application = APPLICATION_CSS.to_vec();
+        application.extend_from_slice(b"\n.j-topbar { border-bottom-color: #4f46e5; }\n");
+        compile_inventory(&application, [TERMINAL_CSS, STUDIO_CSS, READER_CSS])
+    }
 
-        match fixture {
-            Fixture::A => compile_system_artifact_inventory(),
-            Fixture::BApplication => {
-                let mut application = APPLICATION_CSS.to_vec();
-                application.extend_from_slice(APPLICATION_DECLARATION);
-                compile_inventory(&application, [TERMINAL_CSS, STUDIO_CSS, READER_CSS])
-            }
-            Fixture::BTheme => {
-                let mut studio = STUDIO_CSS.to_vec();
-                studio.extend_from_slice(STUDIO_DECLARATION);
-                compile_inventory(APPLICATION_CSS, [TERMINAL_CSS, &studio, READER_CSS])
-            }
-        }
+    /// The release inventory with one more Studio theme declaration.
+    ///
+    /// # Errors
+    ///
+    /// Returns the normal compiler failure when the altered Studio source
+    /// cannot pass the ordinary bundled Theme Package boundary.
+    pub fn changed_studio() -> Result<SystemArtifactInventory, SystemThemeError> {
+        let mut studio = STUDIO_CSS.to_vec();
+        studio.extend_from_slice(b"\nbody { --accent: #0f766e; }\n");
+        compile_inventory(APPLICATION_CSS, [TERMINAL_CSS, &studio, READER_CSS])
     }
 }
 
@@ -610,7 +575,7 @@ fn compile_bundled_theme_with_assets(
 
 /// Closed test-only inventories that share one validated package asset across
 /// selected bundled roles. They never alter the trusted application role or
-/// ordinary/qualification release inputs.
+/// the release inputs.
 #[cfg(any(test, feature = "test-utils"))]
 pub mod shared_asset_fixture {
     use super::*;
@@ -859,26 +824,10 @@ mod tests {
     }
 
     #[test]
-    fn qualification_fixture_tokens_round_trip_and_reject_unknown() {
-        for (token, expected) in [
-            ("a", qualification::Fixture::A),
-            ("b-app", qualification::Fixture::BApplication),
-            ("b-theme", qualification::Fixture::BTheme),
-        ] {
-            let actual = qualification::Fixture::parse(token).expect("known fixture parses");
-            assert_eq!(actual, expected);
-            assert_eq!(actual.token(), token);
-        }
-        assert!(qualification::Fixture::parse("unknown").is_err());
-    }
-
-    #[test]
     fn staged_loader_replays_a_b_application_b_theme_and_shared_assets() {
-        let a = qualification::compile(qualification::Fixture::A).expect("A compiles");
-        let b_application = qualification::compile(qualification::Fixture::BApplication)
-            .expect("B application compiles");
-        let b_theme =
-            qualification::compile(qualification::Fixture::BTheme).expect("B theme compiles");
+        let a = compile_system_artifact_inventory().expect("A compiles");
+        let b_application = test_variants::changed_application().expect("B application compiles");
+        let b_theme = test_variants::changed_studio().expect("B theme compiles");
         let png = include_bytes!("../../testdata/theme-repository/minimal/preview.png");
         let shared = shared_asset_fixture::compile(shared_asset_fixture::SharingFixture::Both, png)
             .expect("asset-bearing fixture compiles");
@@ -1127,9 +1076,8 @@ mod tests {
 
     #[test]
     fn staged_portable_package_source_replays_compiler_minted_identity_for_a_and_b_theme() {
-        let a = qualification::compile(qualification::Fixture::A).expect("A compiles");
-        let b_theme =
-            qualification::compile(qualification::Fixture::BTheme).expect("B-theme compiles");
+        let a = compile_system_artifact_inventory().expect("A compiles");
+        let b_theme = test_variants::changed_studio().expect("B-theme compiles");
         replay(a.theme(Theme::Studio));
         replay(b_theme.theme(Theme::Studio));
         assert_ne!(
@@ -1147,12 +1095,10 @@ mod tests {
     }
 
     #[test]
-    fn qualification_variants_change_only_the_declared_artifact_address() {
-        let a = qualification::compile(qualification::Fixture::A).expect("A compiles");
-        let b_app =
-            qualification::compile(qualification::Fixture::BApplication).expect("B-app compiles");
-        let b_theme =
-            qualification::compile(qualification::Fixture::BTheme).expect("B-theme compiles");
+    fn test_variants_change_only_the_declared_artifact() {
+        let a = compile_system_artifact_inventory().expect("A compiles");
+        let b_app = test_variants::changed_application().expect("B-app compiles");
+        let b_theme = test_variants::changed_studio().expect("B-theme compiles");
 
         assert_ne!(
             a.application().content_digest(),
@@ -1204,22 +1150,5 @@ mod tests {
             direct.revision_digest(),
             inventory.theme(Theme::Terminal).revision_digest()
         );
-    }
-
-    #[test]
-    fn normal_inventory_is_the_unaltered_qualification_fixture() {
-        let normal = compile_system_artifact_inventory().expect("normal inventory compiles");
-        let fixture =
-            qualification::compile(qualification::Fixture::A).expect("A fixture compiles");
-        assert_eq!(
-            normal.application().content_digest(),
-            fixture.application().content_digest()
-        );
-        for theme in [Theme::Terminal, Theme::Studio, Theme::Reader] {
-            assert_eq!(
-                normal.theme(theme).revision_digest(),
-                fixture.theme(theme).revision_digest(),
-            );
-        }
     }
 }

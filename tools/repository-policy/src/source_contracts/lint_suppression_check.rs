@@ -43,8 +43,6 @@ const POLICED_ROOTS: &[&str] = &[
     "tools/host-proof/src",
     "tools/host-proof/tests",
     "tools/perf-producer/src",
-    "tools/qualification/src",
-    "tools/qualification/tests",
     "tools/system-artifacts/src",
 ];
 const POLICED_FILES: &[&str] = &["server/build.rs"];

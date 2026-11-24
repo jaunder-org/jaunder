@@ -1099,10 +1099,9 @@ mod tests {
     async fn system_upgrade_rollback_and_later_detachment_preserve_retention(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BApplication).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_application().unwrap();
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),
@@ -1201,13 +1200,12 @@ mod tests {
     async fn system_admission_leaves_unrelated_retained_history_untouched_and_preserves_rollback_deadlines(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
-
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).expect("compile release A");
-        let b_application =
-            qualification::compile(Fixture::BApplication).expect("compile application release B");
-        let b_theme = qualification::compile(Fixture::BTheme).expect("compile theme release B");
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile release A");
+        let b_application = host::system_theme::test_variants::changed_application()
+            .expect("compile application release B");
+        let b_theme =
+            host::system_theme::test_variants::changed_studio().expect("compile theme release B");
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),
@@ -1294,10 +1292,9 @@ mod tests {
     #[apply(backends)]
     #[tokio::test]
     async fn system_theme_upgrade_changes_only_selected_package_identity(#[case] backend: Backend) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_studio().unwrap();
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),
@@ -1413,10 +1410,9 @@ mod tests {
     async fn startup_collects_expired_system_content_and_keeps_live_release_bytes(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BApplication).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_application().unwrap();
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),
@@ -1467,10 +1463,9 @@ mod tests {
     async fn system_admission_callback_failure_rolls_back_the_entire_inventory(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_studio().unwrap();
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),
@@ -1586,10 +1581,9 @@ mod tests {
     async fn shared_system_and_custom_content_cannot_collect_the_other_live_owner(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_studio().unwrap();
         let compiled = a.theme(common::theme::Theme::Studio).revision();
         let manager = ThemeAssetManager::new(
             env.themes(),
@@ -1682,14 +1676,12 @@ mod tests {
     async fn concurrent_system_installs_publish_one_complete_release_inventory(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
-
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).expect("compile release A");
-        let b_application = qualification::compile(Fixture::BApplication)
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile release A");
+        let b_application = host::system_theme::test_variants::changed_application()
             .expect("compile application-only release B");
-        let b_theme =
-            qualification::compile(Fixture::BTheme).expect("compile theme-only release B");
+        let b_theme = host::system_theme::test_variants::changed_studio()
+            .expect("compile theme-only release B");
         let root = Arc::new(env.base.path().to_path_buf());
         let first =
             ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
@@ -1820,11 +1812,10 @@ mod tests {
     async fn expired_system_collection_racing_reinstallation_preserves_reinstalled_bytes(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
-
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).expect("compile release A");
-        let b = qualification::compile(Fixture::BApplication).expect("compile release B");
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile release A");
+        let b =
+            host::system_theme::test_variants::changed_application().expect("compile release B");
         let root = Arc::new(env.base.path().to_path_buf());
         let collector =
             ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
@@ -1899,11 +1890,10 @@ mod tests {
     async fn system_install_commit_acknowledgement_loss_retains_recoverable_inventory(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
-
         let env = backend.setup().await;
-        let a = qualification::compile(Fixture::A).expect("compile release A");
-        let b = qualification::compile(Fixture::BApplication).expect("compile release B");
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile release A");
+        let b =
+            host::system_theme::test_variants::changed_application().expect("compile release B");
         let root = Arc::new(env.base.path().to_path_buf());
         let normal =
             ThemeAssetManager::new(env.themes(), env.write_scope().clone(), Arc::clone(&root));
@@ -2016,10 +2006,9 @@ mod tests {
     async fn system_reconciliation_reclaims_complete_orphans_and_rejects_installed_corruption(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
-
         let env = backend.setup().await;
-        let inventory = qualification::compile(Fixture::A).expect("compile release A");
+        let inventory =
+            host::system_theme::compile_system_artifact_inventory().expect("compile release A");
         let manager = ThemeAssetManager::new(
             env.themes(),
             env.write_scope().clone(),

@@ -75,13 +75,13 @@ the host coverage denominator
 
 One sibling tree is outside the root workspace as its own cargo workspace:
 `tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
-`host-proof`, `host-tool`, `perf-producer`, `performance`, `qualification`,
-`repository-policy`, `system-artifacts`, and `traced-run`). The host-side dev/CI
-commands live in its concern packages rather than a separate driver workspace,
-and each executable that runs inside a Nix derivation lives in the crate that
-owns its logic ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
-`performance` is the pure versioned dataset, producer-artifact, statistics, and
-comparison library shared by sandbox producers and host analysis under
+`host-proof`, `host-tool`, `perf-producer`, `performance`, `repository-policy`,
+`system-artifacts`, and `traced-run`). The host-side dev/CI commands live in its
+concern packages rather than a separate driver workspace, and each executable
+that runs inside a Nix derivation lives in the crate that owns its logic
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). `performance` is
+the pure versioned dataset, producer-artifact, statistics, and comparison
+library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
 provides the host-only `perf-data` CLI for evidence policy; the Nix performance
 producers run the separate `perf-producer` crate, which links the library with
@@ -2982,7 +2982,7 @@ aliases or SPA fallback. Previously cached legacy responses cannot be evicted by
 this change; legacy documents may be unstyled until refreshed. This amends
 ADR-0003's serving mechanism while preserving single-binary provisioning and the
 independent CSR and Media contracts. The bounded inventory, cache policies,
-upgrade/restore instructions, and qualification limits are in
+upgrade/restore instructions, and upgrade-test limits are in
 [application assets](application-assets.md).
 
 ### Current CLI surface
@@ -3221,67 +3221,38 @@ remain outside the stack contract. VictoriaTraces supports fresh deployment and
 same-version restart, not compatible on-disk upgrades or stable third-party
 query APIs.
 
-**Production baseline qualification.** Four `dev` workflows are the opt-in
-public catalog: `production-baseline-discover <revision>`,
-`production-baseline-accept <source> <target>`,
-`production-baseline-qualify-styling`, and `production-baseline-smoke`.
-Discover/accept require a clean checkout; `dev` captures full harness `HEAD`,
-resolves product expressions to commit IDs, rejects equal acceptance commits or
-an empty target, checks canonical origin, then issues one
-`git fetch --quiet --no-write-fetch-head --refetch origin <commits>` over the
-distinct harness/source/target set. Refetch bypasses Git's locally-complete fast
-path, proving origin serves the requested objects rather than named-branch
-reachability; larger transfers and normal Git maintenance are accepted costs.
-The host binds expected harness SHA to its clean `SourcePin` before Nix
-admission or lifecycle mutation, without repeating Git resolution or
-origin/fetch checks. Styling similarly binds clean expected `HEAD` but admits a
-local immutable `git+file:` source, with no origin/upstream Git-network
-prerequisite. Smoke uses the mutable current-checkout `path:` flake, without
-qualification source admission or evidence publication.
+**Upgrade test.** One NixOS VM test per backend asks whether a site an earlier
+Jaunder wrote still works after an in-place upgrade
+([upgrade test decision](adr/drafts/upgrade-test.md)). The earlier build's own
+`jaunder`, `test-support` and e2e package create the production-baseline records
+and verify them, as the service user and with only earlier binaries touching the
+database. `switch-to-configuration test` then moves the node to a specialisation
+that differs only in `services.jaunder.package`. The service stops gracefully,
+and the current `preStart` migrates the database in place, because restore
+requires an exact schema match
+([ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)). The current
+e2e package verifies the same records from the author's saved browser session
+and mints and revokes an App Password. There are no goldens and no second
+assertion suite; the ordinary `production-baseline-flow` spec keeps create and
+verify in agreement within one build.
 
-Nix supplies the selected immutable executable, helper, browser, harness and VM
-identities. The narrow host-only leaf retains source/drift checks, Nix output
-admission and GC roots, secure shared lease, restricted workspaces, VM/proxy/
-browser/backend lifecycle, fixture/protocol comparisons, canaries, cleanup,
-evidence validation/publication and failure attribution. These workflows return
-plain status and diagnostics rather than the shared host-tool JSON step report.
-The `qualification-host` executable (`tools/qualification`) stays outside the
-product workspace and derivations. `productionBaselineVm` supplies immutable
-packages through an internal qualification VM module seam, not a supported
-`services.jaunder` option. It adds no lifecycle output to `checks`; Nix never
-invokes `qualification-host`.
-
-Discovery and non-release acceptance use shared Chromium Playwright behavior on
-fresh SQLite and PostgreSQL deployments, including restart, reboot and all four
-exact-schema restore directions. Ordinary evidence is JSON-authoritative,
-schema-validated and Markdown-derived/parity-checked, with an exact summary
-pair, canary/forbidden-content and prohibited-file/symlink scans, collision
-refusal and atomic publication under ignored
-`.xtask/production-baseline-reports/`. A valid sanitized failed product/protocol
-outcome may be published and still exits nonzero.
-Collection/rendering/schema/parity/sanitization, required cleanup or
-source-recheck failures publish nothing. Styling retains separate identity/
-phase/context validation, independent canary scans of JSON and Markdown, private
-staging, cleanup and source recheck before rename; it publishes only passing
-runs under `.xtask/review/evidence/styling-qualification/`, with no ordinary
-schema/parity or failed-report contract. Smoke publishes neither form. Raw state
-and generated secrets remain restricted and ignored.
-
-The
-[Just qualification workflow ownership decision](adr/0239-qualification-workflow-ownership.md)
-records this split; its workflows are now `dev` commands
-([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Actual
-qualification still requires executed Nix-selected harness/VM evidence; source
-migration and native host tests are not qualification results. Procedures and
-explicit non-claims live in
-[the production baseline runbook](production-baseline.md) and
-[the styling qualification guide](application-assets.md#qualification-and-limits).
-This is not a public CA/DNS, performance or release claim
-([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
+`upgrade.yml` upgrades from the previous tag on a `v*` push, from the head
+commit of its newest successful `main` run on a weekly cron, and from an
+explicit `from` on manual dispatch. `dev upgrade-test --from <rev> <backend>`
+runs one backend locally and `dev upgrade-dispatch` starts the workflow. The
+flake exports `upgradeLib.mkUpgradeCheck`; `dev` loads the earlier flake with
+`builtins.getFlake` from the checkout's own Git objects, so the main flake gains
+no input and ordinary CI never builds an earlier revision
+([ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md)). The
+baseline state and the demo manifest are a cross-version contract: readers
+accept every version written since the latest tag. The test replaced
+`tools/qualification` and its `production-baseline-*` workflows
+([superseded qualification workflow ownership](adr/0239-qualification-workflow-ownership.md),
+[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md),
 [ADR-0141](adr/0141-cargo-workspace-execution-boundaries.md),
-[ADR-0142](adr/0142-declarative-nixos-deployment-package-outputs.md),
-[ADR-0174](adr/0174-backup-format-and-schema-compatibility.md), and
-[ADR-0225](adr/0225-nix-cached-host-tooling.md)).
+[ADR-0225](adr/0225-nix-cached-host-tooling.md)). It does not cover breakage
+inside the NixOS module itself, a browser retained across the upgrade, or the
+earlier build's stylesheet URLs.
 
 ## Emacs Protocol Client
 
@@ -4269,14 +4240,14 @@ VMs, one serial-special VM selects
 and one serial-theme VM selects `<browser>-special-theme`. The unsplit Chromium
 graph
 `chromium-visual → chromium → chromium-admin-site → chromium-theme → chromium-admin`
-remains for host E2E, production-baseline qualification and wasm coverage. Each
-visual project selects the existing `@visual` behavioral tests, disables
-retries, and reuses the reviewed `<browser>-visual` baseline paths rather than
-minting topology-qualified images. Ordinary excludes visual and global-state
-specs. Chromium and Firefox each own one Linux baseline per state under the
-owning spec's adjacent `*.spec.ts-snapshots/` directory. The filename carries
-browser identity but not backend, so SQLite and PostgreSQL compare the same
-expected image. WebKit has no visual project or baseline.
+remains for host E2E and wasm coverage. Each visual project selects the existing
+`@visual` behavioral tests, disables retries, and reuses the reviewed
+`<browser>-visual` baseline paths rather than minting topology-qualified images.
+Ordinary excludes visual and global-state specs. Chromium and Firefox each own
+one Linux baseline per state under the owning spec's adjacent
+`*.spec.ts-snapshots/` directory. The filename carries browser identity but not
+backend, so SQLite and PostgreSQL compare the same expected image. WebKit has no
+visual project or baseline.
 
 Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
 fontconfig universe to both host and VM browser processes, while
@@ -4568,7 +4539,7 @@ That decision supersedes the Just-ownership parts of the
 [Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md),
 [Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md),
 [qualification workflow ownership](adr/0239-qualification-workflow-ownership.md)
-and
+(itself since superseded by the [upgrade test](adr/drafts/upgrade-test.md)) and
 [Just frontdoors with a host-only PR observer](adr/0240-just-frontdoors-host-pr-observer.md),
 the `just perf*` front doors of the
 [performance workflow ownership decision](adr/0241-performance-workflow-ownership.md)
@@ -4576,19 +4547,19 @@ and the `just sandbox` front door of the
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
 the workflows those decisions defined keep their names, arguments and steps as
 `dev` subcommands. Direct tools and concern-owned host executables in the
-`tools` workspace (`repository-policy`, `host-proof`, `coverage-check`,
-`qualification-host`) perform the work. This is not a blanket Rust-necessity or
-permanent-ownership claim. The Rust gate catalogs, phases, execution-policy
-switches and old cargo workflow aliases are removed, not forwarded. A step is a
-Python function call that runs one argv list without a shell; composition is
-ordinary Python, a gate stops at its first failing step and exits with that
-child's status, and there is no gate-wide result contract. Each host tool prints
-its own single JSON step report on stdout, which `dev` renders, and its exit
-status is the verdict. `dev static <name>` supplies formatting, Prettier,
-ast-grep, byte-compilation, cargo-deny, TSC, ERT and the six Clippy definitions
-to host and hermetic consumers. The obsolete static catalog, duplicate Leptosfmt
-source and the compiled static-check command are retired. The remaining
-in-derivation endpoints moved into the crates that own their logic
+`tools` workspace (`repository-policy`, `host-proof`, `coverage-check`) perform
+the work. This is not a blanket Rust-necessity or permanent-ownership claim. The
+Rust gate catalogs, phases, execution-policy switches and old cargo workflow
+aliases are removed, not forwarded. A step is a Python function call that runs
+one argv list without a shell; composition is ordinary Python, a gate stops at
+its first failing step and exits with that child's status, and there is no
+gate-wide result contract. Each host tool prints its own single JSON step report
+on stdout, which `dev` renders, and its exit status is the verdict.
+`dev static <name>` supplies formatting, Prettier, ast-grep, byte-compilation,
+cargo-deny, TSC, ERT and the six Clippy definitions to host and hermetic
+consumers. The obsolete static catalog, duplicate Leptosfmt source and the
+compiled static-check command are retired. The remaining in-derivation endpoints
+moved into the crates that own their logic
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
 
 On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
@@ -4993,12 +4964,12 @@ Tooling dependency preparation uses Crane-generated dummy workspaces and a
 file-scoped tools lockfile. Compiler/target/profile/features/configuration and
 native dependencies remain artifact inputs; real local source and embedded data
 remain final-consumer inputs. Nested tools Cargo and archive export/import share
-the repository-root target directory, and ordinary and qualification tool builds
-require a nonempty dependency archive. Imported external artifacts do not
-justify treating changed local code as fresh. Release artifacts remain distinct
-from dev-profile clippy preparation, which the Nix Clippy leaves own as one
-dev-profile dependency build per leaf (#2038). Linux evidence does not establish
-Darwin execution or cross-platform artifact reuse.
+the repository-root target directory, and tool builds require a nonempty
+dependency archive. Imported external artifacts do not justify treating changed
+local code as fresh. Release artifacts remain distinct from dev-profile clippy
+preparation, which the Nix Clippy leaves own as one dev-profile dependency build
+per leaf (#2038). Linux evidence does not establish Darwin execution or
+cross-platform artifact reuse.
 
 The source filters above assert representative membership inline; no tool
 watches derivation identities for over-inclusion or wiring drift
@@ -5319,16 +5290,18 @@ with traps only for cleanup or failed-step reporting and concurrency only from
 standard tools; signal forwarding, supervising long-lived children, or data
 shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
 steps is outside the rule. Under that decision `e2e-local` and `perf-data` move
-to Python and `qualification` is retired for a scheduled upgrade test, each in
-its own follow-up; `pr-observer` has already become the native `dev pr-watch`
-([native observer decision](adr/0264-pr-watch-native-python-observer.md)). Until
-then the placements below describe the current tree:
+to Python, each in its own follow-up; `pr-observer` has already become the
+native `dev pr-watch`
+([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
+`qualification` has been retired for the
+[upgrade test](adr/drafts/upgrade-test.md). Until the remaining moves land the
+placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
   (`repository-docs`, `source-contracts`, and the shared `host_tool::report`
-  contract), `tools/qualification` (`qualification-host`), `tools/host-proof`
-  (below), `tools/coverage` with its nondefault `host` feature
+  contract), `tools/host-proof` (below), `tools/coverage` with its nondefault
+  `host` feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`).
   `dev` owns gate composition. These commands invoke `nix build` and
   consume/analyze exfiltrated build artifacts (coverage gate, CRAP gate,
@@ -5338,9 +5311,7 @@ then the placements below describe the current tree:
   optional rendered `report` text and optional structured `evidence`). The
   shared argument parser points fd 1 at stderr and reserves the real stdout for
   that report, so child output goes to stderr; the exit status is the verdict.
-  `dev` renders the human view from it (`tools/dev/dev/report.py`). The
-  production-baseline workflows return plain status instead
-  ([qualification carveout](adr/0239-qualification-workflow-ownership.md)).
+  `dev` renders the human view from it (`tools/dev/dev/report.py`).
 - **`tools/host-proof`** — focused host proof (ADR-0246): direct `e2e-local` and
   `trace-analysis` executables behind the matching `dev` commands; trace
   analysis carries its rendered tables in the report's `report` field. Each
@@ -5376,8 +5347,7 @@ then the placements below describe the current tree:
   (`tools/perf-producer`: storage measurement and browser fragment validation in
   the performance producer VMs); and `system-artifacts`
   (`tools/system-artifacts`: stages the closed system styling inventory for
-  every CSR bundle; its `qualification` feature is built only for the
-  system-artifact qualification packages).
+  every CSR bundle).
 - **`tools/coverage`** — by default a pure-logic library shared by both sides,
   with no I/O policy of its own
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)), plus the
@@ -5460,8 +5430,7 @@ would otherwise default to resolver 1
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
 `packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
-`packages.qualification-host` and `packages.system-artifacts` (with its
-qualification-featured variant) are built by one shared host-tool builder
+`packages.system-artifacts` are built by one shared host-tool builder
 (`nix/host-tool.nix`) from each package's own Cargo path closure, on a
 dependencies-only build that only the lockfile, member manifests, toolchain and
 features change (`nix/tools-workspace-package.nix`, which
@@ -5472,22 +5441,6 @@ CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
 caches no compiled tool output; jobs that run host Cargo opt in to a cache of
 its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
-
-`packages.qualification-host` is the auxiliary `tools/qualification` package's
-single host-run executable, built from its own Cargo closure with its store
-output compiled in; the four `dev production-baseline-*` commands run it with
-`nix run` and it never executes inside a derivation.
-`packages.qualification-harness` joins that tool with the existing browser,
-test-support, Node and VM input owners. Ordinary and styling qualification admit
-the actual executing tool and helper overrides against selected store outputs
-before leases or VM effects. Browser source is copied into invocation-owned
-writable state; the pinned runner executes that copy's CLI and imports, and the
-seed bridge uses the admitted Node interpreter. VM construction asserts the same
-admitted harness output. Standard derivation, output and NAR identities appear
-in evidence and remain rooted during execution. Git still identifies clean
-source/product revisions and rejects checkout drift, not content-equivalent tool
-revisions. Runtime checkout discovery and Nix-owned untracked-input admission
-complete the boundary; no custom fingerprint or identity ledger is introduced.
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
 ([ADR-0058](adr/0058-host-crate-layering.md),
@@ -5699,8 +5652,6 @@ checker registry, runner, supervisor or replacement omnibus:
   interfaces, shared checkout admission and best-effort `core.hooksPath`
   preparation (every host tool calls it before its workload).
 - `tools/host-tool` — the shared host-tool report contract.
-- `tools/qualification` — `qualification-host` behind the four
-  `dev production-baseline-*` commands.
 - `tools/host-proof` — focused proof (`e2e-local`, and `test-local`'s
   `admit-inputs` and `csr-prerequisite` steps), artifact-only e2e verdicts
   (`e2e-evidence`) and host diagnostics (`trace-analysis`, `wasm-audit`,

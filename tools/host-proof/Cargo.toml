@@ -68,4 +68,3 @@ xshell = "0.2.7"
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
 # Synthesizes the fixture modules the attribution tests parse.
 wasm-encoder = "0.258.0"
-host = { path = "../../host", features = ["qualification"] }

@@ -19,7 +19,6 @@ definitive working hub for humans and agents.
 | [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
 | [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |
 | [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                           |
-| [production-baseline](production-baseline.md)                 | Opt-in immutable NixOS deployment/recovery qualification and evidence runbook.     |
 
 ## Architecture Decision Records
 
@@ -267,7 +266,7 @@ convention). See the Status column below for each ADR's current status.
 | [0236](adr/0236-csr-vite-content-addressed-assets.md)                    | Vite owns CSR asset output and build inventory                                                               | accepted   |
 | [0237](adr/0237-just-owned-gate-workflows.md)                            | Just Owns Developer Gate Workflows                                                                           | accepted   |
 | [0238](adr/0238-just-e2e-workflow-ownership.md)                          | Just owns the E2E workflow entrypoint                                                                        | accepted   |
-| [0239](adr/0239-qualification-workflow-ownership.md)                     | Just Owns Qualification Workflow Entry Points; Nix Owns Provenance                                           | accepted   |
+| [0239](adr/0239-qualification-workflow-ownership.md)                     | Just Owns Qualification Workflow Entry Points; Nix Owns Provenance                                           | superseded |
 | [0240](adr/0240-just-frontdoors-host-pr-observer.md)                     | Just frontdoors with a host-only PR observer                                                                 | accepted   |
 | [0241](adr/0241-performance-workflow-ownership.md)                       | Just and Nix Own Performance Workflow Orchestration                                                          | accepted   |
 | [0242](adr/0242-adr-promoter-host-tool-extraction.md)                    | Nix-Selected Python ADR Promoter                                                                             | accepted   |

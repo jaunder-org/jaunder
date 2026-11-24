@@ -1376,18 +1376,10 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let a = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::A,
-        )
-        .expect("compile A");
-        let b_application = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::BApplication,
-        )
-        .expect("compile B application");
-        let b_theme = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::BTheme,
-        )
-        .expect("compile B theme");
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile A");
+        let b_application = host::system_theme::test_variants::changed_application()
+            .expect("compile B application");
+        let b_theme = host::system_theme::test_variants::changed_studio().expect("compile B theme");
         let path = Arc::new(env.base.path().to_path_buf());
         install_and_reconcile_system_artifact_inventory(
             &a,
@@ -1457,10 +1449,8 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let inventory = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::BTheme,
-        )
-        .expect("compile inventory");
+        let inventory =
+            host::system_theme::test_variants::changed_studio().expect("compile inventory");
         let path = Arc::new(env.base.path().to_path_buf());
         let error = install_and_reconcile_system_artifact_inventory(
             &inventory,
@@ -1505,14 +1495,9 @@ mod tests {
         #[case] backend: Backend,
     ) {
         let env = backend.setup().await;
-        let a = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::A,
-        )
-        .expect("compile A");
-        let b_application = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::BApplication,
-        )
-        .expect("compile B application");
+        let a = host::system_theme::compile_system_artifact_inventory().expect("compile A");
+        let b_application = host::system_theme::test_variants::changed_application()
+            .expect("compile B application");
         let path = Arc::new(env.base.path().to_path_buf());
         for inventory in [&b_application, &a] {
             install_and_reconcile_system_artifact_inventory(

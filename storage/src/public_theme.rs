@@ -1445,11 +1445,10 @@ mod tests {
     async fn installed_system_presentation_tracks_release_upgrade_and_rollback(
         #[case] backend: Backend,
     ) {
-        use host::system_theme::qualification::{self, Fixture};
         let env = backend.setup().await;
         let manager = system_manager(&env);
-        let a = qualification::compile(Fixture::A).unwrap();
-        let b = qualification::compile(Fixture::BTheme).unwrap();
+        let a = host::system_theme::compile_system_artifact_inventory().unwrap();
+        let b = host::system_theme::test_variants::changed_studio().unwrap();
         assert_ne!(
             a.theme(Theme::Studio).revision_digest(),
             b.theme(Theme::Studio).revision_digest()

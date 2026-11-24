@@ -16,8 +16,8 @@ use crate::UserFacingMessage;
 use crate::text;
 
 /// Archive format emitted by the canonical portable Backup producer.
-/// Pinned-source qualification consumes this same version; historical release
-/// admission remains owned by its separate compatibility policy.
+/// Historical release admission remains owned by its separate compatibility
+/// policy.
 pub const CURRENT_BACKUP_FORMAT_VERSION: u32 = 3;
 
 /// How a backup is written to its destination.

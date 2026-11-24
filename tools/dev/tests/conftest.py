@@ -15,10 +15,8 @@ PACKAGE = Path(__file__).resolve().parents[1]
 # The repository this package lives in; absent when the tests run from the
 # filtered `tools/dev/` source, as `checks.dev-python` does.
 REPOSITORY = PACKAGE.parents[1]
-# Fixed commits the fake Git resolves for the qualification preflight.
-HARNESS = "a" * 40
-SOURCE = "b" * 40
-TARGET = "c" * 40
+# The commit the fake Git resolves `earlier` to, for the upgrade commands.
+EARLIER = "b" * 40
 # Fake tools share this prelude; each records its argv in `order` at its cwd.
 PRELUDE = """\
 import os, pathlib, signal, subprocess, sys, time
@@ -256,21 +254,23 @@ if [ "$name $1" = "nix build" ]; then
 fi
 printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
+if [ "$name" = nix ] && [ -n "${UPGRADE_OUTPUT-}" ]; then
+    case "$*" in *').outPath') printf '%s\n' "$UPGRADE_OUTPUT" ;; esac
+fi
+if [ "$name" = gh ] && [ -n "${GH_LAST_GREEN-}" ]; then
+    printf '%s\n' "$GH_LAST_GREEN"
+fi
 if [ "$name" = git ] && [ -f dirty-status ]; then
     printf ' M tracked.rs\n'
 fi
 if [ "$name" = git ]; then
     case "$*" in
-      'rev-parse --verify HEAD^{commit}'|'rev-parse --verify --end-of-options HEAD^{commit}')
-        printf '%s\n' "$HARNESS" ;;
-      'rev-parse --verify --end-of-options source^{commit}') printf '%s\n' "$SOURCE" ;;
-      'rev-parse --verify --end-of-options target^{commit}') printf '%s\n' "$TARGET" ;;
-      'remote get-url origin')
-        if [ -f wrong-origin ]; then
-            printf 'https://example.invalid/foreign\n'
-        else
-            printf 'https://github.com/jaunder-org/jaunder.git\n'
-        fi ;;
+      'rev-parse --verify --end-of-options earlier^{commit}') printf '%s\n' "$EARLIER" ;;
+      'rev-parse --verify --end-of-options '*'^{commit}')
+        revision=${4%^\{commit\}}; printf '%s\n' "$revision" ;;
+      'tag --list v* --sort=-version:refname --merged v2^') printf 'v1\n' ;;
+      'branch --remotes --list origin/* --contains '*)
+        [ -f not-on-origin ] || printf '  origin/main\n' ;;
     esac
 fi
 if [ "$name $*" = "pg-run cargo nextest run --workspace" ]; then
@@ -421,6 +421,7 @@ FAKE_TOOLS = (
     "nix",
     "prettier",
     "git",
+    "gh",
     "scoped-leptosfmt",
     "leptosfmt",
     "emacs",
@@ -462,9 +463,7 @@ class Workflow:
             "FAKE_LOG": str(log),
             "FAIL_COMMAND": failure,
             "REAL_GIT": REAL_GIT,
-            "HARNESS": HARNESS,
-            "SOURCE": SOURCE,
-            "TARGET": TARGET,
+            "EARLIER": EARLIER,
             **GIT_OVERRIDES,
         }
         return self.checkout.dev(*args, cwd=cwd, **(environment | extra))

@@ -454,7 +454,7 @@ async fn install_system_backup_fixture(
     factory: &storage::StorageFactory,
     args: &StorageArgs,
 ) -> SystemBackupFixture {
-    use host::system_theme::qualification::{self, Fixture};
+    use host::system_theme::{compile_system_artifact_inventory, test_variants};
 
     let manager = ThemeAssetManager::new(
         factory.themes(),
@@ -462,10 +462,10 @@ async fn install_system_backup_fixture(
         Arc::new(args.storage_path.clone()),
     );
     let now = Timestamp::now().as_second();
-    let a = qualification::compile(Fixture::A).expect("compile A system inventory");
+    let a = compile_system_artifact_inventory().expect("compile A system inventory");
     let b_application =
-        qualification::compile(Fixture::BApplication).expect("compile B application inventory");
-    let b_theme = qualification::compile(Fixture::BTheme).expect("compile B theme inventory");
+        test_variants::changed_application().expect("compile B application inventory");
+    let b_theme = test_variants::changed_studio().expect("compile B theme inventory");
     for (inventory, offset, operation) in [
         (&a, 0, "install A system inventory"),
         (&b_application, 1, "install B application system inventory"),
@@ -1111,14 +1111,13 @@ async fn reconcile_restored_system_theme_content(
     args: &StorageArgs,
     ids: &BackupFixtureIds,
 ) {
-    use host::system_theme::qualification::{self, Fixture};
-
     let manager = ThemeAssetManager::new(
         factory.themes(),
         factory.write_scope(),
         Arc::new(args.storage_path.clone()),
     );
-    let inventory = qualification::compile(Fixture::BTheme).expect("compile restored release");
+    let inventory =
+        host::system_theme::test_variants::changed_studio().expect("compile restored release");
     confirmed_for(
         manager
             .install_system(&inventory, Timestamp::now().as_second())
