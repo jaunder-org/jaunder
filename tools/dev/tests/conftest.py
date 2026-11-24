@@ -254,6 +254,9 @@ if [ "$name $1" = "nix build" ]; then
 fi
 printf '%s\037' "$name" "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
+if [ "$name" = nix ] && [ -n "${UPGRADE_OUTPUT-}" ]; then
+    case "$*" in *').outPath') printf '%s\n' "$UPGRADE_OUTPUT" ;; esac
+fi
 if [ "$name" = gh ] && [ -n "${GH_LAST_GREEN-}" ]; then
     printf '%s\n' "$GH_LAST_GREEN"
 fi

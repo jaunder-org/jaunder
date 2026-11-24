@@ -350,6 +350,27 @@ def test_upgrade_test_resolves_its_earlier_build_first(
     assert workflow.commands()[: len(resolution)] == resolution
 
 
+def test_upgrade_test_lifts_a_failed_checks_artifacts(workflow: Workflow) -> None:
+    output = workflow.root / "kept-output"
+    output.mkdir()
+    (output / "upgrade-baseline-journal-upgrade-sqlite.log").write_text("journal")
+    (output / "nested").mkdir()
+    result = workflow.dev(
+        "upgrade-test",
+        "--from",
+        "earlier",
+        "sqlite",
+        UPGRADE_OUTPUT=str(output),
+        failure="nix build -L --accept-flake-config --keep-failed --print-out-paths"
+        " --out-link .xtask/gcroots/upgrade-sqlite ^out",
+    )
+    assert result.returncode != 0, result
+    lifted = workflow.root / ".xtask/diagnostics/upgrade-sqlite"
+    assert sorted(path.name for path in lifted.iterdir()) == [
+        "upgrade-baseline-journal-upgrade-sqlite.log"
+    ]
+
+
 def test_upgrade_test_refuses_both_an_explicit_build_and_a_tag(
     workflow: Workflow,
 ) -> None:
