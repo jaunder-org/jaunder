@@ -482,6 +482,7 @@ test.describe("Media upload capability", () => {
   test("disabled media page remains usable for existing media while uploads are rejected", async ({
     page,
   }) => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
     await signInAsNewUser(page);
 
     const existing = await uploadMedia(
@@ -599,6 +600,10 @@ test.describe("Media upload capability", () => {
 });
 
 test.describe("Media delete guard", () => {
+  test.beforeEach(async () => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+  });
+
   async function submitOrdinaryDeleteOnce(page: Page): Promise<{
     release: () => void;
     deleteRequests: () => number;

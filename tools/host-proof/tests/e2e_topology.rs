@@ -112,7 +112,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
 }
 
 #[test]
-fn runtime_projection_rejects_duplicate_identity_bad_shards_and_foreign_projects() {
+fn runtime_projection_rejects_duplicate_identity_bad_shards_and_ungated_browsers() {
     let base = catalog();
     let lanes = base["lanes"].as_array().unwrap();
     let index = |identity: &str| {
@@ -130,12 +130,10 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_foreign_projects
     shards["lanes"][shard]["identity"] = "sqlite-chromium-1-of-4".into();
     let mut missing_shard = base.clone();
     missing_shard["lanes"][shard]["enabled"] = false.into();
-    // A lane selecting a project other than its browser's one, or a second
-    // project beside it.
-    let mut foreign = base.clone();
-    foreign["lanes"][shard]["projects"] = serde_json::json!(["firefox"]);
-    let mut extra_project = base.clone();
-    extra_project["lanes"][shard]["projects"] = serde_json::json!(["chromium-visual", "chromium"]);
+    // A lane's browser selects its one project, so it must be a gated browser.
+    let mut ungated = base.clone();
+    ungated["lanes"][shard]["browser"] = "webkit".into();
+    ungated["lanes"][shard]["identity"] = "sqlite-webkit-4-of-4".into();
     // An enabled unsplit lane.
     let mut unsplit = base.clone();
     unsplit["lanes"][index("sqlite-chromium-unsplit")]["enabled"] = true.into();
@@ -159,8 +157,7 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_foreign_projects
         duplicate,
         shards,
         missing_shard,
-        foreign,
-        extra_project,
+        ungated,
         unsplit,
         malformed_weights,
         miscounted_weights,

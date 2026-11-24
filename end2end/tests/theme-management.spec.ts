@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { test, expect, setTestBudget } from "./fixtures";
+import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import { navigateInApp } from "./navigate";
 import {
@@ -13,6 +13,7 @@ import {
   type MutationOutcome,
 } from "./helpers";
 import { imageFixtureDirectory, uploadMedia } from "./media-helpers";
+import { seedConfigViaTool } from "./seed";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -2270,10 +2271,7 @@ test("author completes package, Media rotation, preview, export and private reim
   page,
   tracedContext,
 }) => {
-  // 53 Media uploads plus a full package lifecycle: the work itself, not a
-  // single wait, sets this test's length, so it needs more than the default
-  // whole-test budget under two-worker contention.
-  setTestBudget(44_000);
+  await seedConfigViaTool("media.uploads_enabled", "true");
   const username = await signInAsNewUser(page);
   const original = readFileSync(
       resolve(imageFixtureDirectory, "png-original.png"),

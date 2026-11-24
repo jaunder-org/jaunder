@@ -174,19 +174,21 @@ each stays current.
   catalog, census and reconciliation need no special lane or project.
 - Good: global-state races are removed by construction. They no longer depend on
   quarantining the right specs.
-- Cost: each VM runs one more Jaunder process and one more database. Measured
-  anonymous memory per instance stayed at about 110 MiB or less. The Firefox
-  lanes' minimum `MemAvailable` was 126–241 MiB on their 4 GiB guests. Guest
-  sizes are unchanged and that headroom is watched. The browser count per VM is
-  unchanged at two.
+- Cost: each VM runs one more Jaunder process and one more database. Every
+  Firefox lane now runs the ordinary workload, so every Firefox lane uses the
+  ordinary Firefox sizing, a 4 GiB guest with a 2 GiB disk. Chromium guests,
+  worker and vCPU counts are unchanged, and the browser count per VM stays at
+  two.
 - Cost: two harnesses run N instances instead of one.
 - Constraint: VM seeding runs as the service user (`runuser -u jaunder`), so the
   service account owns each instance's publisher gate. Created by root, the gate
   would lock the server out of publishing.
 - Constraint: tests that formerly ran in the Chromium site-settings or visual
   projects lost those projects' implicit 2.2× slow-browser timeout scale. Only
-  the `chromium` project keeps the unscaled Chromium budget. One
-  package-lifecycle test now carries an explicit whole-test budget instead.
+  the `chromium` project keeps the unscaled Chromium budget.
+- Constraint: WebKit, which no gate runs, keeps its existing exclusions
+  (`admin-site`, `invite`, `production-baseline-flow` and the visual tests).
+  That is coverage parity with what it ran before, not a serial project.
 - Constraint: a visual test's fixed-name user is seeded once per instance and
   reused by a retry there. `--repeat-each` on a visual test is unsupported.
 - Constraint: the shard weights describe the suite's current order and

@@ -3,12 +3,18 @@ import { test, expect } from "./fixtures";
 import { goto, signInAs, signInAsNewUser } from "./helpers";
 import { uploadMedia } from "./media-helpers";
 import { createPostViaApi } from "./posts";
+import { seedConfigViaTool } from "./seed";
 import {
   conformanceThemePackage,
   publishAndSelectTheme,
 } from "./theme-helpers";
 
 const BODY = '[data-jaunder-part="post-body"]';
+
+// Every test here uploads Media.
+test.beforeEach(async () => {
+  await seedConfigViaTool("media.uploads_enabled", "true");
+});
 
 function imageBytes(width: number, height: number): Buffer {
   return Buffer.from(

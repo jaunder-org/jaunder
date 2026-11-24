@@ -777,8 +777,8 @@ Nix settings and other invocations can further affect actual overlap. Current
 production lanes request two vCPUs, with 4 GiB for Firefox guests and 3 GiB for
 Chromium guests; these are configured guest sizes, not measured host use or
 proof that any particular cap is safe. Each guest also runs one Jaunder instance
-and database per worker; at #2076 each instance used about 110 MiB anonymous
-memory or less, leaving the Firefox guests 126–241 MiB minimum `MemAvailable`.
+and database per worker, so a guest's size must cover its browsers and every
+instance together; resize from measured guest memory, not from these figures.
 Cross-checkout heavy-path admission is separate work in #1753, not a
 prerequisite. No global queue, automatic host threshold or resource-pressure
 cancellation is introduced.
@@ -833,12 +833,12 @@ Visual tests follow the [E2E state rule](#e2e-tests-set-their-own-global-state)
 and need no ordering. Each seeds its own fixed-name user, because usernames
 render in the pixels, and calls `setSeededSiteAppearance`
 (`end2end/tests/visual.ts`) to set the seeded title, tagline, Registration
-Policy, Site Default Audience, Media uploads and Site Theme it renders. A visual
-test therefore passes wherever it runs on an instance other tests have used.
-Visual tests take the run's retry policy like any other test. A retry that lands
-on the instance where its earlier attempt seeded the fixed-name user signs in to
-it with `signInAsVisualUser` instead of seeding it, or its Posts, again;
-`--repeat-each` on a visual test is unsupported.
+Policy, Site Default Audience, Media Upload Capability and Site Theme it
+renders. A visual test therefore passes wherever it runs on an instance other
+tests have used. Visual tests take the run's retry policy like any other test. A
+retry that lands on the instance where its earlier attempt seeded the fixed-name
+user signs in to it with `signInAsVisualUser` instead of seeding it, or its
+Posts, again; `--repeat-each` on a visual test is unsupported.
 
 `dev e2e-local <spec-or-file:line>` remains the targeted loop. It selects the
 browser's one project with that positional filter; an unrelated spec does not
@@ -870,7 +870,7 @@ assessment.
 Every Playwright worker has its own server instance and database, but the tests
 a worker runs share that instance in an order you do not control. Site settings
 such as the title, tagline, `base_url`, Registration Policy, Site Default
-Audience, Media uploads and Site Theme are global to the instance. So:
+Audience, Media Upload Capability and Site Theme are global to the instance. So:
 
 - A test **sets the global state it depends on**, usually with
   `seedConfigViaTool` or the owning UI flow, before it relies on it.

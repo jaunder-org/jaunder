@@ -7,8 +7,6 @@ import { BASE_URL, goto, signInAs, stallServerFn } from "./helpers";
 import { openArea, openAreaDestination } from "./settings-areas";
 import { SEL } from "./selectors";
 
-test.describe.configure({ mode: "serial" });
-
 const smtpRow = SEL.areaRow("/admin/smtp");
 const smtpPage = { url: "/admin/smtp", ready: 'input[name="enabled"]' };
 const saveButton = 'button:has-text("Save SMTP Settings")';

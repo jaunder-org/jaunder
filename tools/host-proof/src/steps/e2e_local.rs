@@ -42,7 +42,7 @@ use xshell::{Shell, cmd};
 
 use crate::report::{CommandResult, StepResult};
 
-/// Ordinary Playwright browser project selected for a focused run.
+/// The browser whose one Playwright project a focused run selects.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum E2eLocalBrowser {
     Chromium,
@@ -184,13 +184,6 @@ fn browser_invocation(browser: E2eLocalBrowser, test_filter: Option<&str>) -> Pl
     }
 }
 
-fn normal_invocations(
-    browser: E2eLocalBrowser,
-    test_filter: Option<&str>,
-) -> Vec<PlaywrightInvocation> {
-    vec![browser_invocation(browser, test_filter)]
-}
-
 fn resolve_e2e_env(
     workers: Result<String, env::VarError>,
     path: Option<OsString>,
@@ -273,7 +266,7 @@ fn e2e_local_plan(
             update_visual_snapshots: false,
             lifecycles: vec![BrowserLifecycle {
                 browser: browser.as_str(),
-                invocations: normal_invocations(browser, test_filter),
+                invocations: vec![browser_invocation(browser, test_filter)],
             }],
         }
     }

@@ -7,8 +7,8 @@ import {
 } from "./production-baseline";
 import { seedConfigViaTool, seedSandboxProfileViaTool } from "./seed";
 
-// This remains an ordinary cross-browser E2E spec. Profile seeding changes site
-// config, so the test sets the site config it depends on before creating records.
+// Profile seeding changes site config, so the test sets the site config it
+// depends on before creating records.
 
 const BASELINE_SETUP_ALLOWANCE_MS = 45_000;
 const BASELINE_SEQUENTIAL_FEED_POLLS = 9;

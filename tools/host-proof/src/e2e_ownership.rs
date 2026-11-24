@@ -16,7 +16,6 @@ pub struct ExpectedLane {
     #[serde(rename = "shardCount")]
     pub shard_count: Option<u8>,
     pub identity: String,
-    pub projects: Vec<String>,
     pub enabled: bool,
 }
 
@@ -180,9 +179,8 @@ pub(crate) fn validate_unsplit_control(
 }
 
 /// Validate a producer's manifest/report against runtime ownership expectations.
-/// Catalog projects are selectors: a shard may hold no test of one of them, so
-/// the manifest/report pair defines the runtime population (ADR-0165), which
-/// must stay within the lane's projects.
+/// The manifest/report pair defines the runtime population (ADR-0165), which
+/// must belong to the lane's one project, named for its browser.
 pub fn validate_population(
     lane: &ExpectedLane,
     report_raw: &str,
@@ -205,17 +203,11 @@ pub fn validate_population(
     if selected.is_empty() || selected != reported {
         return Err("lane manifest/report population mismatch".into());
     }
-    let projects = selected
+    if selected
         .iter()
-        .map(|(_, project, _)| project.as_str())
-        .collect::<BTreeSet<_>>();
-    let expected = lane
-        .projects
-        .iter()
-        .map(String::as_str)
-        .collect::<BTreeSet<_>>();
-    if !projects.is_subset(&expected) {
-        return Err("lane project population differs from catalog selectors".into());
+        .any(|(_, project, _)| *project != lane.browser)
+    {
+        return Err("lane project population differs from the lane's browser project".into());
     }
     Ok(())
 }
@@ -265,10 +257,7 @@ pub fn reconcile(
         if expected.is_empty() {
             return Err("empty expected census".into());
         }
-        if expected
-            .iter()
-            .any(|(_, project, _)| !lanes.iter().any(|l| l.projects.contains(project)))
-        {
+        if expected.iter().any(|(_, project, _)| project != browser) {
             return Err("expected census has unowned project".into());
         }
         if let Some(prior) = &census_all {
@@ -291,11 +280,7 @@ pub fn reconcile(
             return Err(format!("mismatched lane manifest for `{id}`"));
         }
         let selected = identities(manifest.tests, "lane manifest")?;
-        if selected.is_empty()
-            || selected
-                .iter()
-                .any(|(_, project, _)| !lane.projects.contains(project))
-        {
+        if selected.is_empty() || selected.iter().any(|(_, project, _)| project != browser) {
             return Err(format!("lane manifest has unowned project for `{id}`"));
         }
         let reported = report_identities(report_raw, id)?;
@@ -381,9 +366,15 @@ mod tests {
         assert!(super::validate_population(&lane, R2, M1).is_err());
         assert!(super::validate_population(&lane, R1, M2).is_err());
         assert!(super::validate_population(&lane, "{", M1).is_err());
-        let mut narrowed = lane.clone();
-        narrowed.projects.retain(|project| project != "firefox");
-        assert!(super::validate_population(&narrowed, R1, M1).is_err());
+        let foreign_report = R1.replace(
+            r#""projectName": "firefox""#,
+            r#""projectName": "chromium""#,
+        );
+        let foreign_manifest = M1.replace(
+            r#""project_name": "firefox""#,
+            r#""project_name": "chromium""#,
+        );
+        assert!(super::validate_population(&lane, &foreign_report, &foreign_manifest).is_err());
     }
 
     #[test]

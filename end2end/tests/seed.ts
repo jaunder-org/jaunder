@@ -390,19 +390,6 @@ export async function seedThemeViaTool(authorUsername: string): Promise<void> {
     );
   });
 }
-/** Restore selections changed by {@link seedThemeViaTool}. */
-export async function resetThemeViaTool(authorUsername: string): Promise<void> {
-  await withTimedAction(null, "tool.themes.reset", async () => {
-    execFileSync(
-      "test-support",
-      ["seed-theme", "--author-username", authorUsername, "--reset"],
-      {
-        stdio: "pipe",
-        env: process.env,
-      },
-    );
-  });
-}
 
 /** Seed terminal WebSub events through the real feed-event lifecycle. */
 export async function seedDeadLettersViaTool(

@@ -1046,8 +1046,8 @@ e2eSalt = "";
 # salt costs every CI e2e job its cache, and the only symptom is "CI got
 # slow" — nothing fails on its own, which is exactly why the guard exists.
 
-# All E2E lanes. backend picks the VM builder; projects select the Playwright
-# topology; traceSeed gives every isolated lane a distinct OTel trace id.
+# All E2E lanes. backend picks the VM builder; browser selects its one
+# Playwright project; traceSeed gives every isolated lane a distinct OTel trace id.
 # The catalog independently identifies production shards and disabled unsplit
 # controls (scripts/e2e-matrix.jq).
 e2eLaneCatalogFile = builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json);
@@ -1057,11 +1057,6 @@ e2eLaneCatalog = e2eLaneCatalogFile.lanes;
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
 e2eSingleWorkerLanes = builtins.filter (lane: !lane.enabled) e2eLaneCatalog;
 e2eFirefoxControlLanes = builtins.filter (lane: lane.browser == "firefox") e2eSingleWorkerLanes;
-# Each shard's independent census lists every project its browser's shards select.
-e2eCensusProjectArgs = browser:
-  pkgs.lib.concatMapStringsSep " " (project: "--project ${project}")
-    (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects)
-      (builtins.filter (lane: lane.browser == browser) e2eCombos)));
 
 mkE2eCombo =
   {
@@ -1069,7 +1064,6 @@ mkE2eCombo =
     browser,
     identity,
     traceSeed,
-    projects,
     enabled,
     shardIndex ? null,
     shardCount ? null,
@@ -1089,7 +1083,7 @@ mkE2eCombo =
     repeatSeed = width: pkgs.lib.concatStrings (pkgs.lib.genList (_: traceSeed) (width / builtins.stringLength traceSeed));
     traceId = repeatSeed 32;
     traceParent = "00-${traceId}-${repeatSeed 16}-01";
-    projectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") projects;
+    projectArgs = "--project ${browser}";
     shardArg = pkgs.lib.optionalString (shardIndex != null) " --shard=${toString shardIndex}/${toString shardCount}";
   in
   mkE2eCheck {
@@ -1140,7 +1134,7 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       # Playwright weights each `--shard` slice by this per-browser string.
       extraEnv = " JAUNDER_E2E_RETRIES=1"
         + " PWTEST_SHARD_WEIGHTS=${e2eLaneCatalogFile.shardWeights.${c.browser}}";
-      expectedCensusProjectArgs = e2eCensusProjectArgs c.browser;
+      expectedCensusProjectArgs = "--project ${c.browser}";
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
@@ -1162,7 +1156,7 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
       name = "e2e-${lane.backend}-firefox-workers-${toString workers}-control";
       value = mkE2eCombo (lane // {
         extraEnv = " JAUNDER_E2E_RETRIES=1";
-        expectedCensusProjectArgs = pkgs.lib.concatMapStringsSep " " (project: "--project ${project}") lane.projects;
+        expectedCensusProjectArgs = "--project ${lane.browser}";
         expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
         inherit workers vmMemory vmCores;
       });
