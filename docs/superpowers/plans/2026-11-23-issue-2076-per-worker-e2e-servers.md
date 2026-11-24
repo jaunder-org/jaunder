@@ -155,7 +155,7 @@ exactly once.
 
 ### Deliverable C — record and docs
 
-- [ ] Task 5: ADR draft and documentation projection
+- [x] Task 5: ADR draft and documentation projection
   - Contract:
     - A numberless `jaunder-adr` draft records per-worker instances and the
       state rule, including visual. It also records the no-dependency-edges
