@@ -10,8 +10,8 @@
           "line": 3,
           "tests": [
             {
-              "projectId": "firefox-visual",
-              "projectName": "firefox-visual",
+              "projectId": "firefox",
+              "projectName": "firefox",
               "status": "expected",
               "results": [{ "retry": 0, "duration": 15 }]
             }

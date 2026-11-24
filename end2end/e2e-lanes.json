@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "shardWeights": {
-    "chromium": "1:1:1",
-    "firefox": "1:1:1"
+    "chromium": "36:21:20:23",
+    "firefox": "34:22:22:22"
   },
   "lanes": [
     {
@@ -10,7 +10,7 @@
       "browser": "chromium",
       "identity": "sqlite-chromium-unsplit",
       "traceSeed": "1",
-      "projects": ["chromium-visual", "chromium"],
+      "projects": ["chromium"],
       "enabled": false
     },
     {
@@ -18,7 +18,7 @@
       "browser": "firefox",
       "identity": "sqlite-firefox-unsplit",
       "traceSeed": "2",
-      "projects": ["firefox-visual", "firefox"],
+      "projects": ["firefox"],
       "enabled": false
     },
     {
@@ -26,7 +26,7 @@
       "browser": "chromium",
       "identity": "postgres-chromium-unsplit",
       "traceSeed": "3",
-      "projects": ["chromium-visual", "chromium"],
+      "projects": ["chromium"],
       "enabled": false
     },
     {
@@ -34,127 +34,167 @@
       "browser": "firefox",
       "identity": "postgres-firefox-unsplit",
       "traceSeed": "4",
-      "projects": ["firefox-visual", "firefox"],
+      "projects": ["firefox"],
       "enabled": false
     },
     {
       "backend": "sqlite",
       "browser": "firefox",
       "shardIndex": 1,
-      "shardCount": 3,
-      "identity": "sqlite-firefox-1-of-3",
-      "traceSeed": "13",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "sqlite-firefox-1-of-4",
+      "traceSeed": "1f",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "sqlite",
       "browser": "firefox",
       "shardIndex": 2,
-      "shardCount": 3,
-      "identity": "sqlite-firefox-2-of-3",
-      "traceSeed": "14",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "sqlite-firefox-2-of-4",
+      "traceSeed": "20",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "sqlite",
       "browser": "firefox",
       "shardIndex": 3,
-      "shardCount": 3,
-      "identity": "sqlite-firefox-3-of-3",
-      "traceSeed": "15",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "sqlite-firefox-3-of-4",
+      "traceSeed": "21",
+      "projects": ["firefox"],
+      "enabled": true
+    },
+    {
+      "backend": "sqlite",
+      "browser": "firefox",
+      "shardIndex": 4,
+      "shardCount": 4,
+      "identity": "sqlite-firefox-4-of-4",
+      "traceSeed": "23",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "firefox",
       "shardIndex": 1,
-      "shardCount": 3,
-      "identity": "postgres-firefox-1-of-3",
-      "traceSeed": "16",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "postgres-firefox-1-of-4",
+      "traceSeed": "24",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "firefox",
       "shardIndex": 2,
-      "shardCount": 3,
-      "identity": "postgres-firefox-2-of-3",
-      "traceSeed": "17",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "postgres-firefox-2-of-4",
+      "traceSeed": "25",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "firefox",
       "shardIndex": 3,
-      "shardCount": 3,
-      "identity": "postgres-firefox-3-of-3",
-      "traceSeed": "18",
-      "projects": ["firefox-visual", "firefox"],
+      "shardCount": 4,
+      "identity": "postgres-firefox-3-of-4",
+      "traceSeed": "26",
+      "projects": ["firefox"],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "firefox",
+      "shardIndex": 4,
+      "shardCount": 4,
+      "identity": "postgres-firefox-4-of-4",
+      "traceSeed": "27",
+      "projects": ["firefox"],
       "enabled": true
     },
     {
       "backend": "sqlite",
       "browser": "chromium",
       "shardIndex": 1,
-      "shardCount": 3,
-      "identity": "sqlite-chromium-1-of-3",
-      "traceSeed": "19",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "sqlite-chromium-1-of-4",
+      "traceSeed": "28",
+      "projects": ["chromium"],
       "enabled": true
     },
     {
       "backend": "sqlite",
       "browser": "chromium",
       "shardIndex": 2,
-      "shardCount": 3,
-      "identity": "sqlite-chromium-2-of-3",
-      "traceSeed": "1a",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "sqlite-chromium-2-of-4",
+      "traceSeed": "29",
+      "projects": ["chromium"],
       "enabled": true
     },
     {
       "backend": "sqlite",
       "browser": "chromium",
       "shardIndex": 3,
-      "shardCount": 3,
-      "identity": "sqlite-chromium-3-of-3",
-      "traceSeed": "1b",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "sqlite-chromium-3-of-4",
+      "traceSeed": "2a",
+      "projects": ["chromium"],
+      "enabled": true
+    },
+    {
+      "backend": "sqlite",
+      "browser": "chromium",
+      "shardIndex": 4,
+      "shardCount": 4,
+      "identity": "sqlite-chromium-4-of-4",
+      "traceSeed": "2b",
+      "projects": ["chromium"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "chromium",
       "shardIndex": 1,
-      "shardCount": 3,
-      "identity": "postgres-chromium-1-of-3",
-      "traceSeed": "1c",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "postgres-chromium-1-of-4",
+      "traceSeed": "2c",
+      "projects": ["chromium"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "chromium",
       "shardIndex": 2,
-      "shardCount": 3,
-      "identity": "postgres-chromium-2-of-3",
-      "traceSeed": "1d",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "postgres-chromium-2-of-4",
+      "traceSeed": "2d",
+      "projects": ["chromium"],
       "enabled": true
     },
     {
       "backend": "postgres",
       "browser": "chromium",
       "shardIndex": 3,
-      "shardCount": 3,
-      "identity": "postgres-chromium-3-of-3",
-      "traceSeed": "1e",
-      "projects": ["chromium-visual", "chromium"],
+      "shardCount": 4,
+      "identity": "postgres-chromium-3-of-4",
+      "traceSeed": "2e",
+      "projects": ["chromium"],
+      "enabled": true
+    },
+    {
+      "backend": "postgres",
+      "browser": "chromium",
+      "shardIndex": 4,
+      "shardCount": 4,
+      "identity": "postgres-chromium-4-of-4",
+      "traceSeed": "2f",
+      "projects": ["chromium"],
       "enabled": true
     }
   ]

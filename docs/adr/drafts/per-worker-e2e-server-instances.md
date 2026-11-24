@@ -23,7 +23,9 @@ Playwright projects ordered by project `dependencies`.
 pair a serial-special lane: visual, global-configuration and invite projects in
 dependency order, beside two ordinary shards. That lane ran at concurrency 1 and
 became the E2E long pole. #2065 measured PostgreSQL/Firefox serial-special at a
-14.0-minute median.
+14.0-minute median and moved the Theme specs into a fourth, serial-theme lane
+per pair, sizing the ordinary shards by measured duration rather than test count
+([ADR-0262](../0262-serial-theme-e2e-lane-and-weighted-shards.md)).
 
 The quarantine also leaked. Restoring a setting after a test fixed only what the
 _next_ test saw, never a test running at the same moment. Tests outside the
@@ -90,15 +92,25 @@ below makes that safe.
   screenshot renders (title, tagline, Registration Policy, Site Default
   Audience, Media Upload Capability and no Site Theme selection) before it
   renders. Visual tests therefore need no fresh database and no ordering.
+- A retried visual test may land on the instance where its earlier attempt
+  already seeded the fixed-name user. It then signs in to that user instead of
+  seeding it, and seeds none of the user's other state again, so the screenshot
+  is unchanged.
 
-**No dependency edges among gated projects.** Each gated browser has exactly two
-projects: `<browser>-visual` (the `@visual` grep with no retries) and
-`<browser>` (everything else). Neither has a dependency. Each backend/browser
-pair runs three lanes, `--shard=1/3` to `--shard=3/3`, each selecting both
-projects, so plain sharding runs every test exactly once per pair.
-`end2end/e2e-lanes.json` and `scripts/e2e-matrix.jq` enforce that shape. The
-census's exactly-once check catches any dependency edge added later, because an
-edge would rerun its dependency in every shard.
+**One project per gated browser, with no dependency edges.** Each gated browser
+has exactly one project, `<browser>`, running every test, `@visual` included,
+under the lane's retry policy. It has no dependency. A `snapshotPathTemplate`
+keeps the reviewed baselines' `<name>-<browser>-visual-<platform>.png` names.
+Each backend/browser pair runs four lanes, `--shard=1/4` to `--shard=4/4`, each
+selecting that project, so plain sharding runs every test exactly once per pair.
+The shards keep ADR-0262's weighting: the catalog's per-browser `shardWeights`,
+exported as Playwright's `PWTEST_SHARD_WEIGHTS`, size the contiguous slices by
+measured duration. Four shards and their weights are provisional, derived from
+the three-shard lanes' reports, until a shard-count comparison on CI reports
+settles them. `end2end/e2e-lanes.json` and `scripts/e2e-matrix.jq` enforce that
+shape. The census's exactly-once check, run under the lanes' weights, catches
+any dependency edge added later, because an edge would rerun its dependency in
+every shard.
 
 **Gates cover every instance.** The zero-panic gate dumps each instance unit's
 journal and verifies it together with that instance's capture subdirectory. Any
@@ -114,7 +126,7 @@ instance subdirectory name is defined once, by
 server streams, such as server-function coverage and the trace runner, read
 every instance directory.
 
-This decision narrowly supersedes and amends four earlier decisions. The rest of
+This decision narrowly supersedes and amends five earlier decisions. The rest of
 each stays current.
 
 - It supersedes
@@ -125,8 +137,12 @@ each stays current.
   [ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
   [ADR-0253](../0253-split-chromium-e2e-lanes.md): two ordinary shards plus one
   serial-special lane, ordered visual, global-configuration and invite projects,
-  and their project dependencies. Their twelve lanes, independent census,
-  `always()` reconciliation, shared cap and trace seeds remain.
+  and their project dependencies. Their catalog-derived lanes, independent
+  census, `always()` reconciliation, shared cap and trace seeds remain.
+- It supersedes the serial Theme role and lane of
+  [ADR-0262](../0262-serial-theme-e2e-lane-and-weighted-shards.md): the Theme
+  specs are ordinary tests under the state rule. Its duration-weighted shards
+  remain and now size every lane.
 - It amends [ADR-0032](../0032-e2e-zero-panic-gate.md): the gate reads every
   instance unit's journal, not one `jaunder.service` journal.
 - It amends [ADR-0057](../0057-e2e-capture-dir-contract.md): one capture
@@ -154,8 +170,8 @@ each stays current.
 
 - Good: the site-global specs run in parallel with everything else, and no lane
   carries a concurrency-1 tail.
-- Good: each pair's three lanes are identical apart from the shard index, so the
-  catalog, census and reconciliation need no special lane.
+- Good: each pair's four lanes are identical apart from the shard index, so the
+  catalog, census and reconciliation need no special lane or project.
 - Good: global-state races are removed by construction. They no longer depend on
   quarantining the right specs.
 - Cost: each VM runs one more Jaunder process and one more database. Measured
@@ -167,13 +183,14 @@ each stays current.
 - Constraint: VM seeding runs as the service user (`runuser -u jaunder`), so the
   service account owns each instance's publisher gate. Created by root, the gate
   would lock the server out of publishing.
-- Constraint: tests that formerly ran in the Chromium site-settings project lost
-  that project's implicit 2.2× slow-browser timeout scale. Only the `chromium`
-  project keeps the unscaled Chromium budget. One package-lifecycle test now
-  carries an explicit whole-test budget instead.
-- Constraint: visual tests' fixed-name users assume one run per instance.
-  `retries: 0` guarantees that, and `--repeat-each` on a visual test is
-  unsupported.
+- Constraint: tests that formerly ran in the Chromium site-settings or visual
+  projects lost those projects' implicit 2.2× slow-browser timeout scale. Only
+  the `chromium` project keeps the unscaled Chromium budget. One
+  package-lifecycle test now carries an explicit whole-test budget instead.
+- Constraint: a visual test's fixed-name user is seeded once per instance and
+  reused by a retry there. `--repeat-each` on a visual test is unsupported.
+- Constraint: the shard weights describe the suite's current order and
+  durations. Re-derive them from lane reports when the shards drift apart.
 - Constraint: any new gated project, and any dependency edge, must keep the
   exactly-once shard invariant. The census, lanes and reconciliation remain one
   contract.

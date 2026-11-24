@@ -2,12 +2,7 @@ import { devices, defineConfig } from "@playwright/test";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { performanceEnabled } from "./tests/browser-performance";
 import { parseInstances } from "./tests/instance";
-import {
-  type GatedBrowser,
-  gatedBrowsers,
-  specPattern,
-  visualProject,
-} from "./e2eProjects";
+import { type GatedBrowser, gatedBrowsers, specPattern } from "./e2eProjects";
 
 type Project = NonNullable<PlaywrightTestConfig["projects"]>[number];
 
@@ -95,28 +90,21 @@ const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
 };
 
 /**
- * One gated browser's two projects (see `e2eProjects.ts`). Every worker owns
- * its own server instance and every test sets the global state it depends on
- * (#2076), so no project needs ordering, serialization or a dependency.
+ * One gated browser's project (see `e2eProjects.ts`). Every worker owns its own
+ * server instance and every test sets the global state it depends on (#2076),
+ * so no test needs ordering, serialization or a dependency.
  */
-function gatedProjects(browser: GatedBrowser): Project[] {
+function gatedProject(browser: GatedBrowser): Project {
   const use = gatedBrowserUse[browser];
-  return [
-    {
-      name: visualProject(browser),
-      testIgnore: unavailableSpecializedSpecs,
-      grep: visualTag,
-      retries: 0,
-      use,
-    },
-    {
-      name: browser,
-      testIgnore: unavailableSpecializedSpecs,
-      grepInvert: visualTag,
-      ...(diagnosticCoverage ? { testMatch: diagnosticSpec } : {}),
-      use,
-    },
-  ];
+  return {
+    name: browser,
+    testIgnore: unavailableSpecializedSpecs,
+    ...(diagnosticCoverage ? { testMatch: diagnosticSpec } : {}),
+    // The reviewed baselines keep the names of the retired `<browser>-visual`
+    // project.
+    snapshotPathTemplate: `{snapshotDir}/{testFilePath}-snapshots/{arg}-${browser}-visual-{platform}{ext}`,
+    use,
+  };
 }
 
 export default defineConfig({
@@ -160,11 +148,11 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // Each gated browser's `<browser>-visual` and `<browser>` projects, then
-  // WebKit, which runs only host-local investigation. WebKit never covered
-  // admin-site, invite or the production baseline.
+  // Each gated browser's one project, then WebKit, which runs only host-local
+  // investigation. WebKit never covered visual, admin-site, invite or the
+  // production baseline.
   projects: [
-    ...gatedBrowsers.flatMap(gatedProjects),
+    ...gatedBrowsers.map(gatedProject),
     ...(upgradeMode
       ? [
           {

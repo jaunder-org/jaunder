@@ -1,8 +1,14 @@
 import { join } from "node:path";
 
 import { expect, type Locator, type Page } from "@playwright/test";
-import type { NewTracedContext } from "./fixtures";
-import { seedConfigViaTool } from "./seed";
+import { test, type NewTracedContext } from "./fixtures";
+import {
+  applySeededSession,
+  createSessionViaTool,
+  seedConfigViaTool,
+  seedUserViaTool,
+  type SeedRecord,
+} from "./seed";
 import { selectSiteTheme } from "./theme-helpers";
 import { runVisualAssertion } from "./visual-diagnostics";
 
@@ -28,6 +34,34 @@ export async function setSeededSiteAppearance(
   await seedConfigViaTool("posts.default_audience", "private");
   await seedConfigViaTool("media.uploads_enabled", "true");
   await selectSiteTheme(tracedContext, null);
+}
+
+/**
+ * Sign `page` in as a visual test's fixed-name user, seeding the user when it
+ * does not exist yet. The name renders in the screenshot, so it cannot vary per
+ * attempt, and a retry can land on the instance where an earlier attempt already
+ * seeded it; that retry signs in to the existing user instead. Returns whether
+ * this call seeded the user, so the caller seeds the user's other state once.
+ */
+export async function signInAsVisualUser(
+  page: Page,
+  username: string,
+): Promise<boolean> {
+  let session: SeedRecord;
+  let seeded = true;
+  try {
+    session = await seedUserViaTool(username, "visualpassword123");
+  } catch (seedError) {
+    if (test.info().retry === 0) throw seedError;
+    try {
+      session = await createSessionViaTool(username);
+    } catch {
+      throw seedError;
+    }
+    seeded = false;
+  }
+  await applySeededSession(page.context(), session);
+  return seeded;
 }
 
 /** Compare the current desktop viewport under the deterministic screenshot-only

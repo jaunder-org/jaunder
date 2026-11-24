@@ -2,14 +2,12 @@ import { join } from "node:path";
 
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto, signInAsNewUser } from "./helpers";
+import { resetThemeViaTool, seedPostsViaTool, seedThemeViaTool } from "./seed";
 import {
-  applySeededSession,
-  resetThemeViaTool,
-  seedPostsViaTool,
-  seedThemeViaTool,
-  seedUserViaTool,
-} from "./seed";
-import { expectVisual, setSeededSiteAppearance } from "./visual";
+  expectVisual,
+  setSeededSiteAppearance,
+  signInAsVisualUser,
+} from "./visual";
 import { expectAccessible } from "./accessibility";
 
 // Regression for #22: the reactive data-theme binding on the plain `.j-root`
@@ -21,9 +19,11 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page, tracedContext }) => {
     await setSeededSiteAppearance(tracedContext);
-    const session = await seedUserViaTool("visualauthor", "visualpassword123");
-    await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
-    await applySeededSession(page.context(), session);
+    // The timeline renders exactly this user's two Posts, so a retry that
+    // reuses the user must not seed them again.
+    if (await signInAsVisualUser(page, "visualauthor")) {
+      await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
+    }
     await goto(page, "/app");
 
     const probe = await page.evaluate(() => {

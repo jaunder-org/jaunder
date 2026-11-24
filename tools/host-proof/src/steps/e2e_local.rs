@@ -168,23 +168,15 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
-/// Every project of the browser, so a positional filter finds a visual or a
-/// non-visual test alike. No project has a dependency, so selecting both runs
-/// each selected test once, in no particular order.
-fn browser_projects(browser: E2eLocalBrowser) -> &'static [&'static str] {
-    match browser {
-        E2eLocalBrowser::Chromium => &["chromium-visual", "chromium"],
-        E2eLocalBrowser::Firefox => &["firefox-visual", "firefox"],
-        E2eLocalBrowser::Webkit => &["webkit"],
-    }
-}
-
+/// The browser's one project, so a positional filter finds a visual or a
+/// non-visual test alike.
 fn browser_invocation(browser: E2eLocalBrowser, test_filter: Option<&str>) -> PlaywrightInvocation {
-    let mut args = owned_args(&["test"]);
-    for project in browser_projects(browser) {
-        args.extend(["--project".to_owned(), (*project).to_owned()]);
-    }
-    args.push("--reporter=html,line".to_owned());
+    let mut args = owned_args(&[
+        "test",
+        "--project",
+        browser.as_str(),
+        "--reporter=html,line",
+    ]);
     args.extend(test_filter.map(str::to_owned));
     PlaywrightInvocation {
         label: "browser",
@@ -264,7 +256,9 @@ fn e2e_local_plan(
                         args: owned_args(&[
                             "test",
                             "--project",
-                            &format!("{browser}-visual"),
+                            browser,
+                            "--grep",
+                            "@visual",
                             "--update-snapshots",
                             "--reporter=html,line",
                         ]),
@@ -1319,20 +1313,13 @@ while :; do :; done"#;
             lifecycle.invocations,
             [PlaywrightInvocation {
                 label: "browser",
-                args: owned_args(&[
-                    "test",
-                    "--project",
-                    "chromium-visual",
-                    "--project",
-                    "chromium",
-                    "--reporter=html,line",
-                ]),
+                args: owned_args(&["test", "--project", "chromium", "--reporter=html,line"]),
             }]
         );
     }
 
     #[test]
-    fn filtered_firefox_run_selects_both_projects_once() {
+    fn filtered_firefox_run_selects_the_browser_project() {
         let plan = e2e_local_plan(
             Some(E2eLocalBrowser::Firefox),
             Some("theme.spec.ts:63"),
@@ -1344,8 +1331,6 @@ while :; do :; done"#;
                 label: "browser",
                 args: owned_args(&[
                     "test",
-                    "--project",
-                    "firefox-visual",
                     "--project",
                     "firefox",
                     "--reporter=html,line",

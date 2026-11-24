@@ -173,7 +173,7 @@ exactly once.
 
 ### Deliverable D — integrate #2065 and choose the shard layout
 
-- [ ] Task 6: Rebase onto `main` (#2065 landed); one project per browser;
+- [x] Task 6: Rebase onto `main` (#2065 landed); one project per browser;
       provisional 4 weighted shards
   - Contract:
     - Rebase onto `origin/main`, resolving by intent. This topology supersedes

@@ -683,9 +683,8 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
 - **Focused browser-flow proof** — `dev e2e-local <spec-or-file:line>` scopes
   the local loop to one Playwright positional filter when that spec or line
-  covers the changed behavior. The filter applies to the browser's
-  `<browser>-visual` and `<browser>` projects together, with no prerequisite
-  ordering:
+  covers the changed behavior. The filter applies to the browser's one
+  `<browser>` project, visual tests included, with no prerequisite ordering:
 
   ```bash
   dev e2e-local auth.spec.ts
@@ -704,7 +703,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   gesture, losing the click. Keep destination-content assertions; do not repair
   this readiness gap with sleeps, larger timeouts or retries.
 
-- **The authoritative workflow** — `dev e2e` attempts all twelve enabled
+- **The authoritative workflow** — `dev e2e` attempts all sixteen enabled
   hermetic Nix VM lanes, then reconciles every backend/browser pair even after
   producer failures. Any producer, reconciliation or coverage failure fails the
   workflow. Full `dev validate` calls this same synchronous workflow after its
@@ -718,21 +717,21 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   boundary matters; this is not required before every push. The push hook
   remains `prepush`.
 - **Reconciliation and controls** — Every browser uses the same split per
-  backend: three lanes, `--shard=1/3` to `--shard=3/3`, each selecting the
-  browser's `<browser>-visual` and `<browser>` projects. Neither project has a
-  dependency, because `--shard` would rerun a dependency in every shard, so the
-  three lanes run each test exactly once. The catalog's per-browser
-  `shardWeights` (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the
-  shards by measured duration; re-derive them from lane reports when the shards
-  drift apart. Every lane VM runs one server instance and database per
-  Playwright worker. Producers lift available lane-qualified
-  diagnostics before propagating their original Nix failure; missing diagnostics
-  cannot turn a failure green. Reconciliation fail-closed checks the independent
-  census, report union, retries, duration manifests, phase sidecars and trace
-  captures. The retired Rust producer/control aliases are not parallel workflow
-  entrypoints. Existing unsplit Firefox workers=2/workers=4 measurement
-  installables remain available through ordinary `nix build`; workers=4 remains
-  rejected for production.
+  backend: four lanes, `--shard=1/4` to `--shard=4/4`, each selecting the
+  browser's one `<browser>` project. The project has no dependency, because
+  `--shard` would rerun a dependency in every shard, so the four lanes run each
+  test exactly once. The catalog's per-browser `shardWeights` (exported as
+  Playwright's `PWTEST_SHARD_WEIGHTS`) size the shards by measured duration;
+  re-derive them from lane reports when the shards drift apart. The four-shard
+  count and its weights are provisional until CI lane reports settle them. Every
+  lane VM runs one server instance and database per Playwright worker. Producers
+  lift available lane-qualified diagnostics before propagating their original
+  Nix failure; missing diagnostics cannot turn a failure green. Reconciliation
+  fail-closed checks the independent census, report union, retries, duration
+  manifests, phase sidecars and trace captures. The retired Rust
+  producer/control aliases are not parallel workflow entrypoints. Existing
+  unsplit Firefox workers=2/workers=4 measurement installables remain available
+  through ordinary `nix build`; workers=4 remains rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -790,11 +789,11 @@ Visual coverage is deliberately five existing behavioral tests tagged `@visual`:
 the public timeline, login form, authenticated `/app` cockpit, empty
 `/posts/new` composer, and compact `/drafts` row actions. Keep the assertions
 that prove each state ready; the screenshot comparison supplements them.
-Expected PNGs live beside their owning specs under `*.spec.ts-snapshots/`, with
-Playwright's browser project and Linux identity in the generated filename. There
-is one Chromium and one Firefox baseline per state, shared by the SQLite and
-PostgreSQL gates. Do not add backend, WebKit, mobile, or alternate-theme
-variants without changing this policy.
+Expected PNGs live beside their owning specs under `*.spec.ts-snapshots/`, named
+`<name>-<browser>-visual-linux.png` by the browser project's
+`snapshotPathTemplate`. There is one Chromium and one Firefox baseline per
+state, shared by the SQLite and PostgreSQL gates. Do not add backend, WebKit,
+mobile, or alternate-theme variants without changing this policy.
 
 Comparisons are exact: zero differing pixels, pinned DejaVu/fontconfig, and
 screenshot-only animation/caret/font CSS. The public timeline masks only
@@ -836,12 +835,14 @@ render in the pixels, and calls `setSeededSiteAppearance`
 (`end2end/tests/visual.ts`) to set the seeded title, tagline, Registration
 Policy, Site Default Audience, Media uploads and Site Theme it renders. A visual
 test therefore passes wherever it runs on an instance other tests have used.
-Fixed-name users assume one run per instance: the visual project disables
-retries, and `--repeat-each` on a visual test is unsupported.
+Visual tests take the run's retry policy like any other test. A retry that lands
+on the instance where its earlier attempt seeded the fixed-name user signs in to
+it with `signInAsVisualUser` instead of seeding it, or its Posts, again;
+`--repeat-each` on a visual test is unsupported.
 
 `dev e2e-local <spec-or-file:line>` remains the targeted loop. It selects the
-visual and non-visual projects together with that positional filter; an
-unrelated spec does not schedule all visual tests. Update mode intentionally
+browser's one project with that positional filter; an unrelated spec does not
+schedule all visual tests. Update mode selects `@visual` tests and intentionally
 rejects a positional filter.
 
 #### Accessibility workflow
@@ -1182,10 +1183,10 @@ stable `Validate (no e2e)` result-only job. The coverage source-filter probe
 (`dev coverage-check probe-source`) is an on-demand diagnostic, not an automatic
 CI step.
 
-E2E uses one catalog-derived matrix of twelve isolated producers
-(`dev e2e-producer <identity>`), three per backend/browser pair. An `always()`
+E2E uses one catalog-derived matrix of sixteen isolated producers
+(`dev e2e-producer <identity>`), four per backend/browser pair. An `always()`
 reconciliation job per pair waits for the complete producer matrix, downloads
-that pair's three artifacts and runs `dev e2e-reconcile` even if downloads fail;
+that pair's four artifacts and runs `dev e2e-reconcile` even if downloads fail;
 the SQLite/Chromium job also verifies server-function coverage. Stable
 `e2e gate` requires the catalog job, every producer, and all four
 reconciliations. Running independent surfaces across runners cuts workflow
@@ -2122,7 +2123,7 @@ per-commit knob.
 **`#[server]` flow coverage is a separate gate** (#681, ADR — _empirical
 server-fn flow coverage_). Line coverage says a fn's body ran under _some_ test;
 this says a real browser session actually drove the endpoint. It is derived from
-the OTLP traces of the three reconciled SQLite/Chromium e2e lanes, extracted per
+the OTLP traces of the four reconciled SQLite/Chromium e2e lanes, extracted per
 lane and unioned. Its sole committed generated artifact is
 `docs/coverage/server-fns.json`, which records the covered `<vertical>::<ident>`
 set plus orphan reasons and is compared byte-for-byte. Do not hand-edit it:
@@ -2151,7 +2152,7 @@ use the single explicit command:
 dev e2e-regenerate-coverage
 ```
 
-It freshly runs the three SQLite/Chromium producers, then reconciles their lifted
+It freshly runs the four SQLite/Chromium producers, then reconciles their lifted
 artifacts before writing the snapshot. Producer, reconciliation or artifact
 failures remain failures; snapshot verification is deliberately replaced by
 regeneration only for this explicit action. Ordinary `dev e2e` and
@@ -2350,7 +2351,7 @@ verdict rather than executing them again
 JSON invalidation envelope. The Nix source filters assert representative
 membership inline (the coverage filter also has
 `dev coverage-check probe-source`); do not infer execution from reused outputs.
-`dev validate` adds all twelve retained E2E lanes, their reconciliation, and
+`dev validate` adds all sixteen retained E2E lanes, their reconciliation, and
 server-function coverage verification to `dev validate-no-e2e`.
 
 ### Nix VM checks
@@ -2440,9 +2441,8 @@ server-function coverage verification to `dev validate-no-e2e`.
   tools workspace, without fence reconciliation, over its own source
   (`toolsDocTestSrc` in `nix/packages.nix`) in which every tools member is real,
   reusing the shared tools dependency build
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-{1,2,3}-of-3` —
-  three shards per backend and browser, each over the browser's visual and
-  non-visual projects
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-{1,2,3,4}-of-4`
+  — four shards per backend and browser, each over the browser's one project
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
   realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
@@ -2479,7 +2479,7 @@ e2eSalt = "run3";   # any distinct string; the value itself is never read
 ```
 
 The salt rides the lane's extra-env string into the VM test script, so it
-changes every E2E derivation hash — twelve retained gate checks, four unsplit
+changes every E2E derivation hash — sixteen retained gate checks, four unsplit
 Firefox workers=2/workers=4 control packages, and four historical single-worker
 packages. It does **not** change `packages.x86_64-linux.jaunder`:
 `nix/checks.nix` sits outside the crane source filter owned by
@@ -2499,8 +2499,8 @@ For matched arms, interleaving and interpretation, see
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite-chromium-1-of-3
-nix build .#checks.x86_64-linux.e2e-postgres-firefox-2-of-3
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium-1-of-4
+nix build .#checks.x86_64-linux.e2e-postgres-firefox-2-of-4
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
 nix build .#checks.x86_64-linux.elisp-coverage-producer

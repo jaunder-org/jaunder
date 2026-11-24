@@ -17,12 +17,7 @@ import {
   expectFlash,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
-import {
-  applySeededSession,
-  seedConfigViaTool,
-  seedPostsViaTool,
-  seedUserViaTool,
-} from "./seed";
+import { seedConfigViaTool, seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
 import {
   composePost,
@@ -43,6 +38,7 @@ import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
 import {
   setSeededSiteAppearance,
+  signInAsVisualUser,
   expectVisual,
   expectVisualRegion,
 } from "./visual";
@@ -1559,13 +1555,8 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page, tracedContext, firstNav }) => {
     await setSeededSiteAppearance(tracedContext);
-    // The name is fixed because the avatar renders it; this test runs once per
-    // instance, so it never collides with itself.
-    const session = await seedUserViaTool(
-      "visualcomposer",
-      "visualpassword123",
-    );
-    await applySeededSession(page.context(), session);
+    // The name is fixed because the avatar renders it.
+    await signInAsVisualUser(page, "visualcomposer");
     await goto(page, "/posts/new", { timeout: firstNav });
 
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();

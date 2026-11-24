@@ -23,12 +23,12 @@ import {
 import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { signOutViaAccount } from "./settings-areas";
+import { applySeededSession, createSessionViaTool } from "./seed";
 import {
-  applySeededSession,
-  createSessionViaTool,
-  seedUserViaTool,
-} from "./seed";
-import { expectVisual, setSeededSiteAppearance } from "./visual";
+  expectVisual,
+  setSeededSiteAppearance,
+  signInAsVisualUser,
+} from "./visual";
 import { expectAccessible } from "./accessibility";
 
 test("valid marker: root redirects to Home before Local paints", async ({
@@ -282,10 +282,8 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page, tracedContext, firstNav }) => {
     await setSeededSiteAppearance(tracedContext);
-    // The name is fixed because the avatar renders it; this test runs once per
-    // instance, so it never collides with itself.
-    const session = await seedUserViaTool("visualcockpit", "visualpassword123");
-    await applySeededSession(page.context(), session);
+    // The name is fixed because the avatar renders it.
+    await signInAsVisualUser(page, "visualcockpit");
     await goto(page, "/app", { timeout: firstNav });
     await expect(page.locator(".j-topbar .j-sub")).toHaveText(
       "Your published Posts",

@@ -340,25 +340,33 @@ mod tests {
     const M1: &str = include_str!("testdata/e2e-ownership/shard-1-manifest.json");
     const M2: &str = include_str!("testdata/e2e-ownership/shard-2-manifest.json");
     const M3: &str = include_str!("testdata/e2e-ownership/shard-3-manifest.json");
+    const R4: &str = include_str!("testdata/e2e-ownership/shard-4-report.json");
+    const M4: &str = include_str!("testdata/e2e-ownership/shard-4-manifest.json");
     fn e() -> Vec<(String, String, String, String)> {
         vec![
             (
-                "sqlite-firefox-1-of-3".into(),
+                "sqlite-firefox-1-of-4".into(),
                 C.into(),
                 R1.into(),
                 M1.into(),
             ),
             (
-                "sqlite-firefox-2-of-3".into(),
+                "sqlite-firefox-2-of-4".into(),
                 C.into(),
                 R2.into(),
                 M2.into(),
             ),
             (
-                "sqlite-firefox-3-of-3".into(),
+                "sqlite-firefox-3-of-4".into(),
                 C.into(),
                 R3.into(),
                 M3.into(),
+            ),
+            (
+                "sqlite-firefox-4-of-4".into(),
+                C.into(),
+                R4.into(),
+                M4.into(),
             ),
         ]
     }
@@ -367,9 +375,8 @@ mod tests {
     fn producer_population_rejects_unowned_projects_mixed_reports_and_wrong_lane() {
         let lane = catalog()
             .into_iter()
-            .find(|lane| lane.identity == "sqlite-firefox-1-of-3")
+            .find(|lane| lane.identity == "sqlite-firefox-1-of-4")
             .unwrap();
-        // A shard may hold no test of one of its selected projects.
         assert!(super::validate_population(&lane, R1, M1).is_ok());
         assert!(super::validate_population(&lane, R2, M1).is_err());
         assert!(super::validate_population(&lane, R1, M2).is_err());

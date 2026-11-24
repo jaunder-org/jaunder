@@ -313,7 +313,7 @@ For a changed browser flow, use the supported focused SQLite loop, for example
 `traced-run -- dev e2e-local auth.spec.ts`. This builds and validates current
 CSR assets and exercises a real server/Collector/browser lifecycle; it is not
 PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
-matrix. A backend/browser pair's full hermetic proof requires all three of its
+matrix. A backend/browser pair's full hermetic proof requires all four of its
 `dev e2e-producer` lanes and `dev e2e-reconcile <backend> <browser>`, not one
 shard alone; `dev e2e` owns the complete workflow. The complete commands and
 final validation ladder remain in
@@ -691,7 +691,7 @@ inconsistent input fails closed after diagnostics are captured. The gate
 evaluates every reported attempt, including retries: any attempt at **80% or
 more** of its effective whole-test timeout fails, even if a later retry passes.
 
-Each backend/browser pair adds one host reconciliation after its three lane
+Each backend/browser pair adds one host reconciliation after its four lane
 producers settle. It consumes the independent unsharded census plus every
 lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
 or duplicate source identities, swapped shard evidence, failed phases, partial
@@ -783,7 +783,7 @@ lane; fast feedback only in the static one.
   without an e2e run.
 - **E2e** (`dev e2e`, or `dev e2e-reconcile sqlite chromium <root>`): after the
   SQLite/Chromium pair reconciles, derives the snapshot from the union of its
-  three lanes' lifted captures and fails on any difference; it never regenerates
+  four lanes' lifted captures and fails on any difference; it never regenerates
   automatically.
 
 **Regeneration is explicit.** Every output is lane-qualified. The reconciled
@@ -800,7 +800,7 @@ every spec file exactly once and no test is browser- or backend-conditional — 
 one pair drops no coverage.
 
 For intentional regeneration after adding a flow, run
-`dev e2e-regenerate-coverage`. It freshly runs the three SQLite/Chromium
+`dev e2e-regenerate-coverage`. It freshly runs the four SQLite/Chromium
 producers, reconciles them and rewrites only the snapshot. Ordinary verification
 never regenerates. See [the flow-coverage workflow](../CONTRIBUTING.md#testing).
 
