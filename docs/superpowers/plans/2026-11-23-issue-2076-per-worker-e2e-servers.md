@@ -65,11 +65,12 @@ exactly once.
 
 - [x] Task 2: Hermetic VM lanes run N instances with every gate covering each
   - Contract:
-    - `checks.nix` defines the `jaunder@<i>` template units. The production
-      module `nix/nixos.nix` is unchanged.
-    - Each unit carries what today's overrides set on the unit (env,
-      preStart/init, user, stop timeout), plus its own port, DB, storage path
-      and `capture/instance-<i>/` directory.
+    - `checks.nix` generates `jaunder-<i>` units. The production module
+      `nix/nixos.nix` is unchanged.
+    - Each unit inherits the module unit's service config and environment, and
+      sets its own port, DB, storage path and `capture/instance-<i>/` directory.
+      Seeding runs as the service user, so the service account owns each
+      instance's publisher gate.
     - The collector's files stay in `capture/`.
     - Postgres: one `create-pg-db` per instance, database `jaunder_<i>`.
     - Per-instance gates: seed, then `verify-seed-trace`; journal dump, then
@@ -77,11 +78,12 @@ exactly once.
     - Readers of server-stream files (`diag.log`, `mail.jsonl`, `websub.jsonl`)
       read every `instance-<i>/` directory: server-fn coverage IO, the trace
       runner, and the mail/capture helpers.
-    - The E2E unit-env assertion (`checks.nix:1803`) targets the template. The
-      production-module assertions (`checks.nix:1791-1800`, `2193`) are
+    - The E2E unit-env assertion (`checks.nix:1803`) targets the instance units.
+      The production-module assertions (`checks.nix:1791-1800`, `2193`) are
       untouched.
-    - The perf, wasm-coverage and measurement checks declare one instance; the
-      workers=4 control declares 4.
+    - The perf check declares one instance. The workers=4 control declares 4.
+      The wasm-coverage checks keep the module's own unit, with one shared
+      single-server entry.
   - Verification:
     - `dev e2e-producer` is green for one sqlite and one postgres Firefox lane
       on the current topology.
@@ -111,8 +113,10 @@ exactly once.
       one seeds its own fixed-name user. Each one also sets the global settings
       its screenshot renders, using the seed values.
   - Verification:
-    - Each `@visual` test passes against the existing, unchanged PNG baselines
-      when it runs after site-global specs on the same instance.
+    - Each `@visual` test passes against its baseline when it runs after
+      site-global specs on the same instance. The cockpit and composer baselines
+      were regenerated for plainly named users (user decision): only the avatar
+      changes. The other baselines are unchanged.
     - `dev e2e-local` is green across the full suite in two genuinely different
       orders:
       - workers=1, where one instance sees every test in file order;
@@ -144,6 +148,10 @@ exactly once.
       webkit project.
     - Instance RSS and VM headroom are re-measured on the shipped layout (one
       Firefox lane per backend). The workers=4 control's sizing is rechecked.
+      Report anon memory or minimum MemAvailable, not only cgroup MemoryPeak,
+      which includes page cache.
+    - Afterwards, remove the `report_e2e_memory()` measurement scaffolding. The
+      numbers go in the PR body.
 
 ### Deliverable C — record and docs
 

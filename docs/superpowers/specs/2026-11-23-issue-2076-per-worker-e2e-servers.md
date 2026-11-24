@@ -31,10 +31,10 @@ topologies and leaves the serial lanes in place.
 Playwright worker count. Each instance has its own port, database, storage path
 and capture subdirectory. The two harnesses do this as follows:
 
-| Harness         | How it starts N instances                                                                                                                                                                                                                            |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Nix lane VM     | Templated systemd units `jaunder@<i>`. Each one gets the same environment, preStart, user and stop behaviour as today's `jaunder.service`. Postgres lanes create one database per instance with `create-pg-db`, in the one existing Postgres server. |
-| `dev e2e-local` | N `HostServerSession`s. These are already identity-checked and use port 0. SQLite only, as today.                                                                                                                                                    |
+| Harness         | How it starts N instances                                                                                                                                                                                                                       |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Nix lane VM     | Generated units `jaunder-<i>`. Each one inherits the module unit's service config and environment, and overrides only its own values. Postgres lanes create one database per instance with `create-pg-db`, in the one existing Postgres server. |
+| `dev e2e-local` | N `HostServerSession`s. These are already identity-checked and use port 0. SQLite only, as today.                                                                                                                                               |
 
 The OTel collector stays shared by all instances, because traces correlate by
 trace ID.
@@ -67,9 +67,10 @@ server now does the same thing for each instance:
 
 Consumers that expect a single `capture/diag.log`, such as server-function
 coverage, either merge the per-instance subdirectories or read each one.
-ADR-0057's capture-directory contract is amended to match. The measurement,
-performance and wasm-coverage VM checks keep their own unit definitions, run as
-the same template.
+ADR-0057's capture-directory contract is amended to match. The performance check
+runs one generated instance. The wasm-coverage checks keep the module's single
+`jaunder.service`, because they have no collector, capture or gates. Their
+one-entry instance map is defined once and shared.
 
 **Costs we accept.**
 
@@ -143,14 +144,17 @@ Proof to execute:
   failure may appear in the retry or flaky reporting.
 - **Memory:** measure peak RSS per instance and the VM's memory headroom in at
   least one Firefox lane per backend, and record them in the PR.
-- **Visual baselines:** the existing `@visual` PNG baselines pass unchanged,
-  with visual tests interleaved after other tests on the same instance.
+- **Visual baselines:** the `@visual` baselines pass with visual tests
+  interleaved after other tests on the same instance. The cockpit and composer
+  tests now use plainly named users instead of `testlogin`. Their baselines are
+  regenerated with the supported updater, and they differ only in the avatar's
+  initial and hue (user decision). The other baselines are unchanged.
 - **Local runs:** `dev e2e-local <spec>` and `--update-visual-snapshots` work
   with N instances.
 
 Deliverables to commit:
 
-- the instance template and gate loops;
+- the per-instance units and gate loops;
 - host-driver support for N sessions;
 - the worker-scoped instance access;
 - the merged projects and lane catalog;
