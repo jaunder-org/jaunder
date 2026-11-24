@@ -282,9 +282,9 @@ test(
   { tag: ["@visual", "@accessibility"] },
   async ({ page, tracedContext, firstNav }) => {
     await setSeededSiteAppearance(tracedContext);
-    // The avatar renders this name's initial and character-sum hue, so it is an
-    // anagram of the baseline's `testlogin`, and run once per instance.
-    const session = await seedUserViaTool("testoling", "visualpassword123");
+    // The name is fixed because the avatar renders it; this test runs once per
+    // instance, so it never collides with itself.
+    const session = await seedUserViaTool("visualcockpit", "visualpassword123");
     await applySeededSession(page.context(), session);
     await goto(page, "/app", { timeout: firstNav });
     await expect(page.locator(".j-topbar .j-sub")).toHaveText(

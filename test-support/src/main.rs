@@ -179,8 +179,9 @@ enum Commands {
     /// Reset the mail-capture file (delete it; missing is fine). Derives
     /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
     ResetMail,
-    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`),
-    /// derived from `JAUNDER_CAPTURE_DIR`. Errors on an unset dir or unknown stream.
+    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`/`otel`),
+    /// derived from `JAUNDER_CAPTURE_DIR`; collector streams resolve to an instance
+    /// directory's capture root. Errors on an unset dir or unknown stream.
     CapturePath {
         /// The capture stream key.
         stream: String,

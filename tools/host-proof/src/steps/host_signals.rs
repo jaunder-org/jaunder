@@ -7,11 +7,6 @@ use tokio::runtime::Builder;
 
 use super::process::Process;
 
-pub(super) enum ServerExit {
-    Signal(i32),
-    Unexpected,
-}
-
 pub(super) struct ServerSignals {
     runtime: tokio::runtime::Runtime,
     interrupt: tokio::signal::unix::Signal,
@@ -54,24 +49,6 @@ impl ServerSignals {
             })
             .await
             .ok()
-        })
-    }
-
-    pub(super) fn wait_until_stopped(&mut self, mut stopped: impl FnMut() -> bool) -> ServerExit {
-        if let Some(code) = self.take_pending() {
-            return ServerExit::Signal(code);
-        }
-        self.runtime.block_on(async {
-            loop {
-                if stopped() {
-                    return ServerExit::Unexpected;
-                }
-                tokio::select! {
-                    _ = tokio::time::sleep(Duration::from_millis(100)) => {},
-                    _ = self.interrupt.recv() => return ServerExit::Signal(130),
-                    _ = self.terminate.recv() => return ServerExit::Signal(143),
-                }
-            }
         })
     }
 
