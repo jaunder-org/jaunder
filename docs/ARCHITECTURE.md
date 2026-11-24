@@ -5321,8 +5321,8 @@ shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
 steps is outside the rule. Under that decision `e2e-local` and `perf-data` move
 to Python and `qualification` is retired for a scheduled upgrade test, each in
 its own follow-up; `pr-observer` has already become the native `dev pr-watch`
-([native observer decision](adr/drafts/pr-watch-native-python-observer.md)).
-Until then the placements below describe the current tree:
+([native observer decision](adr/0264-pr-watch-native-python-observer.md)). Until
+then the placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
@@ -5586,7 +5586,7 @@ in full
 Because green checks are only phase one under a queue — and an ejected PR leaves
 the queue silently — `dev pr-watch [N]` owns ordinary PR observation, natively
 in the `dev` package (`tools/dev/dev/pr_watch.py`) with no Nix-built tool
-([native observer decision](adr/drafts/pr-watch-native-python-observer.md)). By
+([native observer decision](adr/0264-pr-watch-native-python-observer.md)). By
 default it follows checks until the next caller-actionable outcome: a green,
 unarmed PR returns `ready-to-land`, while an already armed or queued PR
 continues through the queue. `--until merged` explicitly requests passive
@@ -5621,8 +5621,8 @@ required aggregate fails. This replaced the job-graph classification of
 [dynamic PR check classification](adr/0195-dynamic-pr-check-classification.md)
 and its
 [incomplete-evidence refinement](adr/0198-active-workflow-incomplete-pr-evidence.md)
-([native observer decision](adr/drafts/pr-watch-native-python-observer.md)).
-This classification contains no maintained check, job or workflow name.
+([native observer decision](adr/0264-pr-watch-native-python-observer.md)). This
+classification contains no maintained check, job or workflow name.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
 — live in root `.outcome` in direct observer JSON, with `.pr` (number),
