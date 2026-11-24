@@ -3223,7 +3223,7 @@ query APIs.
 
 **Upgrade test.** One NixOS VM test per backend asks whether a site an earlier
 Jaunder wrote still works after an in-place upgrade
-([upgrade test decision](adr/drafts/upgrade-test.md)). The earlier build's own
+([upgrade test decision](adr/0265-upgrade-test.md)). The earlier build's own
 `jaunder`, `test-support` and e2e package create the production-baseline records
 and verify them, as the service user and with only earlier binaries touching the
 database. `switch-to-configuration test` then moves the node to a specialisation
@@ -4539,7 +4539,7 @@ That decision supersedes the Just-ownership parts of the
 [Just-owned gate workflow decision](adr/0237-just-owned-gate-workflows.md),
 [Just E2E workflow ownership](adr/0238-just-e2e-workflow-ownership.md),
 [qualification workflow ownership](adr/0239-qualification-workflow-ownership.md)
-(itself since superseded by the [upgrade test](adr/drafts/upgrade-test.md)) and
+(itself since superseded by the [upgrade test](adr/0265-upgrade-test.md)) and
 [Just frontdoors with a host-only PR observer](adr/0240-just-frontdoors-host-pr-observer.md),
 the `just perf*` front doors of the
 [performance workflow ownership decision](adr/0241-performance-workflow-ownership.md)
@@ -5294,7 +5294,7 @@ to Python, each in its own follow-up; `pr-observer` has already become the
 native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
-[upgrade test](adr/drafts/upgrade-test.md). Until the remaining moves land the
+[upgrade test](adr/0265-upgrade-test.md). Until the remaining moves land the
 placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the

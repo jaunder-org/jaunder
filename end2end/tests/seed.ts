@@ -68,7 +68,7 @@ function record(raw: unknown): Record<string, unknown> {
 /**
  * The exact demo-profile manifest. The upgrade test also parses the manifest an
  * earlier build wrote, so a change to the demo profile keeps accepting every
- * version written since the latest tag (docs/adr/drafts/upgrade-test.md).
+ * version written since the latest tag (docs/adr/0265-upgrade-test.md).
  */
 export function parseSandboxSeedManifest(raw: unknown): SandboxSeedManifest {
   const manifest = record(raw);

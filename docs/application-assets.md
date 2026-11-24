@@ -79,7 +79,7 @@ routing browser traffic to that target. Startup re-verifies system content.
 
 ## Upgrade test and limits
 
-The scheduled upgrade test ([upgrade test decision](adr/drafts/upgrade-test.md))
+The scheduled upgrade test ([upgrade test decision](adr/0265-upgrade-test.md))
 has an earlier build create and verify a site, upgrades the service in place,
 and has the current build verify the same records on SQLite and PostgreSQL. It
 runs on each `v*` tag (from the previous tag), weekly (from the last green run)

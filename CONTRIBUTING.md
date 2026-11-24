@@ -919,7 +919,7 @@ source-development diagnostics.
 
 The scheduled upgrade test upgrades a site an earlier build wrote to this
 checkout and verifies its records
-([upgrade test decision](docs/adr/drafts/upgrade-test.md)).
+([upgrade test decision](docs/adr/0265-upgrade-test.md)).
 `dev upgrade-test --from <rev> <sqlite|postgres>` runs it in a local VM and
 `dev upgrade-dispatch [--from <rev>] [--ref <branch>]` starts the CI workflow.
 Changing `BaselineState` (`end2end/tests/production-baseline.ts`) or the demo

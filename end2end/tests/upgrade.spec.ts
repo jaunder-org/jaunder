@@ -11,7 +11,7 @@ import {
 } from "./production-baseline";
 import { seedSandboxProfileViaTool } from "./seed";
 
-// One half of the upgrade test (docs/adr/drafts/upgrade-test.md). The
+// One half of the upgrade test (docs/adr/0265-upgrade-test.md). The
 // `baseline` phase runs on the earlier build: it creates and verifies the
 // baseline records, then hands their state and the author's browser session to
 // the `upgraded` phase, which runs on the current build after an in-place

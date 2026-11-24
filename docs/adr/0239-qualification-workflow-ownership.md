@@ -159,6 +159,6 @@ No implementation is authorized by this draft.
 ## Addendum (2026-11-24)
 
 As of #2069 this decision is superseded by
-[the upgrade test decision](drafts/upgrade-test.md): `tools/qualification`, its
+[the upgrade test decision](0265-upgrade-test.md): `tools/qualification`, its
 `production-baseline-*` workflows and their evidence contracts were retired.
 Current state: `docs/ARCHITECTURE.md`, "Upgrade test".
