@@ -10,7 +10,6 @@ skip it.
 """
 
 import os
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -21,22 +20,21 @@ import yaml
 from conftest import REPOSITORY, require
 
 WORKFLOWS = REPOSITORY / ".github" / "workflows"
-BASH = shutil.which("bash") or "/bin/bash"
 
 # Answers `gh release view` from the case's release state and logs every other
 # call, one line of arguments each, for the test to compare exactly.
-FAKE_GH = f"""#!{sys.executable}
+FAKE_GH = """\
 import os, pathlib, shutil, sys
 arguments = sys.argv[1:]
 if arguments[:2] == ["release", "view"]:
-    if os.environ["MOCK_RELEASE"] == "absent":
+    if os.environ["FAKE_RELEASE"] == "absent":
         sys.exit(1)
     field = arguments[arguments.index("--json") + 1] if "--json" in arguments else None
-    answers = {{
-        "assets": "MOCK_ASSET_COUNT",
-        "isDraft": "MOCK_DRAFT",
-        "isPrerelease": "MOCK_PRERELEASE",
-    }}
+    answers = {
+        "assets": "FAKE_ASSET_COUNT",
+        "isDraft": "FAKE_DRAFT",
+        "isPrerelease": "FAKE_PRERELEASE",
+    }
     if field is not None:
         print(os.environ[answers[field]])
     sys.exit(0)
@@ -46,12 +44,12 @@ if arguments[:2] not in (
     ["release", "download"],
     ["release", "edit"],
 ):
-    sys.exit(f"unexpected gh invocation: {{arguments}}")
-with open(os.environ["MOCK_GH_LOG"], "a") as log:
+    sys.exit(f"unexpected gh invocation: {arguments}")
+with open(os.environ["FAKE_GH_LOG"], "a") as log:
     log.write(" ".join(arguments) + "\\n")
 if arguments[1] == "download":
     target = pathlib.Path(arguments[arguments.index("--dir") + 1]) / "theme-package.zip"
-    if os.environ["MOCK_DOWNLOADED_BYTES"] == "identical":
+    if os.environ["FAKE_DOWNLOADED_BYTES"] == "identical":
         shutil.copyfile(os.environ["PACKAGE"], target)
     else:
         target.write_text("different bytes\\n")
@@ -74,7 +72,7 @@ def step(name: str) -> str:
 
 def run(block: str, **env: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [BASH, "-c", block],
+        ["bash", "-c", block],
         env={"PATH": os.environ["PATH"], **env},
         capture_output=True,
         text=True,
@@ -138,7 +136,7 @@ def release(tmp_path: Path, tag: str, **state: str) -> tuple[int, list[str]]:
     bin_directory = tmp_path / "bin"
     bin_directory.mkdir()
     gh = bin_directory / "gh"
-    gh.write_text(FAKE_GH)
+    gh.write_text(f"#!{sys.executable}\n{FAKE_GH}")
     gh.chmod(0o755)
     package = tmp_path / "theme-package.zip"
     package.write_text("package bytes\n")
@@ -150,7 +148,7 @@ def release(tmp_path: Path, tag: str, **state: str) -> tuple[int, list[str]]:
         TAG=tag,
         PACKAGE=str(package),
         RUNNER_TEMP=str(tmp_path),
-        MOCK_GH_LOG=str(log),
+        FAKE_GH_LOG=str(log),
         **state,
     )
     calls = log.read_text().replace(str(tmp_path), "$TMP").splitlines()
@@ -161,62 +159,77 @@ UPLOAD = "release upload {tag} $TMP/theme-package.zip#theme-package.zip"
 DOWNLOAD = "release download {tag} --pattern theme-package.zip --dir $TMP/existing-theme-package"
 
 
+def present(
+    *, draft: bool, prerelease: bool, assets: int, downloaded: str = "identical"
+) -> dict[str, str]:
+    """The fake `gh`'s state for a release that already exists."""
+    return {
+        "FAKE_RELEASE": "present",
+        "FAKE_DRAFT": str(draft).lower(),
+        "FAKE_PRERELEASE": str(prerelease).lower(),
+        "FAKE_ASSET_COUNT": str(assets),
+        "FAKE_DOWNLOADED_BYTES": downloaded,
+    }
+
+
 @pytest.mark.parametrize(
-    ("tag", "draft", "prerelease", "assets", "downloaded", "status", "calls"),
+    ("tag", "state", "status", "calls"),
     [
         pytest.param(
-            "v1.2.3", "false", "false", "0", "identical", 0, [UPLOAD],
+            "v1.2.3",
+            present(draft=False, prerelease=False, assets=0),
+            0,
+            [UPLOAD],
             id="stable_matching",
         ),
         pytest.param(
-            "v1.2.3", "true", "true", "0", "identical", 0,
+            "v1.2.3",
+            present(draft=True, prerelease=True, assets=0),
+            0,
             [UPLOAD, "release edit {tag} --draft=false --prerelease=false"],
             id="stable_mismatched_draft",
         ),
         pytest.param(
-            "v1.2.3-rc.1", "true", "true", "0", "identical", 0,
+            "v1.2.3-rc.1",
+            present(draft=True, prerelease=True, assets=0),
+            0,
             [UPLOAD, "release edit {tag} --draft=false"],
             id="prerelease_matching_draft",
         ),
         pytest.param(
-            "v1.2.3-rc.1", "false", "false", "0", "identical", 0,
+            "v1.2.3-rc.1",
+            present(draft=False, prerelease=False, assets=0),
+            0,
             [UPLOAD, "release edit {tag} --prerelease=true"],
             id="prerelease_mismatched",
         ),
         pytest.param(
-            "v1.2.3-rc.1", "true", "false", "1", "identical", 0,
+            "v1.2.3-rc.1",
+            present(draft=True, prerelease=False, assets=1),
+            0,
             [DOWNLOAD, "release edit {tag} --draft=false --prerelease=true"],
             id="identical_asset",
         ),
         pytest.param(
-            "v1.2.3", "true", "true", "1", "different", 1, [DOWNLOAD],
+            "v1.2.3",
+            present(draft=True, prerelease=True, assets=1, downloaded="different"),
+            1,
+            [DOWNLOAD],
             id="different_asset",
         ),
         pytest.param(
-            "v1.2.3", "true", "true", "2", "identical", 1, [],
+            "v1.2.3",
+            present(draft=True, prerelease=True, assets=2),
+            1,
+            [],
             id="duplicate_assets",
         ),
     ],
-)  # fmt: skip
+)
 def test_an_existing_release_keeps_its_package_and_corrects_its_flags(
-    tmp_path: Path,
-    tag: str,
-    draft: str,
-    prerelease: str,
-    assets: str,
-    downloaded: str,
-    status: int,
-    calls: list[str],
+    tmp_path: Path, tag: str, state: dict[str, str], status: int, calls: list[str]
 ) -> None:
-    actual = release(
-        tmp_path,
-        tag,
-        MOCK_RELEASE="present",
-        MOCK_DRAFT=draft,
-        MOCK_PRERELEASE=prerelease,
-        MOCK_ASSET_COUNT=assets,
-        MOCK_DOWNLOADED_BYTES=downloaded,
-    )
+    actual = release(tmp_path, tag, **state)
     assert actual == (status, [call.format(tag=tag) for call in calls])
 
 
@@ -235,4 +248,4 @@ def test_an_absent_release_is_created_with_the_package_alone(
     create = (
         f"release create {tag} $TMP/theme-package.zip#theme-package.zip --title {tag}"
     )
-    assert release(tmp_path, tag, MOCK_RELEASE="absent") == (0, [create + flags])
+    assert release(tmp_path, tag, FAKE_RELEASE="absent") == (0, [create + flags])
