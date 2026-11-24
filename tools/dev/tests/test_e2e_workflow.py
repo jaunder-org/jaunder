@@ -65,9 +65,9 @@ if [[ -e $EVENTS.fail-reconcile && $1 == reconcile ]]; then exit 31; fi
 if [[ -n ${{REAL_VERIFIER-}} ]]; then exec "$REAL_VERIFIER" "$@"; fi
 printf '{{"steps":[{{"name":"%s","ok":true,"duration_ms":1}}]}}\\n' "$1"
 """
-LANE = "sqlite-chromium-ordinary-1-of-2"
-COVERAGE_LANES = 4
-LANES = 16
+LANE = "sqlite-chromium-1-of-3"
+COVERAGE_LANES = 3
+LANES = 12
 PAIRS = ["sqlite chromium", "sqlite firefox", "postgres chromium", "postgres firefox"]
 MARKER = f"producer-input-{LANE}.json"
 
@@ -180,7 +180,7 @@ def test_an_early_producer_failure_still_settles_every_lane_and_every_reconcilia
     assert result.returncode != 0
     lines = e2e.events().splitlines()
     assert sum(line.startswith("producer ") for line in lines) == LANES, lines
-    assert "producer postgres-firefox-serial-special" in lines
+    assert "producer postgres-firefox-3-of-3" in lines
     for pair in PAIRS:
         assert any(f"reconcile {pair}" in line for line in lines[LANES:]), pair
     # Only the SQLite/Chromium reconciliation goes on to coverage, after it.
@@ -191,7 +191,7 @@ def test_an_early_producer_failure_still_settles_every_lane_and_every_reconcilia
     assert len(coverage) == 1 and coverage[0] == reconcile + 1, lines
     assert not e2e.capture.exists(), "a failed producer reused stale evidence"
     assert (e2e.root / ".xtask" / "not-owned-keep").read_text() == "keep"
-    for lane in [LANE, "postgres-firefox-serial-special"]:
+    for lane in [LANE, "postgres-firefox-3-of-3"]:
         log = e2e.root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.log"
         assert f"producer exit {failure}" in log.read_text()
 

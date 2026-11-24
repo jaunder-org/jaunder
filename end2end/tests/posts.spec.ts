@@ -2241,6 +2241,7 @@ test("Local shows published posts for unauthenticated visitors", async ({
   firstNav,
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "local_timeline");
+  await seedConfigViaTool("site.title", "Jaunder");
 
   const u1 = await signInAsNewUser(page);
   await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
@@ -2254,8 +2255,6 @@ test("Local shows published posts for unauthenticated visitors", async ({
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNav });
 
-  // No title is configured in the ordinary fixture, so Local uses the required
-  // identity default. Configuration-mutating specs run later in serial projects.
   await expect(guestPage.locator(SEL.topbarHeading)).toHaveText("Jaunder");
 
   // Own-scoped: with workers>1 other tests publish into the same global local

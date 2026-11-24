@@ -37,7 +37,7 @@ if [[ ${1-} == pair ]]; then
   backend=${2:?expected backend} browser=${3:?expected browser}
   lanes=$(jq -er --arg backend "$backend" --arg browser "$browser" \
     '[.lanes[] | select(.enabled and .backend == $backend and .browser == $browser) | .identity] | if length > 0 then .[] else error("no enabled lanes") end' "$catalog")
-  # A pair is four lanes; run them together, as one CI pair would.
+  # A pair is three lanes; run them together, as one CI pair would.
   produce "$(wc -l <<<"$lanes")" "$lanes"
   exit
 fi

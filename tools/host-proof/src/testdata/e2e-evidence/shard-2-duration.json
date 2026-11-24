@@ -4,8 +4,8 @@
   "tests": [
     {
       "test_id": "two",
-      "project_id": "firefox-ordinary",
-      "project_name": "firefox-ordinary",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "title": "ordinary shard two",
       "file": "tests/ordinary.spec.ts",
       "line": 2,

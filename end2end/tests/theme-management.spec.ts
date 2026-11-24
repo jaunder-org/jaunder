@@ -1,5 +1,5 @@
 import type { Locator, Page } from "@playwright/test";
-import { test, expect } from "./fixtures";
+import { test, expect, setTestBudget } from "./fixtures";
 import { expectAccessible } from "./accessibility";
 import { navigateInApp } from "./navigate";
 import {
@@ -2270,6 +2270,10 @@ test("author completes package, Media rotation, preview, export and private reim
   page,
   tracedContext,
 }) => {
+  // 53 Media uploads plus a full package lifecycle: the work itself, not a
+  // single wait, sets this test's length, so it needs more than the default
+  // whole-test budget under two-worker contention.
+  setTestBudget(44_000);
   const username = await signInAsNewUser(page);
   const original = readFileSync(
       resolve(imageFixtureDirectory, "png-original.png"),

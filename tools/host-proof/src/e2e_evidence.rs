@@ -165,7 +165,7 @@ fn source_population(raw: &str, kind: &str) -> Result<BTreeSet<SourceIdentity>, 
     Ok(tests)
 }
 
-/// Compare a reconciled split run with an unsplit control that actually ran.
+/// Compare a reconciled sharded run with an unsplit control that actually ran.
 /// The census source identity is stable across project topology while each side's
 /// report remains independently validated by its owning reconciliation path.
 pub fn compare_control_population(
@@ -191,12 +191,7 @@ pub fn compare_control_population(
     }
     let control_lane = lanes
         .iter()
-        .find(|lane| {
-            lane.backend == backend
-                && lane.browser == "firefox"
-                && !lane.enabled
-                && lane.partition == "unsplit"
-        })
+        .find(|lane| lane.backend == backend && lane.browser == "firefox" && !lane.enabled)
         .ok_or_else(|| "missing Firefox unsplit measurement control lane".to_owned())?;
     let control_census_raw = read(control_census, "control census")?;
     let control_report_raw = read(control_report, "control Playwright report")?;
@@ -257,12 +252,7 @@ pub fn reconcile(
 
     let expected = lanes
         .iter()
-        .filter(|lane| {
-            lane.backend == backend
-                && lane.browser == browser
-                && lane.enabled
-                && lane.partition != "unsplit"
-        })
+        .filter(|lane| lane.backend == backend && lane.browser == browser && lane.enabled)
         .map(|lane| lane.identity.as_str())
         .collect::<BTreeSet<_>>();
     if supplied != expected {
@@ -272,11 +262,7 @@ pub fn reconcile(
         let Some(lane) = lanes.iter().find(|lane| lane.identity == item.identity) else {
             continue;
         };
-        if lane.backend != backend
-            || lane.browser != browser
-            || !lane.enabled
-            || lane.partition == "unsplit"
-        {
+        if lane.backend != backend || lane.browser != browser || !lane.enabled {
             errors.push(format!("unexpected lane `{}`", item.identity));
             continue;
         }
@@ -385,41 +371,35 @@ pub(crate) mod tests {
         lanes: Vec<super::ExpectedLane>,
     }
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
-    const REPORTS: [&str; 4] = [
-        include_str!("testdata/e2e-ownership/ordinary-1-report.json"),
-        include_str!("testdata/e2e-ownership/ordinary-2-report.json"),
-        include_str!("testdata/e2e-ownership/serial-special-report.json"),
-        include_str!("testdata/e2e-ownership/serial-theme-report.json"),
+    const REPORTS: [&str; 3] = [
+        include_str!("testdata/e2e-ownership/shard-1-report.json"),
+        include_str!("testdata/e2e-ownership/shard-2-report.json"),
+        include_str!("testdata/e2e-ownership/shard-3-report.json"),
     ];
-    const LANE_MANIFESTS: [&str; 4] = [
-        include_str!("testdata/e2e-ownership/ordinary-1-manifest.json"),
-        include_str!("testdata/e2e-ownership/ordinary-2-manifest.json"),
-        include_str!("testdata/e2e-ownership/serial-special-manifest.json"),
-        include_str!("testdata/e2e-ownership/serial-theme-manifest.json"),
+    const LANE_MANIFESTS: [&str; 3] = [
+        include_str!("testdata/e2e-ownership/shard-1-manifest.json"),
+        include_str!("testdata/e2e-ownership/shard-2-manifest.json"),
+        include_str!("testdata/e2e-ownership/shard-3-manifest.json"),
     ];
-    const DURATION_MANIFESTS: [&str; 4] = [
-        include_str!("testdata/e2e-evidence/ordinary-1-duration.json"),
-        include_str!("testdata/e2e-evidence/ordinary-2-duration.json"),
-        include_str!("testdata/e2e-evidence/serial-special-duration.json"),
-        include_str!("testdata/e2e-evidence/serial-theme-duration.json"),
+    const DURATION_MANIFESTS: [&str; 3] = [
+        include_str!("testdata/e2e-evidence/shard-1-duration.json"),
+        include_str!("testdata/e2e-evidence/shard-2-duration.json"),
+        include_str!("testdata/e2e-evidence/shard-3-duration.json"),
     ];
-    const TRACES: [&str; 4] = [
-        include_str!("testdata/e2e-evidence/ordinary-1-trace.jsonl"),
-        include_str!("testdata/e2e-evidence/ordinary-2-trace.jsonl"),
-        include_str!("testdata/e2e-evidence/serial-special-trace.jsonl"),
-        include_str!("testdata/e2e-evidence/serial-theme-trace.jsonl"),
+    const TRACES: [&str; 3] = [
+        include_str!("testdata/e2e-evidence/shard-1-trace.jsonl"),
+        include_str!("testdata/e2e-evidence/shard-2-trace.jsonl"),
+        include_str!("testdata/e2e-evidence/shard-3-trace.jsonl"),
     ];
-    const PHASES: [&str; 4] = [
-        include_str!("testdata/e2e-evidence/ordinary-1-phase.json"),
-        include_str!("testdata/e2e-evidence/ordinary-2-phase.json"),
-        include_str!("testdata/e2e-evidence/serial-special-phase.json"),
-        include_str!("testdata/e2e-evidence/serial-theme-phase.json"),
+    const PHASES: [&str; 3] = [
+        include_str!("testdata/e2e-evidence/shard-1-phase.json"),
+        include_str!("testdata/e2e-evidence/shard-2-phase.json"),
+        include_str!("testdata/e2e-evidence/shard-3-phase.json"),
     ];
-    const IDENTITIES: [&str; 4] = [
-        "sqlite-firefox-ordinary-1-of-2",
-        "sqlite-firefox-ordinary-2-of-2",
-        "sqlite-firefox-serial-special",
-        "sqlite-firefox-serial-theme",
+    const IDENTITIES: [&str; 3] = [
+        "sqlite-firefox-1-of-3",
+        "sqlite-firefox-2-of-3",
+        "sqlite-firefox-3-of-3",
     ];
 
     pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {
@@ -483,7 +463,7 @@ pub(crate) mod tests {
         let lifted = temp.path().join("lifted");
         let (_, lanes) =
             super::reconciled_lanes("sqlite", "firefox", &catalog_path, &lifted).unwrap();
-        assert_eq!(lanes.len(), 4);
+        assert_eq!(lanes.len(), 3);
         assert!(lanes.iter().all(|lane| lane.capture.exists()));
         // The same root holds no Chromium lanes, so that pair must not reconcile.
         assert!(super::reconciled_lanes("sqlite", "chromium", &catalog_path, &lifted).is_err());
@@ -532,7 +512,6 @@ pub(crate) mod tests {
             "lane": "sqlite-firefox-unsplit",
             "backend": "sqlite",
             "browser": "firefox",
-            "partition": "unsplit",
             "shard_index": null,
             "shard_count": null,
             "tests": tests,
@@ -585,11 +564,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn complete_four_lane_fixture_reconciles() {
+    fn complete_three_lane_fixture_reconciles() {
         let temp = tempfile::tempdir().unwrap();
         let evidence = fixture(temp.path());
         let detail = reconcile("sqlite", "firefox", &catalog().unwrap().lanes, &evidence).unwrap();
-        assert!(detail.contains("4 lane-qualified evidence sets"));
+        assert!(detail.contains("3 lane-qualified evidence sets"));
     }
 
     #[test]

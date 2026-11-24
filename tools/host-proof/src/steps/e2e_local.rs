@@ -168,59 +168,26 @@ fn owned_args(args: &[&str]) -> Vec<String> {
     args.iter().map(|arg| (*arg).to_owned()).collect()
 }
 
-fn ordinary_projects(
-    browser: E2eLocalBrowser,
-    test_filter: Option<&str>,
-) -> &'static [&'static str] {
-    match (browser, test_filter.is_some()) {
-        // Preserve the omitted-selector Chromium command, including its existing
-        // dependency chain. A filtered run instead selects every Chromium project
-        // so a visual, ordinary, or serialized admin test can all be found by its
-        // positional Playwright filter.
-        (E2eLocalBrowser::Chromium, false) => {
-            &["chromium", "chromium-admin-site", "chromium-admin"]
-        }
-        (E2eLocalBrowser::Chromium, true) => &[
-            "chromium-visual",
-            "chromium",
-            "chromium-admin-site",
-            "chromium-theme",
-            "chromium-admin",
-        ],
-        // Theme, admin-site, media, and invite tests are deliberately excluded
-        // from Firefox's ordinary project, but remain runnable through its visual
-        // and dependent projects when a local filter explicitly selects one.
-        (E2eLocalBrowser::Firefox, false) => &["firefox"],
-        (E2eLocalBrowser::Firefox, true) => &[
-            "firefox-visual",
-            "firefox",
-            "firefox-admin-site",
-            "firefox-theme",
-            "firefox-admin",
-        ],
-        // WebKit likewise keeps its fast ordinary default. Its theme/admin
-        // project joins filtered runs, so file:line filters cannot silently skip
-        // the tests that `webkit` excludes.
-        (E2eLocalBrowser::Webkit, false) => &["webkit"],
-        (E2eLocalBrowser::Webkit, true) => &["webkit", "webkit-theme"],
+/// Every project of the browser, so a positional filter finds a visual or a
+/// non-visual test alike. No project has a dependency, so selecting both runs
+/// each selected test once, in no particular order.
+fn browser_projects(browser: E2eLocalBrowser) -> &'static [&'static str] {
+    match browser {
+        E2eLocalBrowser::Chromium => &["chromium-visual", "chromium"],
+        E2eLocalBrowser::Firefox => &["firefox-visual", "firefox"],
+        E2eLocalBrowser::Webkit => &["webkit"],
     }
 }
 
-fn ordinary_invocation(
-    browser: E2eLocalBrowser,
-    test_filter: Option<&str>,
-) -> PlaywrightInvocation {
+fn browser_invocation(browser: E2eLocalBrowser, test_filter: Option<&str>) -> PlaywrightInvocation {
     let mut args = owned_args(&["test"]);
-    for project in ordinary_projects(browser, test_filter) {
+    for project in browser_projects(browser) {
         args.extend(["--project".to_owned(), (*project).to_owned()]);
     }
-    if let Some(filter) = test_filter {
-        args.extend(owned_args(&["--no-deps", "--reporter=html,line", filter]));
-    } else {
-        args.push("--reporter=html,line".to_owned());
-    }
+    args.push("--reporter=html,line".to_owned());
+    args.extend(test_filter.map(str::to_owned));
     PlaywrightInvocation {
-        label: "ordinary",
+        label: "browser",
         args,
     }
 }
@@ -229,7 +196,7 @@ fn normal_invocations(
     browser: E2eLocalBrowser,
     test_filter: Option<&str>,
 ) -> Vec<PlaywrightInvocation> {
-    vec![ordinary_invocation(browser, test_filter)]
+    vec![browser_invocation(browser, test_filter)]
 }
 
 fn resolve_e2e_env(
@@ -298,7 +265,6 @@ fn e2e_local_plan(
                             "test",
                             "--project",
                             &format!("{browser}-visual"),
-                            "--no-deps",
                             "--update-snapshots",
                             "--reporter=html,line",
                         ]),
@@ -1352,15 +1318,13 @@ while :; do :; done"#;
         assert_eq!(
             lifecycle.invocations,
             [PlaywrightInvocation {
-                label: "ordinary",
+                label: "browser",
                 args: owned_args(&[
                     "test",
                     "--project",
+                    "chromium-visual",
+                    "--project",
                     "chromium",
-                    "--project",
-                    "chromium-admin-site",
-                    "--project",
-                    "chromium-admin",
                     "--reporter=html,line",
                 ]),
             }]
@@ -1368,7 +1332,7 @@ while :; do :; done"#;
     }
 
     #[test]
-    fn filtered_firefox_theme_run_selects_theme_project() {
+    fn filtered_firefox_run_selects_both_projects_once() {
         let plan = e2e_local_plan(
             Some(E2eLocalBrowser::Firefox),
             Some("theme.spec.ts:63"),
@@ -1377,20 +1341,13 @@ while :; do :; done"#;
         assert_eq!(
             plan.lifecycles[0].invocations,
             [PlaywrightInvocation {
-                label: "ordinary",
+                label: "browser",
                 args: owned_args(&[
                     "test",
                     "--project",
                     "firefox-visual",
                     "--project",
                     "firefox",
-                    "--project",
-                    "firefox-admin-site",
-                    "--project",
-                    "firefox-theme",
-                    "--project",
-                    "firefox-admin",
-                    "--no-deps",
                     "--reporter=html,line",
                     "theme.spec.ts:63",
                 ]),
@@ -1399,22 +1356,7 @@ while :; do :; done"#;
     }
 
     #[test]
-    fn filtered_webkit_theme_run_selects_theme_project() {
-        let plan = e2e_local_plan(
-            Some(E2eLocalBrowser::Webkit),
-            Some("theme.spec.ts:63"),
-            false,
-        );
-        assert!(
-            plan.lifecycles[0].invocations[0]
-                .args
-                .windows(2)
-                .any(|arguments| arguments == ["--project", "webkit-theme"])
-        );
-    }
-
-    #[test]
-    fn filtered_post_actions_run_includes_each_browser_ordinary_project() {
+    fn filtered_post_actions_run_includes_each_browser_project() {
         for (browser, project) in [
             (E2eLocalBrowser::Chromium, "chromium"),
             (E2eLocalBrowser::Firefox, "firefox"),

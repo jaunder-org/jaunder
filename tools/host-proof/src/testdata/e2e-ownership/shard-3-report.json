@@ -4,14 +4,14 @@
       "suites": [],
       "specs": [
         {
-          "id": "theme",
-          "title": "theme contract",
-          "file": "tests/theme.spec.ts",
+          "id": "visual",
+          "title": "visual contract",
+          "file": "tests/visual.spec.ts",
           "line": 3,
           "tests": [
             {
-              "projectId": "firefox-special-theme",
-              "projectName": "firefox-special-theme",
+              "projectId": "firefox-visual",
+              "projectName": "firefox-visual",
               "status": "expected",
               "results": [{ "retry": 0, "duration": 15 }]
             }

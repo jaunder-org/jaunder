@@ -321,18 +321,6 @@ e2eOtelTestHelpers = identity: instances: ''
       print(error)
     return errors
 
-  # Peak memory (page cache included) per server instance, the collector, the
-  # test shell (Playwright and its browsers) and all of them together, plus
-  # guest totals: sizing evidence (#2076). Read before the writers stop, since
-  # a stopped unit loses its peak.
-  def report_e2e_memory():
-    units = [instance["unit"] for instance in e2e_instances()] + ["otel-collector.service", "backdoor.service", "system.slice"]
-    for unit in units:
-      status, output = machine.execute("systemctl show -p MemoryPeak --value " + unit)
-      print("memory-peak", unit, output.strip() if status == 0 else "unavailable")
-    status, output = machine.execute("free -m")
-    print(output)
-
   def stop_e2e_capture_writers():
     errors = []
     # The application's provider drain needs the Collector alive until it exits.
@@ -584,7 +572,6 @@ e2eRunAndCapture =
     backend,
     browser,
     identity,
-    partition,
     shardIndex ? null,
     shardCount ? null,
     projectArgs,
@@ -660,7 +647,6 @@ e2eRunAndCapture =
       + " JAUNDER_E2E_LANE=${identity}"
       + " JAUNDER_E2E_BACKEND=${backend}"
       + " JAUNDER_E2E_BROWSER=${browser}"
-      + " JAUNDER_E2E_PARTITION=${partition}"
       + " JAUNDER_E2E_SHARD_INDEX=${if shardIndex == null then "" else toString shardIndex}"
       + " JAUNDER_E2E_SHARD_COUNT=${if shardCount == null then "" else toString shardCount}"
       + " JAUNDER_E2E_TRACE_ID=${traceId}"
@@ -682,7 +668,6 @@ e2eRunAndCapture =
     # from build.log alone, even on a timeout and without --keep-failed.
     print(pw_out)
 
-    report_e2e_memory()
     # Collect failures without aborting the remaining diagnostic lifts.
     retention_errors.extend(stop_e2e_capture_writers())
 
@@ -999,7 +984,6 @@ mkE2eCheck =
           # measurement producers share the VM lifecycle, not that contract.
           inherit (lane)
             identity
-            partition
             shardIndex
             shardCount
             projectArgs
@@ -1031,7 +1015,6 @@ mkE2eCheck =
               backend
               browser
               identity
-              partition
               shardIndex
               shardCount
               projectArgs
@@ -1065,16 +1048,16 @@ e2eSalt = "";
 
 # All E2E lanes. backend picks the VM builder; projects select the Playwright
 # topology; traceSeed gives every isolated lane a distinct OTel trace id.
-# The catalog independently identifies retained production lanes and disabled
-# unsplit controls.
+# The catalog independently identifies production shards and disabled unsplit
+# controls (scripts/e2e-matrix.jq).
 e2eLaneCatalogFile = builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json);
 e2eLaneCatalog = e2eLaneCatalogFile.lanes;
-# Production uses the retained four-lane split per {backend, browser}. Disabled
-# unsplit lanes are measurement and single-worker diagnostic controls only.
+# Production runs three shards per {backend, browser}. Disabled unsharded lanes
+# are measurement and single-worker diagnostic controls only.
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
-e2eFirefoxControlLanes = builtins.filter (lane: !lane.enabled && lane.browser == "firefox" && lane.partition == "unsplit") e2eLaneCatalog;
-e2eSingleWorkerLanes = builtins.filter (lane: lane.partition == "unsplit") e2eLaneCatalog;
-# Each split lane's independent census lists every project of its browser's split.
+e2eSingleWorkerLanes = builtins.filter (lane: !lane.enabled) e2eLaneCatalog;
+e2eFirefoxControlLanes = builtins.filter (lane: lane.browser == "firefox") e2eSingleWorkerLanes;
+# Each shard's independent census lists every project its browser's shards select.
 e2eCensusProjectArgs = browser:
   pkgs.lib.concatMapStringsSep " " (project: "--project ${project}")
     (pkgs.lib.unique (pkgs.lib.concatMap (lane: lane.projects)
@@ -1084,7 +1067,6 @@ mkE2eCombo =
   {
     backend,
     browser,
-    partition,
     identity,
     traceSeed,
     projects,
@@ -1127,7 +1109,6 @@ mkE2eCombo =
     lane = {
       inherit
         identity
-        partition
         shardIndex
         shardCount
         projectArgs
@@ -1141,10 +1122,10 @@ mkE2eCombo =
 
 # attr name -> gate check, e.g. { "e2e-sqlite-chromium" = <drv>; ... }
 # The gate retains workers=2 (#155) and 2 vCPU: cores >= workers avoids
-# in-guest CPU starvation. Ordinary Firefox lanes get 4 GiB RAM and a 2 GiB
-# root for concurrent browsers and temporary tracing: both backends exhausted
-# 3 GiB RAM, and a RAM-only repair then exhausted the 1 GiB root. Other lanes
-# retain their existing resources. This changes capacity, not concurrency:
+# in-guest CPU starvation. Firefox lanes get 4 GiB RAM and a 2 GiB root for
+# concurrent browsers and temporary tracing: both backends exhausted 3 GiB RAM,
+# and a RAM-only repair then exhausted the 1 GiB root. Chromium lanes retain
+# 3 GiB. This changes capacity, not concurrency:
 # #828 found no admissible 3-worker arm (3 vCPU / 3 GB OOMed; the faster
 # 4 vCPU / 4 GB arm increased SQLite flakiness).
 # See https://github.com/jaunder-org/jaunder/issues/828.
@@ -1155,16 +1136,15 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       # RETRIES=1: the gate reports a fail-then-pass as `flaky` (exit 0)
       # rather than failing the combo check, containing timeout flakiness
       # (Firefox 5s `expect` races) while results.json records it.
-      # Ordinary shards are sized by measured duration rather than test count:
+      # Shards are sized by measured duration rather than test count:
       # Playwright weights each `--shard` slice by this per-browser string.
       extraEnv = " JAUNDER_E2E_RETRIES=1"
-        + pkgs.lib.optionalString (c.partition == "ordinary")
-          " PWTEST_SHARD_WEIGHTS=${e2eLaneCatalogFile.ordinaryShardWeights.${c.browser}}";
+        + " PWTEST_SHARD_WEIGHTS=${e2eLaneCatalogFile.shardWeights.${c.browser}}";
       expectedCensusProjectArgs = e2eCensusProjectArgs c.browser;
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
-    } // pkgs.lib.optionalAttrs (c.browser == "firefox" && c.partition == "ordinary") {
+    } // pkgs.lib.optionalAttrs (c.browser == "firefox") {
       vmMemory = 4096;
       vmDiskSize = 2048;
     });

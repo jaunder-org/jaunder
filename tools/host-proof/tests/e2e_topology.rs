@@ -64,7 +64,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
         .map(|lane| lane["identity"].as_str().unwrap())
         .collect::<BTreeSet<_>>();
     assert_eq!(emitted, enabled);
-    assert_eq!(emitted.len(), 16);
+    assert_eq!(emitted.len(), 12);
     let mut pairs = Vec::new();
     for backend in ["postgres", "sqlite"] {
         for browser in ["chromium", "firefox"] {
@@ -76,7 +76,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
                     .iter()
                     .filter(|lane| lane["backend"] == backend && lane["browser"] == browser)
                     .count(),
-                4
+                3
             );
         }
     }
@@ -112,49 +112,38 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
 }
 
 #[test]
-fn runtime_projection_rejects_duplicate_identity_bad_shards_and_cross_lane_dependencies() {
+fn runtime_projection_rejects_duplicate_identity_bad_shards_and_foreign_projects() {
     let base = catalog();
+    let lanes = base["lanes"].as_array().unwrap();
+    let index = |identity: &str| {
+        lanes
+            .iter()
+            .position(|lane| lane["identity"] == identity)
+            .unwrap()
+    };
+    let shard = index("sqlite-chromium-3-of-3");
     let mut duplicate = base.clone();
     duplicate["lanes"][2]["identity"] = duplicate["lanes"][0]["identity"].clone();
+    // A pair whose shards repeat one index, or miss one.
     let mut shards = base.clone();
-    shards["lanes"][5]["shardIndex"] = 1.into();
-    let mut dependency = base.clone();
-    dependency["experimentalProjectDependencies"]["firefox-ordinary"] =
-        serde_json::json!(["firefox-special-visual"]);
-    let mut chromium_dependency = base.clone();
-    chromium_dependency["experimentalProjectDependencies"]["chromium-ordinary"] =
-        serde_json::json!(["chromium-special-visual"]);
-    // An enabled unsplit lane, or a Chromium split missing its serial lane.
+    shards["lanes"][shard]["shardIndex"] = 1.into();
+    shards["lanes"][shard]["identity"] = "sqlite-chromium-1-of-3".into();
+    let mut missing_shard = base.clone();
+    missing_shard["lanes"][shard]["enabled"] = false.into();
+    // A lane selecting a project other than its browser's two.
+    let mut foreign = base.clone();
+    foreign["lanes"][shard]["projects"] = serde_json::json!(["chromium-visual", "firefox"]);
+    // An enabled unsplit lane.
     let mut unsplit = base.clone();
-    unsplit["lanes"][0]["enabled"] = true.into();
-    let mut missing_special = base.clone();
-    for lane in missing_special["lanes"].as_array_mut().unwrap() {
-        if lane["identity"] == "sqlite-chromium-serial-special" {
-            lane["enabled"] = false.into();
-        }
-    }
-    // A pair without its serial Theme lane, or a Theme project also run by
-    // the serial-special lane.
-    let mut missing_theme = base.clone();
-    for lane in missing_theme["lanes"].as_array_mut().unwrap() {
-        if lane["identity"] == "postgres-firefox-serial-theme" {
-            lane["enabled"] = false.into();
-        }
-    }
-    let mut overlapping_theme = base.clone();
-    for lane in overlapping_theme["lanes"].as_array_mut().unwrap() {
-        if lane["identity"] == "sqlite-chromium-serial-special" {
-            lane["projects"]
-                .as_array_mut()
-                .unwrap()
-                .push("chromium-special-theme".into());
-        }
-    }
-    // Shard weights must be a well-formed string for exactly the gated browsers.
+    unsplit["lanes"][index("sqlite-chromium-unsplit")]["enabled"] = true.into();
+    // Shard weights must be a well-formed string, one weight per shard, for
+    // exactly the gated browsers.
     let mut malformed_weights = base.clone();
-    malformed_weights["ordinaryShardWeights"]["firefox"] = "56/44".into();
+    malformed_weights["shardWeights"]["firefox"] = "34/33/33".into();
+    let mut miscounted_weights = base.clone();
+    miscounted_weights["shardWeights"]["firefox"] = "56:44".into();
     let mut missing_weights = base.clone();
-    missing_weights["ordinaryShardWeights"]
+    missing_weights["shardWeights"]
         .as_object_mut()
         .unwrap()
         .remove("chromium");
@@ -166,13 +155,11 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_cross_lane_depen
     for broken in [
         duplicate,
         shards,
-        dependency,
-        chromium_dependency,
+        missing_shard,
+        foreign,
         unsplit,
-        missing_special,
-        missing_theme,
-        overlapping_theme,
         malformed_weights,
+        miscounted_weights,
         missing_weights,
         colliding_seed,
         zero_seed,
