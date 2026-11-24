@@ -1212,7 +1212,8 @@ def test_identical_consecutive_snapshots_emit_exactly_one_phase_event(
 
 def test_a_queue_position_change_emits_per_change(observe: Any) -> None:
     result = observe(native(queued(3), queued(2), merged()))
-    assert result.events("queue") == ["position 3", "position 2"]
+    # The merge that ends the watch also takes the PR out of the queue.
+    assert result.events("queue") == ["position 3", "position 2", "not queued"]
 
 
 def test_a_non_required_check_changing_emits_no_check_event(observe: Any) -> None:
@@ -1223,7 +1224,38 @@ def test_a_non_required_check_changing_emits_no_check_event(observe: Any) -> Non
 
 def test_checks_render_as_words(observe: Any) -> None:
     result = observe(native(pr(status(V, "PENDING")), merged()))
-    assert result.events("check") == [f"{V}: pending", f"{E}: not yet reported"]
+    assert result.events("check") == [
+        f"{V}: pending",
+        f"{E}: not yet reported",
+        f"{V}: success",
+        f"{E}: success",
+    ]
+
+
+def test_the_poll_that_ends_the_watch_still_reports_its_check_changes(
+    observe: Any,
+) -> None:
+    # #2085: the last required check settling on the final poll was silent.
+    result = observe(native(pr(status(V, "SUCCESS")), green()))
+    assert result.outcome == "ready-to-land"
+    assert result.events("check") == [
+        f"{V}: success",
+        f"{E}: not yet reported",
+        f"{E}: success",
+    ]
+    assert result.events("phase") == ["awaiting-checks"]
+    assert result.report["events"][-1] == {
+        "at": result.report["events"][-1]["at"],
+        "kind": "terminal",
+        "detail": "ready-to-land",
+    }
+
+
+def test_an_adverse_final_poll_reports_the_check_that_ended_it(observe: Any) -> None:
+    result = observe(native(pr(status(V, "PENDING")), pr(status(V, "FAILURE"))))
+    assert result.outcome == "checks-failed"
+    assert result.events("check")[-1] == f"{V}: failure"
+    assert result.report["events"][-1]["kind"] == "terminal"
 
 
 def test_leaving_the_queue_is_a_queue_event(observe: Any) -> None:
@@ -1231,7 +1263,7 @@ def test_leaving_the_queue_is_a_queue_event(observe: Any) -> None:
     assert result.events("queue") == ["position 1", "not queued"]
     unpositioned = green(queued=True)
     result = observe(native(unpositioned, merged()))
-    assert result.events("queue") == ["queued"]
+    assert result.events("queue") == ["queued", "not queued"]
 
 
 def test_an_ejected_pr_is_reported_through_the_loop(observe: Any) -> None:

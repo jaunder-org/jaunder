@@ -791,10 +791,17 @@ def _queue_detail(snapshot: Snapshot) -> str:
 
 
 def _progress(
-    log: _Log, previous: _View | None, current: _View, snapshot: Snapshot
+    log: _Log,
+    previous: _View | None,
+    current: _View,
+    snapshot: Snapshot,
+    final: bool,
 ) -> None:
-    """The first view whole, then only what changed."""
-    if previous is None or previous.phase != current.phase:
+    """The first view whole, then only what changed. On the poll that ends the
+    watch the terminal event stands in for the phase, but check and queue
+    changes still report: a check that settles on that poll is otherwise
+    never seen in the log."""
+    if not final and (previous is None or previous.phase != current.phase):
         log("phase", current.phase)
     for index, (name, state) in enumerate(current.checks):
         if previous is None or previous.checks[index][1] != state:
@@ -933,9 +940,9 @@ def _watch(
             tuple((name, _label(snapshot, name)) for name in rules.contexts),
             (snapshot.queued, snapshot.position),
         )
-        # An outcome speaks for itself; passive readiness stays a phase.
-        if step.outcome is None and not (ready and not watch.until):
-            _progress(log, previous, current, snapshot)
+        # Passive readiness stays a phase; anything else ending here is final.
+        final = step.outcome is not None or (ready and not watch.until)
+        _progress(log, previous, current, snapshot, final)
         previous = current
         for identity, detail in warnings:
             if identity not in warned:
