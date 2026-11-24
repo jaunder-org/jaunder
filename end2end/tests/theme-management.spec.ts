@@ -24,7 +24,6 @@ import {
   packageMemberDigests,
   publishTheme,
   publishAndSelectTheme,
-  withSiteThemeSelection,
 } from "./theme-helpers";
 
 const THEME_ENDPOINTS = {
@@ -1121,82 +1120,73 @@ test("saved User and Site settings retain separate IDs and selection after owner
   page,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    await goto(page, "/themes");
-    const suffix = Date.now(),
-      ids: number[] = [],
-      writes: URLSearchParams[] = [];
-    page.on("request", (r) => {
-      if (new URL(r.url()).pathname === THEME_ENDPOINTS.select)
-        writes.push(new URLSearchParams(r.postData() ?? ""));
-    });
-    for (const [tab, name] of [
-      ["User", `Personal ${suffix}`],
-      ["Site", `Site ${suffix}`],
-    ] as const) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
-      await createLocal(page, name);
-      const saved = await save(page);
-      ids.push(saved.id);
-      await mutate(async () => {
-        const published = response(page, "publish"),
-          selected = response(page, "select");
-        await page
-          .getByRole("button", { name: `Use ${name}`, exact: true })
-          .click();
-        for (const pending of [published, selected]) {
-          const r = await pending;
-          expect(r.status()).toBe(200);
-          confirmedMutation(
-            (await r.json()) as MutationOutcome<null>,
-            "independent setting Use",
-          );
-        }
-      });
-      await expect(current(page)).toHaveAttribute(
-        "data-theme-selection",
-        String(saved.id),
-      );
-    }
-    expect(ids[0]).not.toBe(ids[1]);
-    expect(writes.map((w) => w.get("scope"))).toEqual(["author", "site"]);
-    expect(writes.map((w) => w.get("selection[value]"))).toEqual(
-      ids.map(String),
-    );
-    for (const [i, tab] of ["User", "Site"].entries()) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
-      await expect(current(page)).toHaveAttribute(
-        "data-theme-selection",
-        String(ids[i]),
-      );
-      await expect(
-        page.locator(`[data-theme-card="${ids[i]}"]`),
-      ).toHaveAttribute("data-current", "true");
-      await expect(
-        page.locator(`[data-theme-card="${ids[1 - i]}"]`),
-      ).toHaveCount(0);
-      await page
-        .locator(`[data-theme-card="${ids[i]}"] .j-theme-catalog-item`)
-        .click();
-      await openThemeAdvanced(page);
-      await mutate(async () => {
-        const pending = response(page, "remove");
-        await page
-          .getByRole("button", { name: "Delete theme", exact: true })
-          .click();
-        const r = await pending;
-        expect(r.status()).toBe(200);
-        confirmedMutation(
-          (await r.json()) as MutationOutcome<null>,
-          "independent setting cleanup",
-        );
-      });
-      await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveCount(
-        0,
-      );
-    }
+  await signInAs(page, "testoperator");
+  await goto(page, "/themes");
+  const suffix = Date.now(),
+    ids: number[] = [],
+    writes: URLSearchParams[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === THEME_ENDPOINTS.select)
+      writes.push(new URLSearchParams(r.postData() ?? ""));
   });
+  for (const [tab, name] of [
+    ["User", `Personal ${suffix}`],
+    ["Site", `Site ${suffix}`],
+  ] as const) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await createLocal(page, name);
+    const saved = await save(page);
+    ids.push(saved.id);
+    const published = response(page, "publish"),
+      selected = response(page, "select");
+    await page
+      .getByRole("button", { name: `Use ${name}`, exact: true })
+      .click();
+    for (const pending of [published, selected]) {
+      const r = await pending;
+      expect(r.status()).toBe(200);
+      confirmedMutation(
+        (await r.json()) as MutationOutcome<null>,
+        "independent setting Use",
+      );
+    }
+    await expect(current(page)).toHaveAttribute(
+      "data-theme-selection",
+      String(saved.id),
+    );
+  }
+  expect(ids[0]).not.toBe(ids[1]);
+  expect(writes.map((w) => w.get("scope"))).toEqual(["author", "site"]);
+  expect(writes.map((w) => w.get("selection[value]"))).toEqual(ids.map(String));
+  for (const [i, tab] of ["User", "Site"].entries()) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await expect(current(page)).toHaveAttribute(
+      "data-theme-selection",
+      String(ids[i]),
+    );
+    await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveAttribute(
+      "data-current",
+      "true",
+    );
+    await expect(page.locator(`[data-theme-card="${ids[1 - i]}"]`)).toHaveCount(
+      0,
+    );
+    await page
+      .locator(`[data-theme-card="${ids[i]}"] .j-theme-catalog-item`)
+      .click();
+    await openThemeAdvanced(page);
+    const pending = response(page, "remove");
+    await page
+      .getByRole("button", { name: "Delete theme", exact: true })
+      .click();
+    const r = await pending;
+    expect(r.status()).toBe(200);
+    confirmedMutation(
+      (await r.json()) as MutationOutcome<null>,
+      "independent setting cleanup",
+    );
+    await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveCount(0);
+  }
 });
 
 for (const stage of ["publish", "select"] as const) {
@@ -2635,142 +2625,128 @@ test("operator manages Site catalog with confirmed writes and guarded selection 
   page,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    await goto(page, "/themes");
-    const site = page.getByRole("tab", { name: "Site", exact: true }),
-      user = page.getByRole("tab", { name: "User", exact: true });
-    await site.click();
+  await signInAs(page, "testoperator");
+  await goto(page, "/themes");
+  const site = page.getByRole("tab", { name: "Site", exact: true }),
+    user = page.getByRole("tab", { name: "User", exact: true });
+  await site.click();
+  await expect(site).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("button", { name: "Use site theme", exact: true }),
+  ).toHaveCount(0);
+  await createLocal(
+    page,
+    "Operator site published",
+    ":root { outline: 2px solid rgb(4, 5, 6); }",
+  );
+  const saved = await save(page);
+  expect(saved.applied).toBe(false);
+  const frame = await preview(page);
+  await expectPreviewStructure(page, frame);
+  const writes: { path: string; body: string }[] = [];
+  page.on("request", (r) => {
+    const p = new URL(r.url()).pathname;
+    if ([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select].includes(p))
+      writes.push({ path: p, body: r.postData() ?? "" });
+  });
+  const releasePublication = await stallServerFn(page, "themes/publish"),
+    releaseSelection = await stallServerFn(page, "themes/select"),
+    use = page.getByRole("button", {
+      name: "Use Operator site published",
+      exact: true,
+    });
+  const published = response(page, "publish"),
+    selected = response(page, "select");
+  try {
+    await use.click();
+    await expect(status(page)).toContainText("Getting your theme ready");
+    for (const c of [user, site, use]) await expect(c).toBeDisabled();
+    for (const c of [use, user])
+      await c.evaluate((n) =>
+        n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+      );
+    expect(writes.map((w) => w.path)).toEqual([THEME_ENDPOINTS.publish]);
     await expect(site).toHaveAttribute("aria-selected", "true");
-    await expect(
-      page.getByRole("button", { name: "Use site theme", exact: true }),
-    ).toHaveCount(0);
-    await createLocal(
-      page,
-      "Operator site published",
-      ":root { outline: 2px solid rgb(4, 5, 6); }",
+    releasePublication();
+    await expect(status(page)).toContainText("Applying your theme");
+    await expect(use).toBeDisabled();
+    await use.evaluate((n) =>
+      n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
-    const saved = await save(page);
-    expect(saved.applied).toBe(false);
-    const frame = await preview(page);
-    await expectPreviewStructure(page, frame);
-    const writes: { path: string; body: string }[] = [];
-    page.on("request", (r) => {
-      const p = new URL(r.url()).pathname;
-      if ([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select].includes(p))
-        writes.push({ path: p, body: r.postData() ?? "" });
-    });
-    const releasePublication = await stallServerFn(page, "themes/publish"),
-      releaseSelection = await stallServerFn(page, "themes/select"),
-      use = page.getByRole("button", {
-        name: "Use Operator site published",
-        exact: true,
-      });
-    await mutate(async () => {
-      const published = response(page, "publish"),
-        selected = response(page, "select");
-      try {
-        await use.click();
-        await expect(status(page)).toContainText("Getting your theme ready");
-        for (const c of [user, site, use]) await expect(c).toBeDisabled();
-        for (const c of [use, user])
-          await c.evaluate((n) =>
-            n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-          );
-        expect(writes.map((w) => w.path)).toEqual([THEME_ENDPOINTS.publish]);
-        await expect(site).toHaveAttribute("aria-selected", "true");
-        releasePublication();
-        await expect(status(page)).toContainText("Applying your theme");
-        await expect(use).toBeDisabled();
-        await use.evaluate((n) =>
-          n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-        );
-      } finally {
-        releasePublication();
-        releaseSelection();
-      }
-      const pr = await published,
-        sr = await selected;
-      expect(pr.status()).toBe(200);
-      expect(sr.status()).toBe(200);
-      confirmedMutation(
-        (await pr.json()) as MutationOutcome<null>,
-        "themes::publish",
-      );
-      confirmedMutation(
-        (await sr.json()) as MutationOutcome<null>,
-        "themes::select",
-      );
-      await expect(status(page)).toContainText("Your theme is now in use");
-    });
-    expect(writes.map((w) => w.path)).toEqual([
-      THEME_ENDPOINTS.publish,
-      THEME_ENDPOINTS.select,
-    ]);
-    expect(new URLSearchParams(writes[0].body).get("scope")).toBe("site");
-    expect(new URLSearchParams(writes[1].body).get("selection[value]")).toBe(
-      String(saved.id),
-    );
-    await expect(current(page)).toHaveAttribute(
-      "data-theme-selection",
-      String(saved.id),
-    );
-    const context = await tracedContext();
-    try {
-      for (const url of ["/", "/~testlogin"]) {
-        const p = await context.newPage();
-        await goto(p, url);
-        await expect(p.locator(".j-root")).toHaveAttribute(
-          "data-theme",
-          "custom",
-        );
-        await expect(p.locator("[data-jaunder-theme-surface]")).toHaveCSS(
-          "outline-color",
-          "rgb(4, 5, 6)",
-        );
-        await expect(
-          p.getByRole("tablist", { name: "Theme setting" }),
-        ).toHaveCount(0);
-      }
-    } finally {
-      await context.close();
-    }
-    await openThemeAdvanced(page);
-    await mutate(async () => {
-      const pending = response(page, "remove");
-      await page
-        .getByRole("button", { name: "Delete theme", exact: true })
-        .click();
-      const r = await pending;
-      expect(r.status()).toBe(200);
-      confirmedMutation(
-        (await r.json()) as MutationOutcome<null>,
-        "themes::remove",
-      );
-    });
-    await expect(
-      page.getByRole("button", {
-        name: "Edit Operator site published",
-        exact: true,
-      }),
-    ).toHaveCount(0);
-    await expect(current(page)).toHaveAttribute(
-      "data-theme-selection",
-      "studio",
-    );
-    const fallback = await tracedContext();
-    try {
-      const p = await fallback.newPage();
-      await goto(p, "/");
+  } finally {
+    releasePublication();
+    releaseSelection();
+  }
+  const pr = await published,
+    sr = await selected;
+  expect(pr.status()).toBe(200);
+  expect(sr.status()).toBe(200);
+  confirmedMutation(
+    (await pr.json()) as MutationOutcome<null>,
+    "themes::publish",
+  );
+  confirmedMutation(
+    (await sr.json()) as MutationOutcome<null>,
+    "themes::select",
+  );
+  await expect(status(page)).toContainText("Your theme is now in use");
+  expect(writes.map((w) => w.path)).toEqual([
+    THEME_ENDPOINTS.publish,
+    THEME_ENDPOINTS.select,
+  ]);
+  expect(new URLSearchParams(writes[0].body).get("scope")).toBe("site");
+  expect(new URLSearchParams(writes[1].body).get("selection[value]")).toBe(
+    String(saved.id),
+  );
+  await expect(current(page)).toHaveAttribute(
+    "data-theme-selection",
+    String(saved.id),
+  );
+  const context = await tracedContext();
+  try {
+    for (const url of ["/", "/~testlogin"]) {
+      const p = await context.newPage();
+      await goto(p, url);
       await expect(p.locator(".j-root")).toHaveAttribute(
         "data-theme",
-        "studio",
+        "custom",
+      );
+      await expect(p.locator("[data-jaunder-theme-surface]")).toHaveCSS(
+        "outline-color",
+        "rgb(4, 5, 6)",
       );
       await expect(
-        p.locator("link[data-jaunder-theme-stylesheet]"),
-      ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
-    } finally {
-      await fallback.close();
+        p.getByRole("tablist", { name: "Theme setting" }),
+      ).toHaveCount(0);
     }
-  });
+  } finally {
+    await context.close();
+  }
+  await openThemeAdvanced(page);
+  const pending = response(page, "remove");
+  await page.getByRole("button", { name: "Delete theme", exact: true }).click();
+  const r = await pending;
+  expect(r.status()).toBe(200);
+  confirmedMutation(
+    (await r.json()) as MutationOutcome<null>,
+    "themes::remove",
+  );
+  await expect(
+    page.getByRole("button", {
+      name: "Edit Operator site published",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(current(page)).toHaveAttribute("data-theme-selection", "studio");
+  const fallback = await tracedContext();
+  try {
+    const p = await fallback.newPage();
+    await goto(p, "/");
+    await expect(p.locator(".j-root")).toHaveAttribute("data-theme", "studio");
+    await expect(
+      p.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
+  } finally {
+    await fallback.close();
+  }
 });

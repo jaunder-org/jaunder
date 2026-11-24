@@ -17,16 +17,12 @@ import {
 import { openAreaDestination, signOutViaAccount } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { SEL } from "./selectors";
-import { applySeededSession, seedConfigViaTool } from "./seed";
+import { applySeededSession } from "./seed";
 import { installVirtualAuthenticator } from "./virtual-authenticator";
-import { projectsInRole } from "../e2eProjects";
 
 const PASSKEY_PAGE = '[data-test="passkeys-page"]';
 const PASSKEY_LOGIN = '[data-test="passkey-login-button"]';
 const PASSKEYS_LIST = '[data-test="passkey-credentials-list"]';
-const CHROMIUM_SITE_SETTINGS_PROJECTS = projectsInRole("siteSettings", [
-  "chromium",
-]);
 
 async function exposeNonSuccessfulWebAuthn(page: Page): Promise<void> {
   await page.addInitScript(() => {
@@ -82,12 +78,11 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
   user,
   mailbox,
   browserName,
-}, testInfo) => {
+}) => {
   setTestBudget(90_000);
   test.skip(
-    browserName !== "chromium" ||
-      !CHROMIUM_SITE_SETTINGS_PROJECTS.includes(testInfo.project.name),
-    "real resident-key ceremonies run in the serial Chromium site-settings project",
+    browserName !== "chromium",
+    "real resident-key ceremonies need Chromium's virtual authenticator",
   );
 
   let authenticator = await installVirtualAuthenticator(page.context(), page);
@@ -284,17 +279,7 @@ test("Chromium passkeys enroll, authenticate discoverably, refresh metadata, and
       '[data-test="passkey-credential"]:has-text("Backup security key") [data-test="passkey-delete"]',
     );
     await waitForSelector(page, '[data-test="passkey-credentials-empty"]');
-
-    await settingsPage.fill('input[name="base_url"]', "https://example.com");
-    await click(settingsPage, 'button:has-text("Save Site Settings")');
-    await reenterAdminSettings(settingsPage, "site");
-    await expect(settingsPage.locator('input[name="base_url"]')).toHaveValue(
-      "https://example.com/",
-    );
   } finally {
-    await seedConfigViaTool("site.base_url", "https://example.com").catch(
-      () => undefined,
-    );
     await settingsContext?.close();
     await resetContext?.close();
     await siblingContext?.close();

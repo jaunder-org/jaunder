@@ -87,9 +87,12 @@ async function expectPublishedTimeOrder(
 ): Promise<void> {
   await expect
     .poll(async () => {
-      const times = await page
-        .locator(`${POST_LIST} ${PUBLISHED_TIME}`)
-        .allTextContents();
+      // Labels are wall-clock times in each Post's own timezone, so only
+      // labels in one zone compare. This test's API-created Posts are UTC;
+      // other tests' Local Posts may carry any zone.
+      const times = (
+        await page.locator(`${POST_LIST} ${PUBLISHED_TIME}`).allTextContents()
+      ).filter((time) => time.endsWith(" UTC"));
       const sorted = [...times].sort((left, right) =>
         direction === "ascending"
           ? left.localeCompare(right)

@@ -58,17 +58,9 @@ async function registerCtaWasObserved(page: Page): Promise<boolean> {
   );
 }
 
-// #433: the invitation round trip and policy projection. These tests flip
-// `site.registration_policy` — a global site-config singleton — so this spec runs in the
-// serial `*-admin` Playwright project (after the parallel main project), exactly like
-// admin-site.spec, and never overlaps specs that register users under the seeded `open`
-// policy. The default is restored in afterAll.
-test.afterAll(async () => {
-  // Restore the globals this spec mutates so a later serial `-admin` spec cannot
-  // inherit them (Test A sets base_url; every case sets the policy).
-  await seedConfigViaTool("site.registration_policy", "open");
-  await seedConfigViaTool("site.base_url", "");
-});
+// #433: the invitation round trip and policy projection. Each test sets the
+// `site.registration_policy` (and, where links are built, `site.base_url`) it
+// depends on.
 
 // Test A — the main flow: an operator emails an invite, and the invitee follows
 // the link and registers with no manual code entry (the register page reads the

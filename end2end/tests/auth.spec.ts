@@ -12,7 +12,8 @@ import {
   stallServerFn,
 } from "./helpers";
 import { SEL } from "./selectors";
-import { expectVisual } from "./visual";
+import { seedConfigViaTool } from "./seed";
+import { expectVisual, setSeededSiteAppearance } from "./visual";
 import { expectAccessible } from "./accessibility";
 import { navigateInApp } from "./navigate";
 import { openComposerFromSidebar } from "./posts";
@@ -23,6 +24,7 @@ import {
 } from "./settings-areas";
 
 test("register page shows form", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "open");
   // Holdout (spec D6): proves /register renders.
   await goto(page, "/register");
 
@@ -35,6 +37,7 @@ test("register page shows form", async ({ page }) => {
 // `ValidatedInput<T>`, which wraps the same bare-input/error primitives as direct-bind
 // sites while preserving disable-until-valid and touched-gated messages.
 test("register invalid fields do not dispatch", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "open");
   let requests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/registration/register")) requests += 1;
@@ -59,6 +62,7 @@ test("register invalid fields do not dispatch", async ({ page }) => {
 });
 
 test("register pending state prevents duplicate dispatch", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "open");
   let requests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/registration/register")) requests += 1;
@@ -77,6 +81,7 @@ test("register pending state prevents duplicate dispatch", async ({ page }) => {
 });
 
 test("register server failure renders error", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "open");
   await failServerFn(page, "registration/register");
   await goto(page, "/register");
   await page.fill(SEL.username, `failure${Date.now()}`);
@@ -88,6 +93,7 @@ test("register server failure renders error", async ({ page }) => {
 });
 
 test("register with open policy succeeds", async ({ page }) => {
+  await seedConfigViaTool("site.registration_policy", "open");
   // Holdout (spec D6): registration::register coverage.
   const username = generateUsername("newuser");
   await goto(page, "/register");
@@ -104,7 +110,8 @@ test("register with open policy succeeds", async ({ page }) => {
 test(
   "login page shows form",
   { tag: ["@visual", "@accessibility"] },
-  async ({ page }) => {
+  async ({ page, tracedContext }) => {
+    await setSeededSiteAppearance(tracedContext);
     // Holdout (spec D6): proves /login renders.
     await goto(page, "/login");
 

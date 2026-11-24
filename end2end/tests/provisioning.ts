@@ -16,7 +16,7 @@ import {
   TEST_PASSWORD,
 } from "./helpers";
 import { pollUntil } from "./polling";
-import { applySeededSession, seedUserViaTool } from "./seed";
+import { applySeededSession, seedConfigViaTool, seedUserViaTool } from "./seed";
 import type { NewTracedContext } from "./performance";
 
 export type TestUser = {
@@ -113,6 +113,9 @@ export const verifiedUserFixture = async (
   },
   use: Use<TestUser>,
 ): Promise<void> => {
+  // Email links are built from the configured site base URL; this is the
+  // canonical origin that `followEmailLink` expects by default.
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const context = await tracedContext();
   const page = await context.newPage();
   await applySeededSession(context, user);

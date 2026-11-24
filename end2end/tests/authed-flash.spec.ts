@@ -23,8 +23,12 @@ import {
 import { allowEngineDependentBoot, allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
 import { signOutViaAccount } from "./settings-areas";
-import { applySeededSession, createSessionViaTool } from "./seed";
-import { expectVisual } from "./visual";
+import {
+  applySeededSession,
+  createSessionViaTool,
+  seedUserViaTool,
+} from "./seed";
+import { expectVisual, setSeededSiteAppearance } from "./visual";
 import { expectAccessible } from "./accessibility";
 
 test("valid marker: root redirects to Home before Local paints", async ({
@@ -276,8 +280,11 @@ test("seeded: re-seeding replaces the pre-paint identity on existing and new pag
 test(
   "owner: /app cockpit boots straight into Home",
   { tag: ["@visual", "@accessibility"] },
-  async ({ page, firstNav }) => {
-    const session = await createSessionViaTool("testlogin");
+  async ({ page, tracedContext, firstNav }) => {
+    await setSeededSiteAppearance(tracedContext);
+    // The avatar renders this name's initial and character-sum hue, so it is an
+    // anagram of the baseline's `testlogin`, and run once per instance.
+    const session = await seedUserViaTool("testoling", "visualpassword123");
     await applySeededSession(page.context(), session);
     await goto(page, "/app", { timeout: firstNav });
     await expect(page.locator(".j-topbar .j-sub")).toHaveText(

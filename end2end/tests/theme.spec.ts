@@ -9,7 +9,7 @@ import {
   seedThemeViaTool,
   seedUserViaTool,
 } from "./seed";
-import { expectVisual } from "./visual";
+import { expectVisual, setSeededSiteAppearance } from "./visual";
 import { expectAccessible } from "./accessibility";
 
 // Regression for #22: the reactive data-theme binding on the plain `.j-root`
@@ -19,7 +19,8 @@ import { expectAccessible } from "./accessibility";
 test(
   "issue #22: .j-root keeps a real data-theme after CSR mount",
   { tag: ["@visual", "@accessibility"] },
-  async ({ page }) => {
+  async ({ page, tracedContext }) => {
+    await setSeededSiteAppearance(tracedContext);
     const session = await seedUserViaTool("visualauthor", "visualpassword123");
     await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
     await applySeededSession(page.context(), session);

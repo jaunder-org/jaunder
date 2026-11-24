@@ -73,6 +73,7 @@ import { waitForMount } from "./mount";
 import {
   applySeededSession,
   createSessionViaTool,
+  seedConfigViaTool,
   seedUserViaTool,
   type SeedRecord,
 } from "./seed";
@@ -305,13 +306,15 @@ export async function signInAs(
  *
  * **Boots the page** (#867), on the same terms as {@link login}: an ADR-0098
  * holdout whose document load of `/register` is the subject. A caller whose page
- * has already booted declares it with `allowSecondBoot`.
+ * has already booted declares it with `allowSecondBoot`. It sets the Open
+ * registration policy that direct registration depends on.
  */
 export async function registerViaUi(
   page: Page,
   firstNavigationTimeoutMs: number,
 ): Promise<string> {
   const username = generateUsername();
+  await seedConfigViaTool("site.registration_policy", "open");
 
   await withTimedAction(page, "flow.register", async () => {
     await goto(page, "/register", { timeout: firstNavigationTimeoutMs });

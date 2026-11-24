@@ -18,6 +18,7 @@ import {
 import { tmpdir } from "node:os";
 import { resolve, join } from "node:path";
 import { imageFixtureDirectory } from "./media-helpers";
+import { seedConfigViaTool } from "./seed";
 
 const originalPath = join(imageFixtureDirectory, "jpeg-original.jpg");
 const privateTags = [
@@ -62,6 +63,7 @@ test("real image UI upload sanitizes public bytes and clearly rejects malformed 
   const original = readFileSync(originalPath);
   const before = ordinaryTags(original);
   for (const tag of privateTags) expect(before).toHaveProperty(tag);
+  await seedConfigViaTool("media.uploads_enabled", "true");
   await signInAsNewUser(page);
   await goto(page, "/media");
   await expect(page.locator(".j-topbar h1")).toHaveText("Media");

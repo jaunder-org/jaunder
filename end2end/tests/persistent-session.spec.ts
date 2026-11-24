@@ -1,3 +1,4 @@
+import { seedConfigViaTool } from "./seed";
 import type { Request } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import {
@@ -16,6 +17,7 @@ test("browser receives and uses a persistent Session cookie and logout clears it
   user,
   firstNav,
 }) => {
+  await seedConfigViaTool("site.title", "Jaunder");
   await goto(page, "/login", { timeout: firstNav });
   const loginResponse = page.waitForResponse((response) =>
     response.url().endsWith("/api/auth/login"),

@@ -6,7 +6,7 @@ import {
   conformanceThemePackage,
   contrastRatio,
   publishAndSelectTheme,
-  withSiteThemeSelection,
+  selectSiteTheme,
 } from "./theme-helpers";
 
 async function publicThemePage(
@@ -211,192 +211,189 @@ for (const fault of ["promotion", "append"] as const) {
     page: owner,
     tracedContext,
   }) => {
-    await withSiteThemeSelection(tracedContext, async () => {
-      await signInAsNewUser(owner);
-      const post = await createPostViaApi(owner, {
-        body: "# Staged package failure",
-        audience: "public",
-      });
-      await publishAndSelectTheme(owner);
-      const publicContext = await tracedContext();
-      const page = await publicContext.newPage();
-      try {
-        await goto(page, "/");
-        const active = page.locator("link[data-jaunder-theme-stylesheet]");
-        await expect(page.locator(".j-root")).toHaveAttribute(
-          "data-theme",
-          "studio",
-        );
-        await expect(active).toHaveCount(1);
-        // The retained presentation must be usable before the destination fails.
-        await expect(active).not.toHaveJSProperty("sheet", null);
-        await expect(
-          page.locator("link[data-jaunder-theme-staged]"),
-        ).toHaveCount(0);
-        const permalink = page.locator(`a[href="${post.permalink}"]`).first();
-        await expect(permalink).toBeVisible();
-        const oldHref = await active.getAttribute("href");
-        expect(oldHref).not.toBeNull();
-        await page.evaluate(
-          ({ fault, permalink, oldHref }) => {
-            const attribute = Element.prototype.setAttribute;
-            const append = Node.prototype.appendChild;
-            const state: ThemeFaultState = {
-              fired: false,
-              armed: false,
-              intendedHref: new URL(permalink, document.baseURI).href,
-              oldHref: new URL(oldHref, document.baseURI).href,
-              clickedHref: null,
-              clickedAt: null,
-              fire: null,
-            };
-            const destinationStages = new WeakMap<HTMLLinkElement, string>();
-            // Capture intent before the SPA handler; staging may precede URL commit.
-            const arm = (event: MouseEvent) => {
-              const anchor = event
-                .composedPath()
-                .find(
-                  (node): node is HTMLAnchorElement =>
-                    node instanceof HTMLAnchorElement,
-                );
-              if (
-                anchor?.href === state.intendedHref &&
-                event.button === 0 &&
-                !event.altKey &&
-                !event.ctrlKey &&
-                !event.metaKey &&
-                !event.shiftKey
-              ) {
-                state.armed = true;
-                state.clickedHref = anchor.href;
-                state.clickedAt = performance.now();
-              }
-            };
-            document.addEventListener("click", arm, true);
-            const fire = (link: HTMLLinkElement, stagedHref: string): never => {
-              state.fired = true;
-              state.fire = {
-                kind: fault,
-                armed: state.armed,
-                href: link.href,
-                stagedHref,
-                media: link.media,
-                staged: link.hasAttribute("data-jaunder-theme-staged"),
-                active: link.hasAttribute("data-jaunder-theme-stylesheet"),
-                at: performance.now(),
-              };
-              throw new DOMException(`injected Theme Package ${fault} failure`);
-            };
-            Element.prototype.setAttribute = function (
-              name: string,
-              value: string,
+    await selectSiteTheme(tracedContext, { kind: "built_in", value: "studio" });
+    await signInAsNewUser(owner);
+    const post = await createPostViaApi(owner, {
+      body: "# Staged package failure",
+      audience: "public",
+    });
+    await publishAndSelectTheme(owner);
+    const publicContext = await tracedContext();
+    const page = await publicContext.newPage();
+    try {
+      await goto(page, "/");
+      const active = page.locator("link[data-jaunder-theme-stylesheet]");
+      await expect(page.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      await expect(active).toHaveCount(1);
+      // The retained presentation must be usable before the destination fails.
+      await expect(active).not.toHaveJSProperty("sheet", null);
+      await expect(page.locator("link[data-jaunder-theme-staged]")).toHaveCount(
+        0,
+      );
+      const permalink = page.locator(`a[href="${post.permalink}"]`).first();
+      await expect(permalink).toBeVisible();
+      const oldHref = await active.getAttribute("href");
+      expect(oldHref).not.toBeNull();
+      await page.evaluate(
+        ({ fault, permalink, oldHref }) => {
+          const attribute = Element.prototype.setAttribute;
+          const append = Node.prototype.appendChild;
+          const state: ThemeFaultState = {
+            fired: false,
+            armed: false,
+            intendedHref: new URL(permalink, document.baseURI).href,
+            oldHref: new URL(oldHref, document.baseURI).href,
+            clickedHref: null,
+            clickedAt: null,
+            fire: null,
+          };
+          const destinationStages = new WeakMap<HTMLLinkElement, string>();
+          // Capture intent before the SPA handler; staging may precede URL commit.
+          const arm = (event: MouseEvent) => {
+            const anchor = event
+              .composedPath()
+              .find(
+                (node): node is HTMLAnchorElement =>
+                  node instanceof HTMLAnchorElement,
+              );
+            if (
+              anchor?.href === state.intendedHref &&
+              event.button === 0 &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.shiftKey
             ) {
-              if (
-                fault === "promotion" &&
-                this instanceof HTMLLinkElement &&
-                name === "data-jaunder-theme-stylesheet" &&
-                this.media === "not all"
-              ) {
-                const stagedHref = destinationStages.get(this);
-                // Promotion removes the staged marker first: bind the actual node
-                // observed entering head, not an arbitrary link with matching media.
-                if (state.armed && stagedHref === this.href)
-                  fire(this, stagedHref);
-              }
-              return attribute.call(this, name, value);
+              state.armed = true;
+              state.clickedHref = anchor.href;
+              state.clickedAt = performance.now();
+            }
+          };
+          document.addEventListener("click", arm, true);
+          const fire = (link: HTMLLinkElement, stagedHref: string): never => {
+            state.fired = true;
+            state.fire = {
+              kind: fault,
+              armed: state.armed,
+              href: link.href,
+              stagedHref,
+              media: link.media,
+              staged: link.hasAttribute("data-jaunder-theme-staged"),
+              active: link.hasAttribute("data-jaunder-theme-stylesheet"),
+              at: performance.now(),
             };
-            Node.prototype.appendChild = function <T extends Node>(node: T): T {
-              if (
-                state.armed &&
-                this === document.head &&
-                node instanceof HTMLLinkElement &&
-                node.rel === "stylesheet" &&
-                node.media === "not all" &&
-                node.hasAttribute("data-jaunder-theme-staged") &&
-                !node.hasAttribute("data-jaunder-theme-stylesheet") &&
-                node.href !== state.oldHref &&
-                new URL(node.href).origin === location.origin
-              ) {
-                destinationStages.set(node, node.href);
-                if (fault === "append") fire(node, node.href);
-              }
-              return append.call(this, node) as T;
-            };
-            Object.assign(globalThis, {
-              __jaunderPromotionFault: {
-                state,
-                restore: () => {
-                  document.removeEventListener("click", arm, true);
-                  Element.prototype.setAttribute = attribute;
-                  Node.prototype.appendChild = append;
-                },
+            throw new DOMException(`injected Theme Package ${fault} failure`);
+          };
+          Element.prototype.setAttribute = function (
+            name: string,
+            value: string,
+          ) {
+            if (
+              fault === "promotion" &&
+              this instanceof HTMLLinkElement &&
+              name === "data-jaunder-theme-stylesheet" &&
+              this.media === "not all"
+            ) {
+              const stagedHref = destinationStages.get(this);
+              // Promotion removes the staged marker first: bind the actual node
+              // observed entering head, not an arbitrary link with matching media.
+              if (state.armed && stagedHref === this.href)
+                fire(this, stagedHref);
+            }
+            return attribute.call(this, name, value);
+          };
+          Node.prototype.appendChild = function <T extends Node>(node: T): T {
+            if (
+              state.armed &&
+              this === document.head &&
+              node instanceof HTMLLinkElement &&
+              node.rel === "stylesheet" &&
+              node.media === "not all" &&
+              node.hasAttribute("data-jaunder-theme-staged") &&
+              !node.hasAttribute("data-jaunder-theme-stylesheet") &&
+              node.href !== state.oldHref &&
+              new URL(node.href).origin === location.origin
+            ) {
+              destinationStages.set(node, node.href);
+              if (fault === "append") fire(node, node.href);
+            }
+            return append.call(this, node) as T;
+          };
+          Object.assign(globalThis, {
+            __jaunderPromotionFault: {
+              state,
+              restore: () => {
+                document.removeEventListener("click", arm, true);
+                Element.prototype.setAttribute = attribute;
+                Node.prototype.appendChild = append;
               },
-            });
-          },
-          { fault, permalink: post.permalink, oldHref: oldHref! },
-        );
-        await navigateInApp(
-          page,
-          () => page.locator(`a[href="${post.permalink}"]`).first().click(),
-          { url: post.permalink, ready: ".error" },
-        );
-        await expect(page.locator(".error")).toContainText(
-          fault === "promotion"
-            ? "Unable to promote Theme Package stylesheet"
-            : "Unable to stage Theme Package stylesheet",
-        );
-        const faultState = await page.evaluate(
-          () =>
-            (
-              globalThis as typeof globalThis & {
-                __jaunderPromotionFault: { state: ThemeFaultState };
-              }
-            ).__jaunderPromotionFault.state,
-        );
-        await test.info().attach("theme-package-dom-fault", {
-          body: JSON.stringify(faultState),
-          contentType: "application/json",
-        });
-        expect(faultState.fired).toBe(true);
-        expect(faultState.armed).toBe(true);
-        expect(faultState.clickedHref).toBe(faultState.intendedHref);
-        expect(faultState.fire).toMatchObject({
-          kind: fault,
-          armed: true,
-          media: "not all",
-          staged: fault === "append",
-          active: false,
-        });
-        expect(faultState.fire!.href).not.toBe(faultState.oldHref);
-        expect(faultState.fire!.href).toBe(faultState.fire!.stagedHref);
-        expect(faultState.fire!.at).toBeGreaterThanOrEqual(
-          faultState.clickedAt!,
-        );
-        await expect(active).toHaveCount(1);
-        await expect(active).toHaveAttribute("href", oldHref!);
-        await expect(page.locator(".j-root")).toHaveAttribute(
-          "data-theme",
-          "studio",
-        );
-        await expect(
-          page.locator("link[data-jaunder-theme-staged]"),
-        ).toHaveCount(0);
-        expect(
-          await active.evaluate(
-            (link) => (link as HTMLLinkElement).sheet !== null,
-          ),
-        ).toBe(true);
-      } finally {
-        await page.evaluate(() =>
+            },
+          });
+        },
+        { fault, permalink: post.permalink, oldHref: oldHref! },
+      );
+      await navigateInApp(
+        page,
+        () => page.locator(`a[href="${post.permalink}"]`).first().click(),
+        { url: post.permalink, ready: ".error" },
+      );
+      await expect(page.locator(".error")).toContainText(
+        fault === "promotion"
+          ? "Unable to promote Theme Package stylesheet"
+          : "Unable to stage Theme Package stylesheet",
+      );
+      const faultState = await page.evaluate(
+        () =>
           (
             globalThis as typeof globalThis & {
-              __jaunderPromotionFault?: { restore: () => void };
+              __jaunderPromotionFault: { state: ThemeFaultState };
             }
-          ).__jaunderPromotionFault?.restore(),
-        );
-        await publicContext.close();
-      }
-    });
+          ).__jaunderPromotionFault.state,
+      );
+      await test.info().attach("theme-package-dom-fault", {
+        body: JSON.stringify(faultState),
+        contentType: "application/json",
+      });
+      expect(faultState.fired).toBe(true);
+      expect(faultState.armed).toBe(true);
+      expect(faultState.clickedHref).toBe(faultState.intendedHref);
+      expect(faultState.fire).toMatchObject({
+        kind: fault,
+        armed: true,
+        media: "not all",
+        staged: fault === "append",
+        active: false,
+      });
+      expect(faultState.fire!.href).not.toBe(faultState.oldHref);
+      expect(faultState.fire!.href).toBe(faultState.fire!.stagedHref);
+      expect(faultState.fire!.at).toBeGreaterThanOrEqual(faultState.clickedAt!);
+      await expect(active).toHaveCount(1);
+      await expect(active).toHaveAttribute("href", oldHref!);
+      await expect(page.locator(".j-root")).toHaveAttribute(
+        "data-theme",
+        "studio",
+      );
+      await expect(page.locator("link[data-jaunder-theme-staged]")).toHaveCount(
+        0,
+      );
+      expect(
+        await active.evaluate(
+          (link) => (link as HTMLLinkElement).sheet !== null,
+        ),
+      ).toBe(true);
+    } finally {
+      await page.evaluate(() =>
+        (
+          globalThis as typeof globalThis & {
+            __jaunderPromotionFault?: { restore: () => void };
+          }
+        ).__jaunderPromotionFault?.restore(),
+      );
+      await publicContext.close();
+    }
   });
 }
 
@@ -404,128 +401,127 @@ test("a late bundled stylesheet cannot overwrite a newer public presentation", a
   page: owner,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async () => {
-    await signInAsNewUser(owner);
-    const post = await createPostViaApi(owner, {
-      body: "# Cancellation terminal post\n\nA real public destination.",
-      audience: "public",
-    });
-    await goto(owner, "/themes");
-    const selected = owner.getByRole("button", {
-      name: "Use terminal",
-      exact: true,
-    });
-    await selected.click();
-    await expect(selected).toHaveAttribute("aria-pressed", "true");
-
-    const anonymousContext = await tracedContext();
-    const page = await anonymousContext.newPage();
-    let release!: () => void;
-    let fired!: () => void;
-    let settled!: () => void;
-    const releaseGate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const requestFired = new Promise<void>((resolve) => {
-      fired = resolve;
-    });
-    const requestSettled = new Promise<void>((resolve) => {
-      settled = resolve;
-    });
-    let heldStylesheet: string | undefined;
-    try {
-      await goto(page, "/");
-      const studioHref = await page
-        .locator("link[data-jaunder-theme-stylesheet]")
-        .getAttribute("href");
-      expect(studioHref).toMatch(/^\/theme\/[0-9a-f]{64}$/);
-
-      await page.route("**/theme/*", async (route) => {
-        const request = route.request();
-        if (
-          heldStylesheet === undefined &&
-          request.resourceType() === "stylesheet" &&
-          new URL(request.url()).pathname !== studioHref
-        ) {
-          heldStylesheet = new URL(request.url()).pathname;
-          fired();
-          await releaseGate;
-          try {
-            await route.continue();
-          } finally {
-            settled();
-          }
-          return;
-        }
-        await route.continue();
-      });
-
-      await navigateInApp(
-        page,
-        () =>
-          page
-            .locator(`[data-jaunder-part="post"]#j-post-${post.post_id}`)
-            .getByRole("link", { name: "Cancellation terminal post" })
-            .click(),
-        { url: post.permalink, ready: ".j-loading" },
-      );
-      await requestFired;
-      const staged = page.locator("link[data-jaunder-theme-staged]");
-      await expect(staged).toHaveCount(1);
-      await expect(staged).toHaveAttribute("href", heldStylesheet!);
-      await expect(staged).toHaveAttribute("media", "not all");
-      const cancelledLink = await staged.elementHandle();
-      expect(cancelledLink).not.toBeNull();
-
-      await navigateInApp(
-        page,
-        () => page.getByRole("link", { name: "Local" }).click(),
-        { url: "/", ready: '[data-jaunder-part="post-list"]' },
-      );
-      await expect(page.locator(".j-root")).toHaveAttribute(
-        "data-theme",
-        "studio",
-      );
-      await expect(
-        page.locator("link[data-jaunder-theme-stylesheet]"),
-      ).toHaveAttribute("href", studioHref!);
-
-      expect(
-        await cancelledLink!.evaluate((node) => {
-          const link = node as HTMLLinkElement;
-          return (
-            !link.isConnected && link.onload === null && link.onerror === null
-          );
-        }),
-      ).toBe(true);
-      release();
-      await requestSettled;
-      // The real request is released; a detached link also has no callback through
-      // which a late browser load notification could promote the old destination.
-      await cancelledLink!.evaluate((node) =>
-        node.dispatchEvent(new Event("load")),
-      );
-      await expect(page).toHaveURL(/\/$/);
-      await expect(page.locator(".j-root")).toHaveAttribute(
-        "data-theme",
-        "studio",
-      );
-      await expect(
-        page.locator("link[data-jaunder-theme-stylesheet]"),
-      ).toHaveCount(1);
-      await expect(
-        page.locator("link[data-jaunder-theme-stylesheet]"),
-      ).toHaveAttribute("href", studioHref!);
-      await expect(page.locator("link[data-jaunder-theme-staged]")).toHaveCount(
-        0,
-      );
-    } finally {
-      release?.();
-      if (heldStylesheet !== undefined) await requestSettled;
-      await page.unroute("**/theme/*");
-      await anonymousContext.close();
-    }
+  await selectSiteTheme(tracedContext, { kind: "built_in", value: "studio" });
+  await signInAsNewUser(owner);
+  const post = await createPostViaApi(owner, {
+    body: "# Cancellation terminal post\n\nA real public destination.",
+    audience: "public",
   });
+  await goto(owner, "/themes");
+  const selected = owner.getByRole("button", {
+    name: "Use terminal",
+    exact: true,
+  });
+  await selected.click();
+  await expect(selected).toHaveAttribute("aria-pressed", "true");
+
+  const anonymousContext = await tracedContext();
+  const page = await anonymousContext.newPage();
+  let release!: () => void;
+  let fired!: () => void;
+  let settled!: () => void;
+  const releaseGate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requestFired = new Promise<void>((resolve) => {
+    fired = resolve;
+  });
+  const requestSettled = new Promise<void>((resolve) => {
+    settled = resolve;
+  });
+  let heldStylesheet: string | undefined;
+  try {
+    await goto(page, "/");
+    const studioHref = await page
+      .locator("link[data-jaunder-theme-stylesheet]")
+      .getAttribute("href");
+    expect(studioHref).toMatch(/^\/theme\/[0-9a-f]{64}$/);
+
+    await page.route("**/theme/*", async (route) => {
+      const request = route.request();
+      if (
+        heldStylesheet === undefined &&
+        request.resourceType() === "stylesheet" &&
+        new URL(request.url()).pathname !== studioHref
+      ) {
+        heldStylesheet = new URL(request.url()).pathname;
+        fired();
+        await releaseGate;
+        try {
+          await route.continue();
+        } finally {
+          settled();
+        }
+        return;
+      }
+      await route.continue();
+    });
+
+    await navigateInApp(
+      page,
+      () =>
+        page
+          .locator(`[data-jaunder-part="post"]#j-post-${post.post_id}`)
+          .getByRole("link", { name: "Cancellation terminal post" })
+          .click(),
+      { url: post.permalink, ready: ".j-loading" },
+    );
+    await requestFired;
+    const staged = page.locator("link[data-jaunder-theme-staged]");
+    await expect(staged).toHaveCount(1);
+    await expect(staged).toHaveAttribute("href", heldStylesheet!);
+    await expect(staged).toHaveAttribute("media", "not all");
+    const cancelledLink = await staged.elementHandle();
+    expect(cancelledLink).not.toBeNull();
+
+    await navigateInApp(
+      page,
+      () => page.getByRole("link", { name: "Local" }).click(),
+      { url: "/", ready: '[data-jaunder-part="post-list"]' },
+    );
+    await expect(page.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+    await expect(
+      page.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveAttribute("href", studioHref!);
+
+    expect(
+      await cancelledLink!.evaluate((node) => {
+        const link = node as HTMLLinkElement;
+        return (
+          !link.isConnected && link.onload === null && link.onerror === null
+        );
+      }),
+    ).toBe(true);
+    release();
+    await requestSettled;
+    // The real request is released; a detached link also has no callback through
+    // which a late browser load notification could promote the old destination.
+    await cancelledLink!.evaluate((node) =>
+      node.dispatchEvent(new Event("load")),
+    );
+    await expect(page).toHaveURL(/\/$/);
+    await expect(page.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+    await expect(
+      page.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveCount(1);
+    await expect(
+      page.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveAttribute("href", studioHref!);
+    await expect(page.locator("link[data-jaunder-theme-staged]")).toHaveCount(
+      0,
+    );
+  } finally {
+    release?.();
+    if (heldStylesheet !== undefined) await requestSettled;
+    await page.unroute("**/theme/*");
+    await anonymousContext.close();
+  }
 });
 
 test("Theme Package without syntax hooks inherits readable token defaults", async ({

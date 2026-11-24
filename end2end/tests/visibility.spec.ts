@@ -16,6 +16,7 @@ import {
   unsubscribeFrom,
 } from "./helpers";
 import { fetchFeedSnapshot } from "./feeds";
+import { seedConfigViaTool } from "./seed";
 import { navigateInApp } from "./navigate";
 import {
   openComposerControl,
@@ -340,6 +341,7 @@ test("Public post is visible to anonymous and appears in the feed; Subscribers p
   page,
   tracedContext,
 }, testInfo) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const firstNav = slowBrowserFirstNavigationTimeoutMs(testInfo, 20_000);
 
   const author = await signInAsNewUserKnown(page);

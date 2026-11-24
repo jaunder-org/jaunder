@@ -6,10 +6,10 @@ import {
   verifyFreshAppPasswordLifecycle,
   verifyProductionBaseline,
 } from "./production-baseline";
-import { seedConfigViaTool, seedSandboxProfileViaTool } from "./seed";
+import { seedSandboxProfileViaTool } from "./seed";
 
-// This remains an ordinary cross-browser E2E spec; Playwright schedules it in
-// the serial admin-site project because profile seeding temporarily changes site config.
+// This remains an ordinary cross-browser E2E spec. Profile seeding changes site
+// config, so the test sets the site config it depends on before creating records.
 
 test("production baseline creates and verifies canonical browser and AtomPub records", async ({
   page,
@@ -18,25 +18,20 @@ test("production baseline creates and verifies canonical browser and AtomPub rec
   setBaselineTestBudget();
   const seededManifest = await seedSandboxProfileViaTool("demo");
   await applyBaselineSiteConfig();
+  const state = await createProductionBaseline(
+    page,
+    tracedContext,
+    seededManifest,
+  );
+  const verificationPage = await page.context().newPage();
   try {
-    const state = await createProductionBaseline(
-      page,
+    await verifyProductionBaseline(verificationPage, state, tracedContext);
+    await verifyFreshAppPasswordLifecycle(
+      verificationPage,
+      state,
       tracedContext,
-      seededManifest,
     );
-    const verificationPage = await page.context().newPage();
-    try {
-      await verifyProductionBaseline(verificationPage, state, tracedContext);
-      await verifyFreshAppPasswordLifecycle(
-        verificationPage,
-        state,
-        tracedContext,
-      );
-    } finally {
-      await verificationPage.close();
-    }
   } finally {
-    await seedConfigViaTool("site.title", "jaunder.local");
-    await seedConfigViaTool("posts.default_audience", "private");
+    await verificationPage.close();
   }
 });

@@ -156,8 +156,6 @@ test("backup warning banner revalidates in place after relevant settings saves",
   const schedule = page.locator('input[name="schedule"]');
   const banner = page.getByText("Backups are not configured");
   const saveButton = page.locator('button:has-text("Save Backup Settings")');
-  const initialDestination = await destination.inputValue();
-  const initialSchedule = await schedule.inputValue();
   let siteWarningRequests = 0;
   let backupWarningRequests = 0;
   page.on("request", (request) => {
@@ -169,81 +167,66 @@ test("backup warning banner revalidates in place after relevant settings saves",
     }
   });
 
-  try {
-    // Establish the unresolved predicate through the UI before the first assertion.
-    await destination.fill("");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/update_settings"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/is_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    await expect(banner).toBeVisible();
+  // Establish the unresolved predicate through the UI before the first assertion.
+  await destination.fill("");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/update_settings"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/is_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  await expect(banner).toBeVisible();
 
-    const expectedSiteWarnings = siteWarningRequests;
-    let expectedBackupWarnings = backupWarningRequests;
-    await destination.fill("/srv/jaunder/backups");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/update_settings"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/is_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedBackupWarnings += 1;
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    await expect(banner).toBeHidden();
+  const expectedSiteWarnings = siteWarningRequests;
+  let expectedBackupWarnings = backupWarningRequests;
+  await destination.fill("/srv/jaunder/backups");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/update_settings"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/is_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedBackupWarnings += 1;
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  await expect(banner).toBeHidden();
 
-    await destination.fill("");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/update_settings"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/is_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedBackupWarnings += 1;
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    await expect(banner).toBeVisible();
+  await destination.fill("");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/update_settings"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/is_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedBackupWarnings += 1;
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  await expect(banner).toBeVisible();
 
-    // A schedule-only save completes a fresh warning read but preserves the unresolved predicate.
-    await schedule.fill("0 30 2 * * *");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/update_settings"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/is_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedBackupWarnings += 1;
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    await expect(banner).toBeVisible();
-  } finally {
-    // Restore the test's initial persisted fields before the shared fixture continues.
-    await destination.fill(initialDestination);
-    await schedule.fill(initialSchedule);
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/update_settings"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/is_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-  }
+  // A schedule-only save completes a fresh warning read but preserves the unresolved predicate.
+  await schedule.fill("0 30 2 * * *");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/update_settings"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/is_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedBackupWarnings += 1;
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  await expect(banner).toBeVisible();
 });
 
 // #1936: Back Up Now writes one backup to the *saved* destination and shows the written
@@ -266,7 +249,6 @@ test("back up now writes to the saved destination and is disabled without one", 
   const destination = page.locator('input[name="destination_path"]');
   const saveButton = page.locator('button:has-text("Save Backup Settings")');
   const backUpNow = page.locator('button:has-text("Back Up Now")');
-  const initialDestination = await destination.inputValue();
   const saveDestination = async (value: string) => {
     await destination.fill(value);
     await Promise.all([
@@ -280,23 +262,18 @@ test("back up now writes to the saved destination and is disabled without one", 
     ]);
   };
 
-  try {
-    await saveDestination("");
-    await expect(backUpNow).toBeDisabled();
+  await saveDestination("");
+  await expect(backUpNow).toBeDisabled();
 
-    await saveDestination(backupRoot);
-    await expect(backUpNow).toBeEnabled();
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/backup/back_up_now"),
-      ),
-      backUpNow.click(),
-    ]);
-    await expect(page.locator(".j-backup-written")).toContainText(
-      `${backupRoot}/backup-`,
-    );
-  } finally {
-    // Restore the shared fixture's persisted destination for later tests.
-    await saveDestination(initialDestination);
-  }
+  await saveDestination(backupRoot);
+  await expect(backUpNow).toBeEnabled();
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/backup/back_up_now"),
+    ),
+    backUpNow.click(),
+  ]);
+  await expect(page.locator(".j-backup-written")).toContainText(
+    `${backupRoot}/backup-`,
+  );
 });

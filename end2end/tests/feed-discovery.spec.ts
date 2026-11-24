@@ -4,7 +4,7 @@ import { BASE_URL, goto } from "./helpers";
 import { allowEngineDependentBoot } from "./bootBudget";
 import { navigateInApp } from "./navigate";
 import { randomUUID } from "node:crypto";
-import { applySeededSession, seedUserViaTool } from "./seed";
+import { applySeededSession, seedConfigViaTool, seedUserViaTool } from "./seed";
 import { createPostViaApi } from "./posts";
 
 const markerName = "Syndication feeds";
@@ -33,6 +33,7 @@ async function observeMarkerHrefs(page: Page): Promise<void> {
 test("Local RSS marker opens the contextual Syndication Feed index", async ({
   page,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   await goto(page, "/");
   const marker = page.getByRole("link", { name: markerName });
   await expect(marker).toHaveAttribute("href", "/feeds");
