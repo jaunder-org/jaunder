@@ -1575,29 +1575,27 @@ baseline.
   checks until the next caller-actionable outcome. A green, landable PR returns
   `ready-to-land`; an already armed or queued PR continues through queue
   processing. Omit `N` to resolve the open PR for the current branch. The sole
-  observer is the host-only `tools/pr-observer` binary; it never mutates. After
-  obtaining and recording human approval for the exact PR/head/scope, use
-  `dev pr-land <PR> <approved-head-SHA>`. Both identity arguments are required;
-  the SHA must be full lowercase 40-hex. `dev` cannot attest to human approval.
-  The thin native `gh`/`git` frontdoor requires origin `jaunder-org/jaunder`,
-  live base `main`, matching PR/head, no divergent local PR branch, and a
-  one-snapshot `ready-to-land` verdict from the same observer before one
-  `gh pr merge --auto --merge --match-head-commit` action.
+  observer is `dev pr-watch` itself (`tools/dev/dev/pr_watch.py`); it only reads
+  through `gh` and never mutates. After obtaining and recording human approval
+  for the exact PR/head/scope, use `dev pr-land <PR> <approved-head-SHA>`. Both
+  identity arguments are required; the SHA must be full lowercase 40-hex. `dev`
+  cannot attest to human approval. The thin native `gh`/`git` frontdoor requires
+  origin `jaunder-org/jaunder`, live base `main`, matching PR/head, no divergent
+  local PR branch, and a one-snapshot `ready-to-land` verdict from the same
+  observer before one `gh pr merge --auto --merge --match-head-commit` action.
 
   The branch ruleset remains authoritative for direct required contexts and
-  readiness. For an early failure, `pr watch` follows the current workflow run's
-  dependency graph: a directly or transitively required failed check is
-  immediately `checks-failed`, while an optional failure emits one explicitly
-  optional event with its job-log URL and remains non-terminal. A graph-derived
-  required target may not have materialized while its owning Actions workflow is
-  still running; that is explicit incomplete evidence, so default observation
-  waits without consuming the strike budget. `--once` and the pre-arm `pr land`
-  check report it as `pending`, and `pr land` does not arm. If the workflow is
-  completed and the target is still absent, the evidence is malformed. Other
-  Actions, workflow, or graph failures use the existing poll-error/strike
-  policy; uncertainty is never guessed optional. The observer only reads this
-  evidence: it does not cancel, rerun, rebase, enqueue, or otherwise mutate
-  workflow jobs.
+  readiness. For an early failure, `pr-watch` uses workflow membership: a failed
+  GitHub Actions check whose workflow file (read at the PR head) defines a job
+  named after a ruleset context is immediately `checks-failed`, as if that
+  context had failed. Any other failed check emits one explicitly optional
+  warning with its log URL and remains non-terminal; an unreadable workflow file
+  also means optional, which can only delay `checks-failed` until the required
+  aggregate fails. Readiness still requires every ruleset context to succeed.
+  Keep optional jobs out of workflows that define required contexts. The
+  observer only reads this evidence: it does not cancel, rerun, rebase, enqueue,
+  or otherwise mutate workflow jobs
+  ([native observer decision](docs/adr/drafts/pr-watch-native-python-observer.md)).
 
   ```bash
   dev pr-watch                             # wait for the next action
@@ -1610,22 +1608,21 @@ baseline.
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
   `dequeued`, `blocked`, `conflicted`, `closed-unmerged`, `stale`, `timed-out`,
   or `watcher-error`, plus `pending` when one-shot observation catches a PR
-  mid-flight or pre-arm classification evidence is incomplete. They never
-  collapse into one another: `dequeued` means an observed same-head queue entry
-  vanished without a failed job in a current-head merge-group run, which
-  `ejected` reports even while that run is still in progress; `timed-out` means
-  GitHub never finished; `watcher-error` means the tooling could not establish a
-  trustworthy verdict.
+  mid-flight. They never collapse into one another: `dequeued` means an observed
+  same-head queue entry vanished without a failed job in a current-head
+  merge-group run, which `ejected` reports even while that run is still in
+  progress; `timed-out` means GitHub never finished; `watcher-error` means the
+  tooling could not establish a trustworthy verdict.
 
   `pr-watch` exits 0 for `ready-to-land` or `merged`; `pr-land` exits 0 only
   after complete exact-head `merged` evidence. Observer stdout is direct JSON:
   root `.outcome`, `.pr` (number), `.head_sha`, `.events`, and optional
-  `.phase`, `.detail`, `.pointer`, `.shared_failure`. There is no `--json` flag
-  or result sidecar. Progress/diagnostics go to stderr. Adverse/pending observer
-  outcomes exit 1; invalid arguments/setup failure exit 2 and may have no
-  report. Land refusal/native failure is nonzero and may have no JSON;
-  post-action observation retains its direct report/status. Honor exit status,
-  not partial output. An arm or queue readback is not a merge verdict.
+  `.phase`, `.detail`, `.pointer`. There is no `--json` flag or result sidecar.
+  Progress/diagnostics go to stderr. Adverse/pending observer outcomes exit 1;
+  invalid arguments/setup failure exit 2 and may have no report. Land
+  refusal/native failure is nonzero and may have no JSON; post-action
+  observation retains its direct report/status. Honor exit status, not partial
+  output. An arm or queue readback is not a merge verdict.
 
   `watch` only observes — it never merges, re-runs a job, rebases, or
   re-enqueues. `--until merged` explicitly keeps observing across
@@ -1638,9 +1635,10 @@ baseline.
   the supplied head. Positive same-head queue membership from native action
   readback is carried as read-only `--observed-queued-head <SHA>`, which must
   equal required `--expected-head`. Only positive live queued readback supplies
-  this input; an arm alone or absent queue evidence does not. Existing observer
-  `Progress` preserves a dequeue that happens before establishment; no shell
-  classifier or new poller is added, and default observation is unchanged. See
+  this input; an arm alone or absent queue evidence does not. It seeds the
+  observer's queue history, so a dequeue before the first poll is still reported
+  as `dequeued`; no shell classifier or new poller is added, and default
+  observation is unchanged. See
   [ADR-0087](docs/adr/0087-xtask-github-pr-observation.md) for the
   observer/armer split and
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
@@ -1658,14 +1656,14 @@ baseline.
   that run acknowledged before its ONE native action. Incomplete, adverse or
   unavailable evidence refuses; there is no second classifier, poller or armer.
   Post-action observation uses
-  `--expected-head <SHA> --acknowledged-ejection <URL>` backed by the same
-  `WatchContinuation`. These read-only inputs neither mutate nor authorize
-  recovery. Acknowledgment requires an expected head and a GitHub Actions run
-  URL; `dev pr-land` supplies the URL from preflight, not caller guesswork. The
-  failed verdict stays failed; delayed fresh visibility uses the normal
-  deadline, and a distinct fresh failure ends observation. Ordinary land refuses
-  ejection; neither mode retries a no-op. Existing head, check, queue and
-  fail-closed guards remain in force. See
+  `--expected-head <SHA> --acknowledged-ejection <URL>` on the same observer.
+  These read-only inputs neither mutate nor authorize recovery. Acknowledgment
+  requires an expected head and a GitHub Actions run URL; `dev pr-land` supplies
+  the URL from preflight, not caller guesswork. The failed verdict stays failed;
+  delayed fresh visibility uses the normal deadline, and a distinct fresh
+  failure ends observation. Ordinary land refuses ejection; neither mode retries
+  a no-op. Existing head, check, queue and fail-closed guards remain in force.
+  See
   [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose

@@ -1,6 +1,9 @@
 # ADR-0198: Active-workflow missing PR targets are incomplete evidence
 
-- Status: accepted
+- Status: superseded
+- Note: as of 2026-11-24 there is no graph-derived target to await; workflow
+  membership (`docs/adr/drafts/pr-watch-native-python-observer.md`, #2067)
+  replaced it
 - Date: 2026-09-16
 - Issue: [#1543](https://github.com/jaunder-org/jaunder/issues/1543)
 

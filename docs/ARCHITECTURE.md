@@ -75,14 +75,13 @@ the host coverage denominator
 
 One sibling tree is outside the root workspace as its own cargo workspace:
 `tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
-`host-proof`, `host-tool`, `perf-producer`, `performance`, `pr-observer`,
-`qualification`, `repository-policy`, `system-artifacts`, and `traced-run`). The
-host-side dev/CI commands live in its concern packages rather than a separate
-driver workspace, and each executable that runs inside a Nix derivation lives in
-the crate that owns its logic
-([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). `performance` is
-the pure versioned dataset, producer-artifact, statistics, and comparison
-library shared by sandbox producers and host analysis under
+`host-proof`, `host-tool`, `perf-producer`, `performance`, `qualification`,
+`repository-policy`, `system-artifacts`, and `traced-run`). The host-side dev/CI
+commands live in its concern packages rather than a separate driver workspace,
+and each executable that runs inside a Nix derivation lives in the crate that
+owns its logic ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
+`performance` is the pure versioned dataset, producer-artifact, statistics, and
+comparison library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
 provides the host-only `perf-data` CLI for evidence policy; the Nix performance
 producers run the separate `perf-producer` crate, which links the library with
@@ -5319,10 +5318,11 @@ is limited to `scripts/` host scripts that run commands and check their results,
 with traps only for cleanup or failed-step reporting and concurrency only from
 standard tools; signal forwarding, supervising long-lived children, or data
 shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
-steps is outside the rule. Under that decision `e2e-local`, `pr-observer` and
-`perf-data` move to Python and `qualification` is retired for a scheduled
-upgrade test, each in its own follow-up. Until then the placements below
-describe the current tree:
+steps is outside the rule. Under that decision `e2e-local` and `perf-data` move
+to Python and `qualification` is retired for a scheduled upgrade test, each in
+its own follow-up; `pr-observer` has already become the native `dev pr-watch`
+([native observer decision](adr/drafts/pr-watch-native-python-observer.md)).
+Until then the placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
@@ -5460,17 +5460,17 @@ would otherwise default to resolver 1
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
 `packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
-`packages.pr-observer`, `packages.qualification-host` and
-`packages.system-artifacts` (with its qualification-featured variant) are built
-by one shared host-tool builder (`nix/host-tool.nix`) from each package's own
-Cargo path closure, on a dependencies-only build that only the lockfile, member
-manifests, toolchain and features change (`nix/tools-workspace-package.nix`,
-which `packages.repository-policy` shares); application coverage/E2E
-dependencies and explicit host-unit-test authorities remain separate. `dev` runs
-every Rust host tool from these outputs and `packages.repository-policy`,
-locally and in CI, so CI substitutes unchanged tools from Cachix instead of
-compiling them. setup-ci caches no compiled tool output; jobs that run host
-Cargo opt in to a cache of its downloads only
+`packages.qualification-host` and `packages.system-artifacts` (with its
+qualification-featured variant) are built by one shared host-tool builder
+(`nix/host-tool.nix`) from each package's own Cargo path closure, on a
+dependencies-only build that only the lockfile, member manifests, toolchain and
+features change (`nix/tools-workspace-package.nix`, which
+`packages.repository-policy` shares); application coverage/E2E dependencies and
+explicit host-unit-test authorities remain separate. `dev` runs every Rust host
+tool from these outputs and `packages.repository-policy`, locally and in CI, so
+CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
+caches no compiled tool output; jobs that run host Cargo opt in to a cache of
+its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 `packages.qualification-host` is the auxiliary `tools/qualification` package's
@@ -5584,11 +5584,13 @@ in full
 ([merge-queue verdict draft](adr/0260-merge-queue-verdict-covers-landed-commit.md)).
 
 Because green checks are only phase one under a queue — and an ejected PR leaves
-the queue silently — the focused host-only `tools/pr-observer` owns ordinary PR
-observation through root `dev pr-watch [N]`. By default it follows checks until
-the next caller-actionable outcome: a green, unarmed PR returns `ready-to-land`,
-while an already armed or queued PR continues through the queue.
-`--until merged` explicitly requests passive waiting across the ready handoff
+the queue silently — `dev pr-watch [N]` owns ordinary PR observation, natively
+in the `dev` package (`tools/dev/dev/pr_watch.py`) with no Nix-built tool
+([native observer decision](adr/drafts/pr-watch-native-python-observer.md)). By
+default it follows checks until the next caller-actionable outcome: a green,
+unarmed PR returns `ready-to-land`, while an already armed or queued PR
+continues through the queue. `--until merged` explicitly requests passive
+waiting across the ready handoff
 ([the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)).
 `dev pr-land <PR> <approved-head-SHA> [--reenqueue]` requires previously
 obtained and recorded exact PR/head human approval. Its thin native `gh`/`git`
@@ -5600,29 +5602,27 @@ cannot attest that human approval exists. This replaces the former xtask
 ownership under the
 [approved successor draft](adr/0240-just-frontdoors-host-pr-observer.md),
 preserving [ADR-0087](adr/0087-xtask-github-pr-observation.md)'s capability
-split. The observer's transport is `gh` (`tools/pr-observer/src/pr/gh.rs`), with
-`snapshot` turning JSON into typed values and `decide` holding pure verdict
-logic in that package. There is no second polling/classification implementation.
-The ruleset supplies directly required contexts and the positive readiness
-verdict. For early failure, the observer joins a stable Actions check-run ID to
-its job, workflow run and attempt, then reads the immutable workflow source at
-that run's commit. The exact dependency graph (including resolvable pinned local
-reusable workflows) supplies matrix expansion and `needs` ancestry. Runtime jobs
-and required contexts must each join exactly one graph node. When a
-graph-derived required target has not materialized and its exact owning workflow
-run is still active, classification evidence is incomplete: observation waits
-without consuming poll-error strikes, one-shot observation reports `pending`,
-and pre-arm landing refuses to arm. The run reaching `completed` makes the same
-absence malformed (decision:
-`docs/adr/0198-active-workflow-incomplete-pr-evidence.md`). Ambiguous
-correlation, unavailable source, remote reuse, and unsupported expressions fail
-closed through poll-error handling rather than being guessed optional. A
-non-Actions status context has no Actions ancestry, so exact ruleset membership
-makes it direct and every other such context is optional. Thus a directly or
-transitively required failure is immediately actionable, while an optional
-failure is reported without becoming merge-blocking
-([dynamic PR check classification](adr/0195-dynamic-pr-check-classification.md)).
-This classification contains no maintained job-name or matrix-value allowlist.
+split. The observer's transport is `gh`: each call captures its exit status,
+stdout and stderr, and a pure `classify` turns them into data or a typed error
+(missing, unauthenticated, not-found, GraphQL errors, rate-limited, transport,
+malformed); rate-limited, transport and malformed errors are transient strikes.
+Pure parsers and a pure `decide` hold the verdict logic. There is no second
+polling/classification implementation. The ruleset supplies the required
+contexts and the positive readiness verdict: every ruleset context must have
+succeeded on the current head, a pending re-run outranks an earlier failure, and
+otherwise the latest completion wins. For early failure the observer uses
+workflow membership rather than a job graph. A failed GitHub Actions check that
+is not itself a ruleset context is required when its workflow file, read at the
+PR head, defines a job whose literal name (or key) is a ruleset context; it then
+ends observation as `checks-failed`. Every other failure — non-Actions contexts
+outside the ruleset, other workflows, and workflow files that cannot be read or
+parsed — is an optional warning, which at worst delays `checks-failed` until the
+required aggregate fails. This replaced the job-graph classification of
+[dynamic PR check classification](adr/0195-dynamic-pr-check-classification.md)
+and its
+[incomplete-evidence refinement](adr/0198-active-workflow-incomplete-pr-evidence.md)
+([native observer decision](adr/drafts/pr-watch-native-python-observer.md)).
+This classification contains no maintained check, job or workflow name.
 Distinguishing outcomes — including `ready-to-land`, `ejected`, `dequeued`,
 `timed-out` ("GitHub never finished"), and `watcher-error` ("we could not tell")
 — live in root `.outcome` in direct observer JSON, with `.pr` (number),
@@ -5634,9 +5634,9 @@ may produce no report; honor process status.
 
 Positive live same-head queued action readback is carried ONLY as read-only
 `--observed-queued-head <SHA>`, requiring equality with `--expected-head`. It
-seeds existing observer `Progress` so disappearance before establishment retains
-the confirmed same-head `dequeued` outcome; default behavior is unchanged.
-Approval `issue-1896-observer-queue-continuation-v1`, request
+seeds the observer's queue history so disappearance before the first poll
+retains the confirmed same-head `dequeued` outcome; default behavior is
+unchanged. Approval `issue-1896-observer-queue-continuation-v1`, request
 `df5154f8-1d48-4725-9550-72460d456d8b` ("Approve queue-history input"),
 authorizes this narrow history transfer, not a second classifier/poller,
 mutation, trust registry or approval bypass.
@@ -5647,7 +5647,7 @@ separately authorized recovery, refusing queued or auto-merge-armed PRs.
 `dev pr-land` captures the historical URL from live ejection preflight and
 requires a second one-snapshot ready verdict from the SAME observer with only
 that run acknowledged before action. Public read-only `--expected-head <SHA>`
-and `--acknowledged-ejection <URL>` inputs use existing `WatchContinuation`;
+and `--acknowledged-ejection <URL>` inputs bind that same observer;
 acknowledgment requires an expected head. Human approval
 `issue-1896-observer-continuation-v1` / request
 `4fc22750-206c-49bd-9056-c7b3e07543a5` narrowly refines ADR-0220's original
@@ -5785,16 +5785,17 @@ proposed
 [Just frontdoors with a host-only PR observer decision](adr/0240-just-frontdoors-host-pr-observer.md).
 Implemented, and now as `dev` commands
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)), these are the
-ordinary issue/PR frontdoors, using `gh`/`git` for operations and a
-purpose-specific read-only `tools/pr-observer/` host binary for polling and
-evidence classification. Its approval-bearing land and caller-owned unmanaged
-cleanup frontdoors preserve the `ADR-0135`, `ADR-0171`, `ADR-0195`, `ADR-0198`,
-`ADR-0220`, and `ADR-0077` safeguards above; `dev` does not claim to attest
-prior human approval or infer assignment ownership. This approved committed
-direction supersedes ADR-0087's xtask observer ownership and amends ADR-0028's
-tool-placement boundary when its proposed draft is accepted. Current implemented
-workflows remain as described in the preceding section until their approved
-migration lands. The privileged ADR promoter remains unchanged.
+ordinary issue/PR frontdoors, using `gh`/`git` for operations and the read-only
+native `dev pr-watch` observer (formerly the `tools/pr-observer/` host binary)
+for polling and evidence classification. Its approval-bearing land and
+caller-owned unmanaged cleanup frontdoors preserve the `ADR-0135`, `ADR-0171`,
+`ADR-0220`, and `ADR-0077` safeguards above, and the native observer decision's
+replacement of the `ADR-0195`/`ADR-0198` classification; `dev` does not claim to
+attest prior human approval or infer assignment ownership. This approved
+committed direction supersedes ADR-0087's xtask observer ownership and amends
+ADR-0028's tool-placement boundary when its proposed draft is accepted. Current
+implemented workflows remain as described in the preceding section until their
+approved migration lands. The privileged ADR promoter remains unchanged.
 
 ADR-0152's compact recovery model treats a promoter head and generated diff as
 immutable while allowing the serialized Generate controller to clean up
@@ -5936,12 +5937,12 @@ nix run --accept-flake-config --no-update-lock-file --no-write-lock-file .#adr-p
 
 Feature authors still must not promote. Rust keeps independent read-only
 `adr-format`, README/view parity, document-link and collision gates. Ordinary PR
-observation stays in `tools/pr-observer`. Integration with the base's
-performance workflow extraction left no xtask consumer of the old PR re-exports
-or GitHub transport facade, so those adapters and xtask's observer dependency
-were removed before the xtask workspace itself was retired. The independent
-observer and performance implementation remain unchanged; no cross-project logic
-changes or dormant fallback are part of this extraction.
+observation stays in `dev pr-watch`. Integration with the base's performance
+workflow extraction left no xtask consumer of the old PR re-exports or GitHub
+transport facade, so those adapters and xtask's observer dependency were removed
+before the xtask workspace itself was retired. The independent observer and
+performance implementation remain unchanged; no cross-project logic changes or
+dormant fallback are part of this extraction.
 
 Trusted-main App permissions are unchanged. Open attempt heads/diffs remain
 immutable; generation and per-PR recovery coalesce separately without active
