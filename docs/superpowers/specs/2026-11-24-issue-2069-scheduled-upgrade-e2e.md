@@ -113,6 +113,19 @@ still proves the mechanism. Every from-build after this change carries
 `upgrade.spec.ts`, so older revisions need no shim. A tag run reports after the
 tag exists. To check a release before tagging, dispatch with `from=<last tag>`.
 
+**Manual initiation.** `dev upgrade-dispatch [--from <rev>] [--ref <branch>]`
+starts the CI workflow from a shell, the same way the other `dev` GitHub helpers
+call `gh`.
+
+- It runs `gh workflow run upgrade.yml --ref <ref> [-f from=<sha>]`.
+- `<rev>` is resolved locally to a full SHA that must exist on `origin`.
+- `--ref` defaults to `main`.
+- Without `--from`, the workflow applies its own last-green rule.
+- It prints the URL of the run it started and does not wait. `gh run watch`
+  observes the run.
+
+`dev upgrade-test` remains the local, in-VM equivalent.
+
 **Getting the earlier build in.** This follows the existing `performanceLib`
 precedent (`flake.nix`, `tools/dev/dev/perf.py`). The main flake exports
 `upgradeLib.mkUpgradeCheck { previous, backend }` and adds no flake inputs.
@@ -201,6 +214,11 @@ the from-build rules (previous tag, last green run on `main`, or an explicit
 - **Ordinary e2e is unaffected.** `upgrade.spec.ts` skips there, and
   `production-baseline-flow.spec.ts` still passes. Ordinary PR CI and
   `dev validate-no-e2e` pass.
+- **Manual dispatch works.** Before merge, a unit test covers how arguments
+  translate to the `gh` call, and rev resolution, including a rev absent from
+  `origin`. GitHub allows dispatch only once `upgrade.yml` is on the default
+  branch. The first live `dev upgrade-dispatch` on `main` is therefore a
+  post-merge check, reported on the issue.
 - **The workflow is complete.** `.github/workflows/upgrade.yml` has the `v*` tag
   trigger and its previous-tag lookup, the weekly cron, a `workflow_dispatch`
   `from` input, `actions: read`, the main-scoped last-green lookup, a
