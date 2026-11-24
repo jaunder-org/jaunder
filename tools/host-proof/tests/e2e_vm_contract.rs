@@ -104,32 +104,28 @@ fn evaluated_e2e_lanes() -> serde_json::Value {
 fn e2e_vm_deadline_accounts_for_the_full_lifecycle() {
     let lanes = evaluated_e2e_lanes();
     let lanes = lanes.as_object().expect("lane map");
-    assert_eq!(lanes.len(), 16);
+    assert_eq!(lanes.len(), 12);
     let catalog: serde_json::Value = serde_json::from_slice(
         &fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../end2end/e2e-lanes.json"))
             .expect("lane catalog"),
     )
     .expect("lane catalog JSON");
-    let shard_weights = &catalog["ordinaryShardWeights"];
+    let shard_weights = &catalog["shardWeights"];
     // Every production lane shares one suite cap and deadline (#1985).
     let (suite, deadline) = (1500, 1920);
     for (name, lane) in lanes {
         assert_eq!(lane["globalTimeout"], deadline, "{name}");
         let script = lane["testScript"].as_str().expect("VM test script");
-        // Only ordinary shards are sized by their browser's catalog weight.
+        // Every shard is sized by its browser's catalog weight.
         let browser = ["chromium", "firefox"]
             .into_iter()
-            .find(|browser| name.contains(&format!("{browser}-ordinary")));
-        match browser {
-            Some(browser) => {
-                let weights = shard_weights[browser].as_str().expect("browser weights");
-                assert!(
-                    script.contains(&format!("PWTEST_SHARD_WEIGHTS={weights}")),
-                    "{name}"
-                );
-            }
-            None => assert!(!script.contains("PWTEST_SHARD_WEIGHTS"), "{name}"),
-        }
+            .find(|browser| name.contains(&format!("-{browser}-")))
+            .expect("lane browser");
+        let weights = shard_weights[browser].as_str().expect("browser weights");
+        assert!(
+            script.contains(&format!("PWTEST_SHARD_WEIGHTS={weights}")),
+            "{name}"
+        );
         let syntax = std::process::Command::new("python3")
             .args([
                 "-B",
@@ -211,7 +207,7 @@ print(json.dumps(sorted(timeouts)))
 #[test]
 fn e2e_panic_gate_verifies_every_instance() {
     let lanes = evaluated_e2e_lanes();
-    let helper = lanes["e2e-sqlite-firefox-ordinary-1-of-2"]["testScript"]
+    let helper = lanes["e2e-sqlite-firefox-1-of-3"]["testScript"]
         .as_str()
         .expect("evaluated VM script");
     let script = format!(
@@ -261,7 +257,7 @@ print(json.dumps({{"statuses": statuses, "verified": verified}}))
         result["statuses"],
         serde_json::json!({"capture/instance-0 ": 1, "capture/instance-1 ": 1, "no instance": 0})
     );
-    let identity = "sqlite-firefox-ordinary-1-of-2";
+    let identity = "sqlite-firefox-1-of-3";
     assert_eq!(
         result["verified"],
         serde_json::json!((0..2)
@@ -276,7 +272,7 @@ print(json.dumps({{"statuses": statuses, "verified": verified}}))
 #[test]
 fn e2e_result_capture_helper_exercises_source_transport_and_failure_precedence() {
     let lanes = evaluated_e2e_lanes();
-    let helper = lanes["e2e-sqlite-chromium-ordinary-1-of-2"]["testScript"]
+    let helper = lanes["e2e-sqlite-chromium-1-of-3"]["testScript"]
         .as_str()
         .expect("evaluated VM script");
     let node_binary = std::process::Command::new("which")
@@ -334,7 +330,7 @@ with tempfile.TemporaryDirectory() as root:
 
   source, guest = paths("empty-ok", b"")
   errors = []
-  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "empty"
   assert result["source_to_guest"]["outcome"] == "copied"
   assert result["guest_to_output"]["outcome"] == "copied", result
@@ -352,50 +348,50 @@ with tempfile.TemporaryDirectory() as root:
   malformed = b"{\"partial\":"
   source, guest = paths("malformed", malformed)
   errors = []
-  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "nonempty"
   assert open(os.path.join(root, "retained", os.path.basename(guest)), "rb").read() == malformed
 
   missing = os.path.join(root, "does-not-exist")
-  result = capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "results.json", missing, guest, [])
+  result = capture(Machine(root), "sqlite-firefox-1-of-3", "results.json", missing, guest, [])
   assert result["source"]["condition"] == "missing"
   assert result["source_to_guest"]["outcome"] == "not-applicable"
   required_errors = []
-  capture(Machine(root), "sqlite-firefox-ordinary-1-of-2", "e2e-expected-census.json", missing, guest, required_errors, required=True)
+  capture(Machine(root), "sqlite-firefox-1-of-3", "e2e-expected-census.json", missing, guest, required_errors, required=True)
   assert "required source is missing" in required_errors[0]
 
   source, guest = paths("empty-output-fail", b"")
   errors = []
-  result = capture(Machine(root, fail_output=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root, fail_output=True), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "empty"
   assert result["guest_to_output"]["outcome"] == "copy-error"
 
   source, guest = paths("inspection-error", b"data")
   errors = []
-  result = capture(Machine(root, fail_inspection=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root, fail_inspection=True), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "inspection-error"
   assert "operation source inspection" in errors[0]
   errors = []
-  result = capture(Machine(root, empty_inspection_failure=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root, empty_inspection_failure=True), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source"]["condition"] == "inspection-error"
   assert "exited with status 127" in result["source"]["detail"], result
 
   source, guest = paths("output-fail", b"{\"ok\":true}")
   errors = []
-  result = capture(Machine(root, fail_output=True), "sqlite-firefox-ordinary-1-of-2", "results.json", source, guest, errors)
+  result = capture(Machine(root, fail_output=True), "sqlite-firefox-1-of-3", "results.json", source, guest, errors)
   assert result["source_to_guest"]["outcome"] == "copied"
   assert result["guest_to_output"]["outcome"] == "copy-error"
   assert "operation guest-to-output copy" in errors[0]
 
   try:
-    assert_capture_outcome(9, ["ancillary lift failed"], "sqlite-chromium-ordinary-1-of-2")
+    assert_capture_outcome(9, ["ancillary lift failed"], "sqlite-chromium-1-of-3")
   except AssertionError as error:
     assert "Playwright failed (exit 9)" in str(error)
     assert "capture retention failed" not in str(error)
   else:
     raise AssertionError("Playwright failure was lost")
   try:
-    assert_capture_outcome(0, ["required lift failed"], "sqlite-chromium-ordinary-1-of-2")
+    assert_capture_outcome(0, ["required lift failed"], "sqlite-chromium-1-of-3")
   except AssertionError as error:
     assert "capture retention failed" in str(error)
   else:
@@ -546,10 +542,7 @@ fn assert_seed_timeout_harness(
     expected_token: &str,
     forbidden_stage: &str,
 ) {
-    for identity in [
-        "sqlite-chromium-ordinary-1-of-2",
-        "postgres-chromium-ordinary-1-of-2",
-    ] {
+    for identity in ["sqlite-chromium-1-of-3", "postgres-chromium-1-of-3"] {
         assert_seed_timeout_result(
             run_seed_timeout_harness(timed_out_command, identity),
             timed_out_command,

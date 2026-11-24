@@ -123,7 +123,7 @@ exactly once.
       - workers=2 with `fullyParallel`, where interleaving differs.
     - The orderings are diagnostics only; nothing about them is committed.
 
-- [ ] Task 4: Merge roles and reshard the lanes
+- [x] Task 4: Merge roles and reshard the lanes
   - Contract:
     - Each gated browser has two projects: `<browser>-visual` (`@visual` grep,
       retries 0) and `<browser>` (everything else). Neither has a dependency.

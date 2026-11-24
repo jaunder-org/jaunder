@@ -115,7 +115,7 @@ mod tests {
             "e2e-evidence",
             "verify",
             "--lane",
-            "sqlite-chromium-ordinary-1-of-2",
+            "sqlite-chromium-1-of-3",
             "--catalog",
             "lanes.json",
             "--artifacts",

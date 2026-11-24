@@ -11,7 +11,6 @@ use serde::Deserialize;
 pub struct ExpectedLane {
     pub backend: String,
     pub browser: String,
-    pub partition: String,
     #[serde(rename = "shardIndex")]
     pub shard_index: Option<u8>,
     #[serde(rename = "shardCount")]
@@ -62,7 +61,6 @@ struct Manifest {
     lane: String,
     backend: String,
     browser: String,
-    partition: String,
     shard_index: Option<u8>,
     shard_count: Option<u8>,
     tests: Vec<Test>,
@@ -145,9 +143,9 @@ pub(crate) fn validate_unsplit_control(
     if lane.enabled
         || lane.backend != backend
         || lane.browser != browser
-        || lane.partition != "unsplit"
+        || lane.shard_index.is_some()
     {
-        return Err("control lane is not the enabled unsplit catalog lane".into());
+        return Err("control lane is not the disabled unsplit catalog lane".into());
     }
     let census: Census = serde_json::from_str(census_raw)
         .map_err(|error| format!("malformed control census: {error}"))?;
@@ -165,7 +163,6 @@ pub(crate) fn validate_unsplit_control(
         || manifest.lane != lane.identity
         || manifest.backend != backend
         || manifest.browser != browser
-        || manifest.partition != lane.partition
         || manifest.shard_index != lane.shard_index
         || manifest.shard_count != lane.shard_count
     {
@@ -183,9 +180,9 @@ pub(crate) fn validate_unsplit_control(
 }
 
 /// Validate a producer's manifest/report against runtime ownership expectations.
-/// Unsplit catalog projects are selectors: Playwright also executes their
-/// dependencies. The manifest/report pair, not a duplicated dependency graph,
-/// defines that full runtime population (ADR-0165).
+/// Catalog projects are selectors: a shard may hold no test of one of them, so
+/// the manifest/report pair defines the runtime population (ADR-0165), which
+/// must stay within the lane's projects.
 pub fn validate_population(
     lane: &ExpectedLane,
     report_raw: &str,
@@ -198,7 +195,6 @@ pub fn validate_population(
         || manifest.lane != lane.identity
         || manifest.backend != lane.backend
         || manifest.browser != lane.browser
-        || manifest.partition != lane.partition
         || manifest.shard_index != lane.shard_index
         || manifest.shard_count != lane.shard_count
     {
@@ -218,7 +214,7 @@ pub fn validate_population(
         .iter()
         .map(String::as_str)
         .collect::<BTreeSet<_>>();
-    if !expected.is_subset(&projects) || (lane.partition != "unsplit" && projects != expected) {
+    if !projects.is_subset(&expected) {
         return Err("lane project population differs from catalog selectors".into());
     }
     Ok(())
@@ -233,9 +229,7 @@ pub fn reconcile(
 ) -> Result<String, String> {
     let lanes = catalog
         .iter()
-        .filter(|l| {
-            l.backend == backend && l.browser == browser && l.enabled && l.partition != "unsplit"
-        })
+        .filter(|l| l.backend == backend && l.browser == browser && l.enabled)
         .collect::<Vec<_>>();
     let expected_lanes = lanes
         .iter()
@@ -246,9 +240,9 @@ pub fn reconcile(
         .map(|e| e.0.as_str())
         .collect::<BTreeSet<_>>();
     // The catalog's shape is validated by `scripts/e2e-matrix.jq`; here the
-    // supplied evidence must name exactly the pair's enabled split lanes.
+    // supplied evidence must name exactly the pair's enabled shard lanes.
     if lanes.is_empty() || expected_lanes != supplied || evidence.len() != supplied.len() {
-        return Err("split lane evidence does not exactly match the catalog".into());
+        return Err("shard lane evidence does not exactly match the catalog".into());
     }
     let mut census_all = None;
     let mut observed = BTreeSet::new();
@@ -291,7 +285,6 @@ pub fn reconcile(
             || manifest.lane != *id
             || manifest.backend != backend
             || manifest.browser != browser
-            || manifest.partition != lane.partition
             || manifest.shard_index != lane.shard_index
             || manifest.shard_count != lane.shard_count
         {
@@ -341,66 +334,49 @@ mod tests {
         .unwrap()
     }
     const C: &str = include_str!("testdata/e2e-ownership/expected-census.json");
-    const R1: &str = include_str!("testdata/e2e-ownership/ordinary-1-report.json");
-    const R2: &str = include_str!("testdata/e2e-ownership/ordinary-2-report.json");
-    const RS: &str = include_str!("testdata/e2e-ownership/serial-special-report.json");
-    const M1: &str = include_str!("testdata/e2e-ownership/ordinary-1-manifest.json");
-    const M2: &str = include_str!("testdata/e2e-ownership/ordinary-2-manifest.json");
-    const MS: &str = include_str!("testdata/e2e-ownership/serial-special-manifest.json");
-    const RT: &str = include_str!("testdata/e2e-ownership/serial-theme-report.json");
-    const MT: &str = include_str!("testdata/e2e-ownership/serial-theme-manifest.json");
+    const R1: &str = include_str!("testdata/e2e-ownership/shard-1-report.json");
+    const R2: &str = include_str!("testdata/e2e-ownership/shard-2-report.json");
+    const R3: &str = include_str!("testdata/e2e-ownership/shard-3-report.json");
+    const M1: &str = include_str!("testdata/e2e-ownership/shard-1-manifest.json");
+    const M2: &str = include_str!("testdata/e2e-ownership/shard-2-manifest.json");
+    const M3: &str = include_str!("testdata/e2e-ownership/shard-3-manifest.json");
     fn e() -> Vec<(String, String, String, String)> {
         vec![
             (
-                "sqlite-firefox-ordinary-1-of-2".into(),
+                "sqlite-firefox-1-of-3".into(),
                 C.into(),
                 R1.into(),
                 M1.into(),
             ),
             (
-                "sqlite-firefox-ordinary-2-of-2".into(),
+                "sqlite-firefox-2-of-3".into(),
                 C.into(),
                 R2.into(),
                 M2.into(),
             ),
             (
-                "sqlite-firefox-serial-special".into(),
+                "sqlite-firefox-3-of-3".into(),
                 C.into(),
-                RS.into(),
-                MS.into(),
-            ),
-            (
-                "sqlite-firefox-serial-theme".into(),
-                C.into(),
-                RT.into(),
-                MT.into(),
+                R3.into(),
+                M3.into(),
             ),
         ]
     }
-    #[test]
-    fn unsplit_population_includes_playwright_dependency_projects() {
-        let lane = catalog()
-            .into_iter()
-            .find(|lane| lane.identity == "sqlite-chromium-unsplit")
-            .unwrap();
-        let report = r#"{"suites":[{"specs":[{"id":"ordinary","tests":[{"projectId":"chromium","projectName":"chromium"}]},{"id":"admin","tests":[{"projectId":"chromium-admin","projectName":"chromium-admin"}]},{"id":"visual","tests":[{"projectId":"chromium-visual","projectName":"chromium-visual"}]}]}]}"#;
-        let manifest = r#"{"schema_version":1,"complete":true,"lane":"sqlite-chromium-unsplit","backend":"sqlite","browser":"chromium","partition":"unsplit","shard_index":null,"shard_count":null,"tests":[{"project_id":"chromium","project_name":"chromium","test_id":"ordinary"},{"project_id":"chromium-admin","project_name":"chromium-admin","test_id":"admin"},{"project_id":"chromium-visual","project_name":"chromium-visual","test_id":"visual"}]}"#;
-        assert!(super::validate_population(&lane, report, manifest).is_ok());
-    }
 
     #[test]
-    fn producer_population_rejects_missing_projects_mixed_reports_and_wrong_lane() {
+    fn producer_population_rejects_unowned_projects_mixed_reports_and_wrong_lane() {
         let lane = catalog()
             .into_iter()
-            .find(|lane| lane.identity == "sqlite-firefox-ordinary-1-of-2")
+            .find(|lane| lane.identity == "sqlite-firefox-1-of-3")
             .unwrap();
+        // A shard may hold no test of one of its selected projects.
         assert!(super::validate_population(&lane, R1, M1).is_ok());
         assert!(super::validate_population(&lane, R2, M1).is_err());
         assert!(super::validate_population(&lane, R1, M2).is_err());
         assert!(super::validate_population(&lane, "{", M1).is_err());
-        let mut incomplete = lane.clone();
-        incomplete.projects.push("missing-project".into());
-        assert!(super::validate_population(&incomplete, R1, M1).is_err());
+        let mut narrowed = lane.clone();
+        narrowed.projects.retain(|project| project != "firefox");
+        assert!(super::validate_population(&narrowed, R1, M1).is_err());
     }
 
     #[test]
