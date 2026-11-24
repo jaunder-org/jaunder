@@ -20,13 +20,18 @@ type Lane = {
 const root = path.dirname(path.resolve(process.argv[1]));
 const playwrightCli =
   process.env.JAUNDER_E2E_PLAYWRIGHT_CLI ?? "node_modules/.bin/playwright";
-const { lanes } = JSON.parse(
+const { lanes, shardWeights } = JSON.parse(
   readFileSync(path.join(root, "e2e-lanes.json"), "utf8"),
-) as { lanes: Lane[] };
+) as { lanes: Lane[]; shardWeights: Record<string, string> };
 function fail(message: string): never {
   throw new Error(`E2E census contract: ${message}`);
 }
-function run(label: string, projects: string[], shard: string[]): Census {
+function run(
+  label: string,
+  projects: string[],
+  shard: string[],
+  weights?: string,
+): Census {
   const output = `test-results/census-contract-${label}.json`;
   rmSync(path.join(root, output), { force: true });
   const result = spawnSync(
@@ -47,6 +52,7 @@ function run(label: string, projects: string[], shard: string[]): Census {
         JAUNDER_E2E_CENSUS_PREPARE: "1",
         JAUNDER_E2E_CENSUS_TOPOLOGY: `${label}-contract`,
         JAUNDER_E2E_CENSUS_OUTPUT: output,
+        ...(weights ? { PWTEST_SHARD_WEIGHTS: weights } : {}),
       },
       encoding: "utf8",
     },
@@ -85,8 +91,9 @@ function population(census: Census): Set<string> {
   if (set.size !== values.length) fail("duplicate canonical identity");
   return set;
 }
-// Each browser's lane shards must select its unsharded projects' population
-// exactly once: a dependency project would repeat in every shard.
+// Each browser's lane shards, under the lanes' shard weights, must select its
+// unsharded projects' population exactly once: a dependency project would
+// repeat in every shard.
 for (const browser of [...new Set(lanes.map((lane) => lane.browser))]) {
   const shards = [
     ...new Set(
@@ -105,7 +112,13 @@ for (const browser of [...new Set(lanes.map((lane) => lane.browser))]) {
   const owner = new Map<string, string>();
   for (const { projects, shard } of shards) {
     const label = `${browser}-${shard.replace("/", "-of-")}`;
-    for (const id of population(run(label, projects, [`--shard=${shard}`]))) {
+    const selected = run(
+      label,
+      projects,
+      [`--shard=${shard}`],
+      shardWeights[browser],
+    );
+    for (const id of population(selected)) {
       if (!full.has(id)) fail(`${label} selects a test outside ${browser}`);
       const prior = owner.get(id);
       if (prior !== undefined) fail(`${label} and ${prior} both select ${id}`);

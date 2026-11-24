@@ -1052,7 +1052,7 @@ e2eSalt = "";
 # controls (scripts/e2e-matrix.jq).
 e2eLaneCatalogFile = builtins.fromJSON (builtins.readFile ../end2end/e2e-lanes.json);
 e2eLaneCatalog = e2eLaneCatalogFile.lanes;
-# Production runs three shards per {backend, browser}. Disabled unsharded lanes
+# Production runs four shards per {backend, browser}. Disabled unsharded lanes
 # are measurement and single-worker diagnostic controls only.
 e2eCombos = builtins.filter (lane: lane.enabled) e2eLaneCatalog;
 e2eSingleWorkerLanes = builtins.filter (lane: !lane.enabled) e2eLaneCatalog;

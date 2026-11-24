@@ -17,7 +17,7 @@ type Use<T> = (value: T) => Promise<void>;
 // wins because Firefox's browser scale already absorbs measured contention.
 const slowBrowserTimeoutScale = 2.2;
 const slowBrowserFirstNavigationScale = 2.6;
-// Chromium's non-visual project keeps the unscaled Chromium budget.
+// Chromium's project keeps the unscaled Chromium budget.
 const unscaledChromiumProject = "chromium";
 
 function workerContentionScale(testInfo: TestInfo): number {

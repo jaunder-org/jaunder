@@ -14,9 +14,14 @@
       "test_id": "two"
     },
     {
-      "project_id": "firefox-visual",
-      "project_name": "firefox-visual",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "test_id": "visual"
+    },
+    {
+      "project_id": "firefox",
+      "project_name": "firefox",
+      "test_id": "four"
     }
   ]
 }

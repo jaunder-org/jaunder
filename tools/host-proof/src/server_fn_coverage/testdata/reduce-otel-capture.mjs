@@ -71,7 +71,7 @@
 // trade: a superset cannot lose a hit.
 //
 // Re-running it needs a capture from a passing SQLite/Chromium lane, e.g.
-// `dev e2e-producer sqlite-chromium-1-of-3` —
+// `dev e2e-producer sqlite-chromium-1-of-4` —
 // `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz`, member
 // `capture/otel-traces.jsonl`; reduce each SQLite/Chromium lane's capture to
 // cover the whole population. Byte-identical output requires the same capture;

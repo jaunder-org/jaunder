@@ -4202,13 +4202,14 @@ Each browser E2E lane is a NixOS-test VM running Playwright against a real
 served instance. One JSON catalog, `end2end/e2e-lanes.json`, defines the
 retained topology consumed by Nix and runtime artifact verifiers. Pinned `jq`
 projects CI matrices at runtime; Actions `fromJSON` consumes that data rather
-than maintaining a second lane list in workflow YAML. Every browser has three
-isolated lanes per backend, `--shard=1/3` to `--shard=3/3`, each selecting the
-browser's `<browser>-visual` and `<browser>` projects. Neither project has a
-dependency, so plain sharding runs every test exactly once per pair. Shards are
-sized by one per-browser duration weight (`shardWeights`, exported as
-Playwright's `PWTEST_SHARD_WEIGHTS`) rather than by test count. Unsplit catalog
-lanes are disabled; unsplit Firefox workers=2 and workers=4 remain package-only
+than maintaining a second lane list in workflow YAML. Every browser has four
+isolated lanes per backend, `--shard=1/4` to `--shard=4/4`, each selecting the
+browser's one `<browser>` project. The project has no dependency, so plain
+sharding runs every test exactly once per pair. Shards are sized by one
+per-browser duration weight (`shardWeights`, exported as Playwright's
+`PWTEST_SHARD_WEIGHTS`) rather than by test count; four shards and their weights
+are provisional until CI lane reports settle the count. Unsplit catalog lanes
+are disabled; unsplit Firefox workers=2 and workers=4 remain package-only
 measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
@@ -4217,11 +4218,11 @@ serial lanes for visual, global-state and Theme projects are retired by the
 [per-worker E2E server instances decision](adr/drafts/per-worker-e2e-server-instances.md)).
 Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
-CI runs twelve lane-qualified producers with `fail-fast: false`, all under the
+CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
 shared 1500 s Playwright cap. Every lane runs its browser's independent
 unsharded preflight census, then emits its own report, lane and duration
 manifests, phase sidecar, trace capture, journals, and Playwright archive. An
-`always()` host reconciliation job per backend/browser pair downloads its three
+`always()` host reconciliation job per backend/browser pair downloads its four
 producer artifacts, proves the exact census/report/manifest union, and
 independently validates retries, duration pressure, panic phases, and boot
 traces. Missing, duplicated, misidentified, malformed, or failed evidence fails
@@ -4268,16 +4269,16 @@ whose workflow `dev` now owns
 
 `end2end/playwright.config.ts` is the one config, loaded verbatim by both the VM
 and the host loop ([ADR-0051](adr/0051-single-playwright-config.md)). Each gated
-browser has exactly two projects, defined once in `end2end/e2eProjects.ts`:
-`<browser>-visual` selects the `@visual` behavioral tests with retries disabled,
-and `<browser>` runs everything else. Neither has a dependency, because
-Playwright's `--shard` runs dependency projects in full in every shard. Lanes
-and host E2E select both projects; production-baseline qualification and wasm
-coverage select `<browser>` alone. Chromium and Firefox each own one Linux
-baseline per state under the owning spec's adjacent `*.spec.ts-snapshots/`
-directory. The filename carries browser identity but not backend, so SQLite and
-PostgreSQL compare the same expected image. WebKit has no visual project or
-baseline.
+browser has exactly one project, `<browser>`, defined in
+`end2end/e2eProjects.ts`, running every test, `@visual` included, under the
+run's retry policy. It has no dependency, because Playwright's `--shard` runs
+dependency projects in full in every shard. Lanes, host E2E, production-baseline
+qualification and wasm coverage all select `<browser>`. Chromium and Firefox
+each own one Linux baseline per state under the owning spec's adjacent
+`*.spec.ts-snapshots/` directory; the project's `snapshotPathTemplate` keeps the
+`<name>-<browser>-visual-<platform>.png` names of the retired visual project.
+The filename carries browser identity but not backend, so SQLite and PostgreSQL
+compare the same expected image. WebKit runs no visual test and has no baseline.
 
 Every Playwright worker owns its own Jaunder server instance and database
 ([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
@@ -4306,7 +4307,9 @@ state it did not set. Nobody cleans up, and there is no reset, restore or
 snapshot infrastructure. `@visual` tests follow the same rule: each seeds its
 own fixed-name user and calls `setSeededSiteAppearance`
 (`end2end/tests/visual.ts`) before rendering, so visual needs no fresh database
-and no ordering.
+and no ordering. A retry that lands on the instance where its earlier attempt
+seeded the user signs in to it (`signInAsVisualUser`) instead of seeding it and
+its Posts again.
 
 Exact comparison is a controlled rendering seam: Nix supplies one DejaVu-only
 fontconfig universe to both host and VM browser processes, while
@@ -4321,15 +4324,14 @@ config default of 2). The host loop is `dev e2e-local` (host-proof's
 `e2e-local`, `tools/host-proof/src/steps/e2e_local.rs`), which owns build, spawn
 of one `HostServerSession` per worker on its own ephemeral port and SQLite
 database, seeding each, Playwright, stop/reap, and per-instance diagnostics
-verification. A positional filter selects the browser's `<browser>-visual` and
-`<browser>` projects together, with no prerequisite ordering. The driver drains
-Playwright's output while it runs, so a large report cannot block it on a full
-pipe. Its `--update-visual-snapshots` mode builds release CSR once, then gives
-Chromium and Firefox separate complete server/database/capture lifecycles. Each
-instance's stderr is streamed unchanged to the live terminal and a file in its
-capture subdirectory; stopping the child closes the pipe so the driver can drain
-that journal-equivalent input before invoking the shared zero-panic verifier for
-that instance.
+verification. A positional filter applies to the browser's one project, with no
+prerequisite ordering. The driver drains Playwright's output while it runs, so a
+large report cannot block it on a full pipe. Its `--update-visual-snapshots`
+mode builds release CSR once, then gives Chromium and Firefox separate complete
+server/database/capture lifecycles. Each instance's stderr is streamed unchanged
+to the live terminal and a file in its capture subdirectory; stopping the child
+closes the pipe so the driver can drain that journal-equivalent input before
+invoking the shared zero-panic verifier for that instance.
 
 Ordinary host E2E selects `.#sandboxArtifacts`: a source-consistent immutable
 set with debug-profile server and seed executables and the selected debug CSR
@@ -4791,7 +4793,7 @@ The explicit local workflows are:
   auxiliary host tests, wasm tests, public `dev coverage` and `dev doctests`,
   and Elisp producer/consumer. **`dev validate`** adds the currently landed E2E
   producers and final authoritative flow consumer; it never reruns live ERT.
-  Each backend/browser pair owns three retained lanes and one reconciliation.
+  Each backend/browser pair owns four retained lanes and one reconciliation.
   `dev` owns coverage/doctest composition and hard status-gate requests.
   `dev e2e` owns the full local E2E workflow; CI calls its producer and
   reconciliation boundaries directly, using the shared enabled-lane catalog and
@@ -5056,7 +5058,7 @@ Identity stability alone is not local/remote cache or compiler freshness
 evidence.
 
 `dev validate` composes `dev validate-no-e2e` and the synchronous `dev e2e`
-workflow, which settles all twelve retained producers before every
+workflow, which settles all sixteen retained producers before every
 backend/browser reconciliation; the SQLite/Chromium reconciliation owns
 authoritative flow verification. Gate-wide JSON invalidation reports are
 retired. The coverage source-filter probe remains an optional, named diagnostic;

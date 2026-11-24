@@ -167,7 +167,7 @@ printf '{"steps":[]}\n'
 def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     workflow: Workflow,
 ) -> None:
-    lane = "sqlite-chromium-1-of-3"
+    lane = "sqlite-chromium-1-of-4"
     root = workflow.root
     record = root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.json"
     record.parent.mkdir(parents=True)
@@ -256,7 +256,7 @@ def test_a_failed_producer_shows_only_this_runs_measured_phases(
     warned: bool,
 ) -> None:
     workflow.checkout.executable("bash", PHASE_PRODUCER)
-    lane = "sqlite-chromium-1-of-3"
+    lane = "sqlite-chromium-1-of-4"
     result = workflow.dev("e2e-producer", lane, PHASES=phases)
     assert result.returncode == 1, result
     assert (b"no phase spans" in result.stderr) == warned, result.stderr
