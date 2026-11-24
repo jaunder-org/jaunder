@@ -22,7 +22,7 @@ type VisualOptions = {
 /**
  * Set the seeded site configuration that the visual baselines render: the
  * default title with no tagline, Open registration, the Private Site Default
- * Audience, enabled Media uploads and no Site Theme selection. Other tests
+ * Audience, an enabled Media Upload Capability and no Site Theme selection. Other tests
  * change these globals on the same instance.
  */
 export async function setSeededSiteAppearance(
@@ -52,16 +52,19 @@ export async function signInAsVisualUser(
   try {
     session = await seedUserViaTool(username, "visualpassword123");
   } catch (seedError) {
-    if (test.info().retry === 0) throw seedError;
-    try {
-      session = await createSessionViaTool(username);
-    } catch {
-      throw seedError;
-    }
+    // Only a retry may find its own fixed-name user already seeded.
+    if (test.info().retry === 0 || !usernameTaken(seedError)) throw seedError;
+    session = await createSessionViaTool(username);
     seeded = false;
   }
   await applySeededSession(page.context(), session);
   return seeded;
+}
+
+/** Whether `seed-user` failed only because the username already exists. */
+function usernameTaken(error: unknown): boolean {
+  const stderr = (error as { stderr?: unknown }).stderr;
+  return String(stderr).includes("username is already taken");
 }
 
 /** Compare the current desktop viewport under the deterministic screenshot-only

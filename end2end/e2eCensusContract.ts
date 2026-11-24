@@ -13,7 +13,6 @@ type Census = { schema_version: 1; complete: true; tests: CensusTest[] };
 type Lane = {
   browser: string;
   enabled: boolean;
-  projects: string[];
   shardIndex?: number;
   shardCount?: number;
 };
@@ -28,7 +27,7 @@ function fail(message: string): never {
 }
 function run(
   label: string,
-  projects: string[],
+  project: string,
   shard: string[],
   weights?: string,
 ): Census {
@@ -42,7 +41,8 @@ function run(
       "--list",
       "--config",
       "playwright.config.ts",
-      ...projects.flatMap((project) => ["--project", project]),
+      "--project",
+      project,
       ...shard,
     ],
     {
@@ -92,29 +92,23 @@ function population(census: Census): Set<string> {
   return set;
 }
 // Each browser's lane shards, under the lanes' shard weights, must select its
-// unsharded projects' population exactly once: a dependency project would
+// one project's unsharded population exactly once: a dependency project would
 // repeat in every shard.
 for (const browser of [...new Set(lanes.map((lane) => lane.browser))]) {
   const shards = [
     ...new Set(
       lanes
         .filter((lane) => lane.enabled && lane.browser === browser)
-        .map((lane) =>
-          JSON.stringify({
-            projects: lane.projects,
-            shard: `${lane.shardIndex}/${lane.shardCount}`,
-          }),
-        ),
+        .map((lane) => `${lane.shardIndex}/${lane.shardCount}`),
     ),
-  ].map((key) => JSON.parse(key) as { projects: string[]; shard: string });
-  const projects = [...new Set(shards.flatMap((shard) => shard.projects))];
-  const full = population(run(browser, projects, []));
+  ];
+  const full = population(run(browser, browser, []));
   const owner = new Map<string, string>();
-  for (const { projects, shard } of shards) {
+  for (const shard of shards) {
     const label = `${browser}-${shard.replace("/", "-of-")}`;
     const selected = run(
       label,
-      projects,
+      browser,
       [`--shard=${shard}`],
       shardWeights[browser],
     );
@@ -127,11 +121,7 @@ for (const browser of [...new Set(lanes.map((lane) => lane.browser))]) {
   }
   if (owner.size !== full.size)
     fail(`${browser} shards miss ${full.size - owner.size} tests`);
-  const counts = projects.map(
-    (project) =>
-      `${project}=${[...full].filter((id) => JSON.parse(id)[0] === project).length}`,
-  );
   console.log(
-    `E2E census contract passed: ${full.size} ${browser} tests (${counts.join(", ")}) each selected once across ${shards.length} shards`,
+    `E2E census contract passed: ${full.size} ${browser} tests each selected once across ${shards.length} shards`,
   );
 }

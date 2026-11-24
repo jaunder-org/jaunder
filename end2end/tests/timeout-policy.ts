@@ -9,6 +9,7 @@
 
 import type { TestInfo } from "@playwright/test";
 import { attachEffectiveTimeout } from "../durationBudgetManifest";
+import type { GatedBrowser } from "../e2eProjects";
 
 type Use<T> = (value: T) => Promise<void>;
 
@@ -18,7 +19,7 @@ type Use<T> = (value: T) => Promise<void>;
 const slowBrowserTimeoutScale = 2.2;
 const slowBrowserFirstNavigationScale = 2.6;
 // Chromium's project keeps the unscaled Chromium budget.
-const unscaledChromiumProject = "chromium";
+const unscaledChromiumProject: GatedBrowser = "chromium";
 
 function workerContentionScale(testInfo: TestInfo): number {
   const resolved = testInfo.config.workers;

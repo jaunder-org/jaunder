@@ -2,7 +2,7 @@ import { join } from "node:path";
 
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto, signInAsNewUser } from "./helpers";
-import { resetThemeViaTool, seedPostsViaTool, seedThemeViaTool } from "./seed";
+import { seedPostsViaTool, seedThemeViaTool } from "./seed";
 import {
   expectVisual,
   setSeededSiteAppearance,
@@ -179,63 +179,55 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
     ).toBeVisible();
   };
 
-  try {
-    await seedThemeViaTool(username);
-    await goto(page, `/~${username}`);
-    await expectCustomPresentation();
+  await seedThemeViaTool(username);
+  await goto(page, `/~${username}`);
+  await expectCustomPresentation();
 
-    // The fixture deliberately moves every Post outside the viewport. Its CSS is
-    // scoped to the theme surface, so it cannot directly restyle the trusted
-    // sibling; it can only make the Post slot's visual anchor unavailable.
-    const trustedActions = page
+  // The fixture deliberately moves every Post outside the viewport. Its CSS is
+  // scoped to the theme surface, so it cannot directly restyle the trusted
+  // sibling; it can only make the Post slot's visual anchor unavailable.
+  const trustedActions = page.getByRole("button", { name: "Actions" }).first();
+  await expect(trustedActions).not.toBeInViewport();
+
+  const anonymousContext = await tracedContext();
+  try {
+    const anonymousPage = await anonymousContext.newPage();
+    await goto(anonymousPage, `/~${username}`);
+    await expectCustomPresentation(anonymousPage);
+    await expect(anonymousPage.locator(".j-trusted-post-actions")).toBeEmpty();
+  } finally {
+    await anonymousContext.close();
+  }
+
+  // The destructive theme covers its own public sidebar, so recovery starts
+  // from a fresh `/themes` entry in the same authenticated browser context.
+  // `/themes` is always Studio and remains reachable by URL.
+  const recoveryPage = await page.context().newPage();
+  try {
+    await goto(recoveryPage, "/themes", { timeout: firstNav });
+    await recoveryPage
+      .getByRole("button", { name: "Use studio", exact: true })
+      .click();
+    await expect(
+      recoveryPage.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "studio");
+  } finally {
+    await recoveryPage.close();
+  }
+
+  const recoveredPage = await page.context().newPage();
+  try {
+    await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
+    await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+    const recoveredActions = recoveredPage
       .getByRole("button", { name: "Actions" })
       .first();
-    await expect(trustedActions).not.toBeInViewport();
-
-    const anonymousContext = await tracedContext();
-    try {
-      const anonymousPage = await anonymousContext.newPage();
-      await goto(anonymousPage, `/~${username}`);
-      await expectCustomPresentation(anonymousPage);
-      await expect(
-        anonymousPage.locator(".j-trusted-post-actions"),
-      ).toBeEmpty();
-    } finally {
-      await anonymousContext.close();
-    }
-
-    // The destructive theme covers its own public sidebar, so recovery starts
-    // from a fresh `/themes` entry in the same authenticated browser context.
-    // `/themes` is always Studio and remains reachable by URL.
-    const recoveryPage = await page.context().newPage();
-    try {
-      await goto(recoveryPage, "/themes", { timeout: firstNav });
-      await recoveryPage
-        .getByRole("button", { name: "Use studio", exact: true })
-        .click();
-      await expect(
-        recoveryPage.getByLabel("Current theme", { exact: true }),
-      ).toHaveAttribute("data-theme-selection", "studio");
-    } finally {
-      await recoveryPage.close();
-    }
-
-    const recoveredPage = await page.context().newPage();
-    try {
-      await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
-      await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
-        "data-theme",
-        "studio",
-      );
-      const recoveredActions = recoveredPage
-        .getByRole("button", { name: "Actions" })
-        .first();
-      await expect(recoveredActions).toBeVisible();
-      await recoveredActions.click({ trial: true });
-    } finally {
-      await recoveredPage.close();
-    }
+    await expect(recoveredActions).toBeVisible();
+    await recoveredActions.click({ trial: true });
   } finally {
-    await resetThemeViaTool(username);
+    await recoveredPage.close();
   }
 });

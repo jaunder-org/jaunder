@@ -4270,7 +4270,9 @@ generates `jaunder-<i>` units on port `3000+i` that inherit the module's
 evaluated `jaunder` service config and environment, overriding only the
 per-instance values; the module's own unit is masked. PostgreSQL lanes create
 database `jaunder_<i>` per instance with `jaunder create-pg-db`. The OTel
-collector stays shared, because traces correlate by trace id.
+collector stays shared, because traces correlate by trace id. Every Firefox lane
+runs the ordinary workload and so uses the ordinary Firefox guest sizing (4 GiB
+RAM, 2 GiB disk); worker and vCPU counts are unchanged.
 
 Because a worker runs one test at a time, no two tests share a server
 concurrently, and the suite follows one state rule instead of quarantine: a test
@@ -4450,17 +4452,17 @@ once per backend/browser pair
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
-retained catalog enumerates Chromium and Firefox only. Each browser's visual
-coverage runs exactly once per backend, in whichever shard Playwright assigns
-it. Visual coverage adds no backend-specific baseline. Timeout budgets are
-stated for Chromium and scaled per browser
+retained catalog enumerates Chromium and Firefox only. WebKit keeps main's
+existing exclusions, `admin-site`, `invite`, `production-baseline-flow` and the
+visual tests: coverage parity with what it ran before, not a serial project.
+Each browser's visual coverage runs exactly once per backend, in whichever shard
+Playwright assigns it. Visual coverage adds no backend-specific baseline.
+Timeout budgets are stated for Chromium and scaled per browser
 ([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
 for an individual wait and the ambient whole-test budget,
-`slowBrowserFirstNavigationTimeoutMs` for the coldest navigation. Only the
-`chromium` project keeps the unscaled Chromium budget, so the specs that
-formerly ran in a scaled Chromium serial project lost that implicit 2.2×; a test
-whose own work outgrows the default sets an explicit budget with
-`setTestBudget`.
+`slowBrowserFirstNavigationTimeoutMs` for the coldest navigation. The `chromium`
+project keeps the unscaled Chromium budget; every other project, `firefox` among
+them, takes the slow-browser scale.
 
 Two rules bound what a spec may do to the page. First, authentication is
 provisioned by seeding, never by driving the UI

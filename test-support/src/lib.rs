@@ -265,38 +265,6 @@ pub async fn seed_published_author_theme(
     confirmed_fixture_outcome(selection, "select fixture author theme")?;
     Ok(())
 }
-/// Restore the author selection changed by [`seed_published_author_theme`].
-///
-/// # Errors
-///
-/// Returns `Err` when the author is unknown or the selection cannot be reset.
-pub async fn reset_author_theme_fixture(
-    users: Arc<dyn UserStorage>,
-    themes: Arc<dyn ThemeStorage>,
-    write_scope: WriteScope,
-    author_username: &str,
-) -> anyhow::Result<()> {
-    let author_username = author_username
-        .parse::<Username>()
-        .map_err(|_| anyhow::anyhow!("invalid username: {author_username}"))?;
-    let author = users
-        .get_user_by_username(&author_username)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("no such user: {author_username}"))?;
-    let reset = write_scope
-        .run(move |transaction| {
-            Box::pin(async move {
-                themes
-                    .set_selection(transaction, ThemeOwner::Author(author.user_id), None)
-                    .await
-            })
-        })
-        .await
-        .map_err(|error| anyhow::anyhow!("reset fixture theme selections failed: {error}"))?;
-    confirmed_fixture_outcome(reset, "reset fixture theme selections")?;
-    Ok(())
-}
-
 /// Seed terminal feed events through the same storage lifecycle used by the
 /// worker. This is e2e-only fixture setup; it deliberately avoids queue SQL.
 ///
@@ -1776,7 +1744,7 @@ mod seed_tests {
     }
 
     #[tokio::test]
-    async fn publishes_and_resets_the_author_theme_fixture() {
+    async fn publishes_and_reuses_the_author_theme_fixture() {
         let env = test_support::Backend::Sqlite.setup().await;
         let users = env.users();
         let themes = env.themes();
@@ -1833,14 +1801,6 @@ mod seed_tests {
         )
         .await
         .expect("existing published fixture is reused");
-        reset_author_theme_fixture(
-            Arc::clone(&users),
-            Arc::clone(&themes),
-            write_scope.clone(),
-            user.username.as_ref(),
-        )
-        .await
-        .expect("theme fixture resets");
     }
 
     #[tokio::test]

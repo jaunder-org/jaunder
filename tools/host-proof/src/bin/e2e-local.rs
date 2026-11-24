@@ -23,7 +23,7 @@ use host_proof::steps::e2e_local::{self, E2eLocalBrowser};
 #[derive(Parser)]
 #[command(name = "e2e-local")]
 struct Cli {
-    /// Run the selected browser's Playwright projects (default Chromium).
+    /// Run the selected browser's one Playwright project (default Chromium).
     #[arg(long, value_enum, conflicts_with = "update_visual_snapshots")]
     browser: Option<E2eLocalBrowser>,
     /// A spec path or `file:line` filter passed through to Playwright.

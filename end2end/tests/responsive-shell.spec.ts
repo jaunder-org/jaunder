@@ -33,7 +33,9 @@ test("public shell gives the main region the narrow viewport width", async ({
 test("custom Theme surface reaches the public rail and scroll canvas", async ({
   page,
   tracedContext,
-}) => {
+}, testInfo) => {
+  // A retry on the same instance finds the earlier attempt's theme by name.
+  const themeName = `Continuous shell proof ${testInfo.retry}`;
   await signInAs(page, "testoperator");
   await goto(page, "/themes");
   await page.getByRole("tab", { name: "Site", exact: true }).click();
@@ -44,7 +46,7 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
         new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
         response.request().method() === "POST",
     );
-  await page.getByLabel("Name", { exact: true }).fill("Continuous shell proof");
+  await page.getByLabel("Name", { exact: true }).fill(themeName);
   await page
     .getByLabel("Style (CSS)", { exact: true })
     .fill(":root { background: rgb(1, 2, 3); }");
@@ -58,7 +60,7 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
     "themes::save_editor",
   );
   await page
-    .getByRole("button", { name: "Edit Continuous shell proof", exact: true })
+    .getByRole("button", { name: `Edit ${themeName}`, exact: true })
     .click();
   await openThemeAdvanced(page);
   await Promise.all([
@@ -67,7 +69,7 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
   ]);
   const selection = page.getByLabel("Use published version", { exact: true });
   const id = await selection
-    .getByRole("option", { name: "Continuous shell proof" })
+    .getByRole("option", { name: themeName })
     .getAttribute("value");
   expect(id).not.toBeNull();
   const [response] = await Promise.all([

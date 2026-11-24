@@ -11,9 +11,8 @@ use storage::DbConnectOptions;
 use test_support::{
     SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
     performance::{PerformanceSeedReceipt, PerformanceSeedStorage, seed_performance_fixture},
-    reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
-    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
-    seed_standard_sandbox_profile, seed_user,
+    reset_mail, sandbox_profile_anchor, seed_dead_letters, seed_demo_sandbox_profile,
+    seed_posts_for_user, seed_published_author_theme, seed_standard_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -113,9 +112,6 @@ enum Commands {
         /// Existing author whose public route uses the navigation fixture theme.
         #[arg(long)]
         author_username: String,
-        /// Restore the built-in site and inherited author selections instead of seeding.
-        #[arg(long)]
-        reset: bool,
     },
     /// Seed terminal `WebSub` feed events through the real storage lifecycle.
     SeedDeadLetters {
@@ -350,8 +346,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             db,
             storage_path,
             author_username,
-            reset,
-        } => cmd_seed_theme(&db, &storage_path, &author_username, reset).await,
+        } => cmd_seed_theme(&db, &storage_path, &author_username).await,
         Commands::SeedDeadLetters { db, phase, count } => {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_seed_dead_letters(&db, &storage_runtime, phase, count).await
@@ -594,28 +589,17 @@ async fn cmd_seed_theme(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     author_username: &str,
-    reset: bool,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
     let factory = storage::open_existing_database(db, &runtime).await?;
-    if reset {
-        reset_author_theme_fixture(
-            factory.users(),
-            factory.themes(),
-            factory.write_scope(),
-            author_username,
-        )
-        .await
-    } else {
-        seed_published_author_theme(
-            factory.users(),
-            factory.themes(),
-            factory.write_scope(),
-            storage_path,
-            author_username,
-        )
-        .await
-    }
+    seed_published_author_theme(
+        factory.users(),
+        factory.themes(),
+        factory.write_scope(),
+        storage_path,
+        author_username,
+    )
+    .await
 }
 
 /// Seed terminal `WebSub` dead letters through the storage lifecycle.
@@ -1110,18 +1094,9 @@ mod tests {
             db: db.clone(),
             storage_path: theme_storage.path().to_owned(),
             author_username: "alice".to_owned(),
-            reset: false,
         }))
         .await
         .expect("seed-theme should dispatch and select the fixture");
-        run(cli(Commands::SeedTheme {
-            db: db.clone(),
-            storage_path: theme_storage.path().to_owned(),
-            author_username: "alice".to_owned(),
-            reset: true,
-        }))
-        .await
-        .expect("seed-theme reset should dispatch and clear the fixture");
 
         run(cli(Commands::SeedPosts {
             db: db.clone(),
@@ -1211,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_theme_seed_and_reset_contract() {
+    fn parses_theme_seed_contract() {
         Cli::try_parse_from([
             "test-support",
             "seed-theme",
@@ -1221,7 +1196,6 @@ mod tests {
             "/tmp/theme-assets",
             "--author-username",
             "alice",
-            "--reset",
         ])
         .expect("theme seed command parses");
     }

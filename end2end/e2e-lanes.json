@@ -10,7 +10,6 @@
       "browser": "chromium",
       "identity": "sqlite-chromium-unsplit",
       "traceSeed": "1",
-      "projects": ["chromium"],
       "enabled": false
     },
     {
@@ -18,7 +17,6 @@
       "browser": "firefox",
       "identity": "sqlite-firefox-unsplit",
       "traceSeed": "2",
-      "projects": ["firefox"],
       "enabled": false
     },
     {
@@ -26,7 +24,6 @@
       "browser": "chromium",
       "identity": "postgres-chromium-unsplit",
       "traceSeed": "3",
-      "projects": ["chromium"],
       "enabled": false
     },
     {
@@ -34,7 +31,6 @@
       "browser": "firefox",
       "identity": "postgres-firefox-unsplit",
       "traceSeed": "4",
-      "projects": ["firefox"],
       "enabled": false
     },
     {
@@ -44,7 +40,6 @@
       "shardCount": 4,
       "identity": "sqlite-firefox-1-of-4",
       "traceSeed": "1f",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -54,7 +49,6 @@
       "shardCount": 4,
       "identity": "sqlite-firefox-2-of-4",
       "traceSeed": "20",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -64,7 +58,6 @@
       "shardCount": 4,
       "identity": "sqlite-firefox-3-of-4",
       "traceSeed": "21",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -74,7 +67,6 @@
       "shardCount": 4,
       "identity": "sqlite-firefox-4-of-4",
       "traceSeed": "23",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -84,7 +76,6 @@
       "shardCount": 4,
       "identity": "postgres-firefox-1-of-4",
       "traceSeed": "24",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -94,7 +85,6 @@
       "shardCount": 4,
       "identity": "postgres-firefox-2-of-4",
       "traceSeed": "25",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -104,7 +94,6 @@
       "shardCount": 4,
       "identity": "postgres-firefox-3-of-4",
       "traceSeed": "26",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -114,7 +103,6 @@
       "shardCount": 4,
       "identity": "postgres-firefox-4-of-4",
       "traceSeed": "27",
-      "projects": ["firefox"],
       "enabled": true
     },
     {
@@ -124,7 +112,6 @@
       "shardCount": 4,
       "identity": "sqlite-chromium-1-of-4",
       "traceSeed": "28",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -134,7 +121,6 @@
       "shardCount": 4,
       "identity": "sqlite-chromium-2-of-4",
       "traceSeed": "29",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -144,7 +130,6 @@
       "shardCount": 4,
       "identity": "sqlite-chromium-3-of-4",
       "traceSeed": "2a",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -154,7 +139,6 @@
       "shardCount": 4,
       "identity": "sqlite-chromium-4-of-4",
       "traceSeed": "2b",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -164,7 +148,6 @@
       "shardCount": 4,
       "identity": "postgres-chromium-1-of-4",
       "traceSeed": "2c",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -174,7 +157,6 @@
       "shardCount": 4,
       "identity": "postgres-chromium-2-of-4",
       "traceSeed": "2d",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -184,7 +166,6 @@
       "shardCount": 4,
       "identity": "postgres-chromium-3-of-4",
       "traceSeed": "2e",
-      "projects": ["chromium"],
       "enabled": true
     },
     {
@@ -194,7 +175,6 @@
       "shardCount": 4,
       "identity": "postgres-chromium-4-of-4",
       "traceSeed": "2f",
-      "projects": ["chromium"],
       "enabled": true
     }
   ]

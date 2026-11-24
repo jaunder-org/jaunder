@@ -9,7 +9,6 @@
 def identity:
   "\(.backend)-\(.browser)-" +
   (if .shardIndex == null then "unsplit" else "\(.shardIndex)-of-\(.shardCount)" end);
-def projects: [.browser];
 # The seed repeats to fill the 32-hex-digit trace id (and 16-digit span id).
 def trace_id: .traceSeed * (32 / (.traceSeed | length));
 .lanes as $lanes
@@ -24,7 +23,6 @@ def trace_id: .traceSeed * (32 / (.traceSeed | length));
       and (.backend == "sqlite" or .backend == "postgres")
       and (.browser == "chromium" or .browser == "firefox")
       and (.traceSeed | test("^[0-9a-f]{1,2}$") and (test("^0+$") | not))
-      and .projects == projects
       and (if .enabled then .shardCount == 4 and (.shardIndex | IN(1, 2, 3, 4))
         else .shardIndex == null and .shardCount == null end))
     and all($pairs[]; . as $pair

@@ -8,8 +8,8 @@ import {
 } from "./production-baseline";
 import { seedSandboxProfileViaTool } from "./seed";
 
-// This remains an ordinary cross-browser E2E spec. Profile seeding changes site
-// config, so the test sets the site config it depends on before creating records.
+// Profile seeding changes site config, so the test sets the site config it
+// depends on before creating records.
 
 test("production baseline creates and verifies canonical browser and AtomPub records", async ({
   page,
