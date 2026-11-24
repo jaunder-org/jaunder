@@ -193,7 +193,7 @@ exactly once.
     - `tsc`, host-proof/dev tests and `dev check-no-test` are green.
     - One hermetic lane per backend is green.
 
-- [ ] Task 7: Shard shoot-out
+- [x] Task 7: Shard shoot-out
   - Contract:
     - Open the PR, a ship action, at the Task 6 configuration.
     - From that CI run's Playwright reports, take per-test durations for each

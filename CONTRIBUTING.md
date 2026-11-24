@@ -716,22 +716,24 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   hermetic proof when backend/browser parity, release behavior or the branch
   boundary matters; this is not required before every push. The push hook
   remains `prepush`.
-- **Reconciliation and controls** — Every browser uses the same split per
-  backend: four lanes, `--shard=1/4` to `--shard=4/4`, each selecting the
-  browser's one `<browser>` project. The project has no dependency, because
-  `--shard` would rerun a dependency in every shard, so the four lanes run each
-  test exactly once. The catalog's per-browser `shardWeights` (exported as
-  Playwright's `PWTEST_SHARD_WEIGHTS`) size the shards by measured duration;
-  re-derive them from lane reports when the shards drift apart. The four-shard
-  count and its weights are provisional until CI lane reports settle them. Every
-  lane VM runs one server instance and database per Playwright worker. Producers
-  lift available lane-qualified diagnostics before propagating their original
-  Nix failure; missing diagnostics cannot turn a failure green. Reconciliation
-  fail-closed checks the independent census, report union, retries, duration
-  manifests, phase sidecars and trace captures. The retired Rust
-  producer/control aliases are not parallel workflow entrypoints. Existing
-  unsplit Firefox workers=2/workers=4 measurement installables remain available
-  through ordinary `nix build`; workers=4 remains rejected for production.
+- **Reconciliation and controls** — Per backend, Chromium runs three lanes,
+  `--shard=1/3` to `--shard=3/3`, and Firefox five, `--shard=1/5` to
+  `--shard=5/5`, each selecting the browser's one `<browser>` project. The
+  project has no dependency, because `--shard` would rerun a dependency in every
+  shard, so a pair's lanes run each test exactly once. The catalog's per-browser
+  `shardWeights` (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the
+  shards by measured duration, and each string's part count is that browser's
+  shard count. Re-derive the weights from lane reports' per-test durations when
+  the shards drift apart; change a browser's count by changing its weights and
+  lanes together. Every lane VM runs one server instance and database per
+  Playwright worker. Producers lift available lane-qualified diagnostics before
+  propagating their original Nix failure; missing diagnostics cannot turn a
+  failure green. Reconciliation fail-closed checks the independent census,
+  report union, retries, duration manifests, phase sidecars and trace captures.
+  The retired Rust producer/control aliases are not parallel workflow
+  entrypoints. Existing unsplit Firefox workers=2/workers=4 measurement
+  installables remain available through ordinary `nix build`; workers=4 remains
+  rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -2438,8 +2440,10 @@ server-function coverage verification to `dev validate-no-e2e`.
   tools workspace, without fence reconciliation, over its own source
   (`toolsDocTestSrc` in `nix/packages.nix`) in which every tools member is real,
   reusing the shared tools dependency build
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-{1,2,3,4}-of-4`
-  — four shards per backend and browser, each over the browser's one project
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-{1,2,3}-of-3` and
+  `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-{1,2,3,4,5}-of-5` — three
+  Chromium and five Firefox shards per backend, each over the browser's one
+  project
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
   realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
@@ -2496,8 +2500,8 @@ For matched arms, interleaving and interpretation, see
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite-chromium-1-of-4
-nix build .#checks.x86_64-linux.e2e-postgres-firefox-2-of-4
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium-1-of-3
+nix build .#checks.x86_64-linux.e2e-postgres-firefox-2-of-5
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
 nix build .#checks.x86_64-linux.elisp-coverage-producer

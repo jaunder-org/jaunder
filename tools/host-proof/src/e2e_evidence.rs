@@ -371,41 +371,47 @@ pub(crate) mod tests {
         lanes: Vec<super::ExpectedLane>,
     }
     const CENSUS: &str = include_str!("testdata/e2e-ownership/expected-census.json");
-    const REPORTS: [&str; 4] = [
+    const REPORTS: [&str; 5] = [
         include_str!("testdata/e2e-ownership/shard-1-report.json"),
         include_str!("testdata/e2e-ownership/shard-2-report.json"),
         include_str!("testdata/e2e-ownership/shard-3-report.json"),
         include_str!("testdata/e2e-ownership/shard-4-report.json"),
+        include_str!("testdata/e2e-ownership/shard-5-report.json"),
     ];
-    const LANE_MANIFESTS: [&str; 4] = [
+    const LANE_MANIFESTS: [&str; 5] = [
         include_str!("testdata/e2e-ownership/shard-1-manifest.json"),
         include_str!("testdata/e2e-ownership/shard-2-manifest.json"),
         include_str!("testdata/e2e-ownership/shard-3-manifest.json"),
         include_str!("testdata/e2e-ownership/shard-4-manifest.json"),
+        include_str!("testdata/e2e-ownership/shard-5-manifest.json"),
     ];
-    const DURATION_MANIFESTS: [&str; 4] = [
+    const DURATION_MANIFESTS: [&str; 5] = [
         include_str!("testdata/e2e-evidence/shard-1-duration.json"),
         include_str!("testdata/e2e-evidence/shard-2-duration.json"),
         include_str!("testdata/e2e-evidence/shard-3-duration.json"),
         include_str!("testdata/e2e-evidence/shard-4-duration.json"),
+        include_str!("testdata/e2e-evidence/shard-5-duration.json"),
     ];
-    const TRACES: [&str; 4] = [
+    const TRACES: [&str; 5] = [
         include_str!("testdata/e2e-evidence/shard-1-trace.jsonl"),
         include_str!("testdata/e2e-evidence/shard-2-trace.jsonl"),
         include_str!("testdata/e2e-evidence/shard-3-trace.jsonl"),
         include_str!("testdata/e2e-evidence/shard-4-trace.jsonl"),
+        include_str!("testdata/e2e-evidence/shard-5-trace.jsonl"),
     ];
-    const PHASES: [&str; 4] = [
+    const PHASES: [&str; 5] = [
         include_str!("testdata/e2e-evidence/shard-1-phase.json"),
         include_str!("testdata/e2e-evidence/shard-2-phase.json"),
         include_str!("testdata/e2e-evidence/shard-3-phase.json"),
         include_str!("testdata/e2e-evidence/shard-4-phase.json"),
+        include_str!("testdata/e2e-evidence/shard-5-phase.json"),
     ];
-    const IDENTITIES: [&str; 4] = [
-        "sqlite-firefox-1-of-4",
-        "sqlite-firefox-2-of-4",
-        "sqlite-firefox-3-of-4",
-        "sqlite-firefox-4-of-4",
+    const IDENTITIES: [&str; 5] = [
+        "sqlite-firefox-1-of-5",
+        "sqlite-firefox-2-of-5",
+        "sqlite-firefox-3-of-5",
+        "sqlite-firefox-4-of-5",
+        "sqlite-firefox-5-of-5",
     ];
 
     pub(crate) fn fixture(root: &Path) -> Vec<LaneEvidence> {
@@ -469,7 +475,7 @@ pub(crate) mod tests {
         let lifted = temp.path().join("lifted");
         let (_, lanes) =
             super::reconciled_lanes("sqlite", "firefox", &catalog_path, &lifted).unwrap();
-        assert_eq!(lanes.len(), 4);
+        assert_eq!(lanes.len(), IDENTITIES.len());
         assert!(lanes.iter().all(|lane| lane.capture.exists()));
         // The same root holds no Chromium lanes, so that pair must not reconcile.
         assert!(super::reconciled_lanes("sqlite", "chromium", &catalog_path, &lifted).is_err());
@@ -570,11 +576,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn complete_four_lane_fixture_reconciles() {
+    fn complete_five_lane_fixture_reconciles() {
         let temp = tempfile::tempdir().unwrap();
         let evidence = fixture(temp.path());
         let detail = reconcile("sqlite", "firefox", &catalog().unwrap().lanes, &evidence).unwrap();
-        assert!(detail.contains("4 lane-qualified evidence sets"));
+        assert!(detail.contains("5 lane-qualified evidence sets"));
     }
 
     #[test]

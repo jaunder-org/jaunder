@@ -4202,15 +4202,16 @@ Each browser E2E lane is a NixOS-test VM running Playwright against a real
 served instance. One JSON catalog, `end2end/e2e-lanes.json`, defines the
 retained topology consumed by Nix and runtime artifact verifiers. Pinned `jq`
 projects CI matrices at runtime; Actions `fromJSON` consumes that data rather
-than maintaining a second lane list in workflow YAML. Every browser has four
-isolated lanes per backend, `--shard=1/4` to `--shard=4/4`, each selecting the
-browser's one `<browser>` project. The project has no dependency, so plain
-sharding runs every test exactly once per pair. Shards are sized by one
-per-browser duration weight (`shardWeights`, exported as Playwright's
-`PWTEST_SHARD_WEIGHTS`) rather than by test count; four shards and their weights
-are provisional until CI lane reports settle the count. Unsplit catalog lanes
-are disabled; unsplit Firefox workers=2 and workers=4 remain package-only
-measurement controls
+than maintaining a second lane list in workflow YAML. Per backend, Chromium has
+three isolated lanes (`--shard=1/3` to `--shard=3/3`) and Firefox five
+(`--shard=1/5` to `--shard=5/5`), each selecting the browser's one `<browser>`
+project. The project has no dependency, so plain sharding runs every test
+exactly once per pair. Shards are sized by one per-browser duration weight
+string (`shardWeights`, exported as Playwright's `PWTEST_SHARD_WEIGHTS`) rather
+than by test count; its part count is the browser's shard count. A measured
+shard-count comparison over per-test CI durations chose the layout. Unsplit
+catalog lanes are disabled; unsplit Firefox workers=2 and workers=4 remain
+package-only measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
 [weighted shards](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md); their
@@ -4222,15 +4223,15 @@ CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
 shared 1500 s Playwright cap. Every lane runs its browser's independent
 unsharded preflight census, then emits its own report, lane and duration
 manifests, phase sidecar, trace capture, journals, and Playwright archive. An
-`always()` host reconciliation job per backend/browser pair downloads its four
-producer artifacts, proves the exact census/report/manifest union, and
-independently validates retries, duration pressure, panic phases, and boot
-traces. Missing, duplicated, misidentified, malformed, or failed evidence fails
-reconciliation; failed producers are still awaited and their recoverable
-evidence remains an aggregate input. The stable result-only `e2e gate` requires
-every producer, the catalog projection, and all four reconciliations. Local
-`dev validate` inherits the non-E2E Elisp verdict, then calls the same
-synchronous `dev e2e` workflow; it does not rerun live ERT
+`always()` host reconciliation job per backend/browser pair downloads its
+producer artifacts (three for Chromium, five for Firefox), proves the exact
+census/report/manifest union, and independently validates retries, duration
+pressure, panic phases, and boot traces. Missing, duplicated, misidentified,
+malformed, or failed evidence fails reconciliation; failed producers are still
+awaited and their recoverable evidence remains an aggregate input. The stable
+result-only `e2e gate` requires every producer, the catalog projection, and all
+four reconciliations. Local `dev validate` inherits the non-E2E Elisp verdict,
+then calls the same synchronous `dev e2e` workflow; it does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
 
 #### `dev` E2E workflow (#1890, #1965)
@@ -4795,13 +4796,14 @@ The explicit local workflows are:
   auxiliary host tests, wasm tests, public `dev coverage` and `dev doctests`,
   and Elisp producer/consumer. **`dev validate`** adds the currently landed E2E
   producers and final authoritative flow consumer; it never reruns live ERT.
-  Each backend/browser pair owns four retained lanes and one reconciliation.
-  `dev` owns coverage/doctest composition and hard status-gate requests.
-  `dev e2e` owns the full local E2E workflow; CI calls its producer and
-  reconciliation boundaries directly, using the shared enabled-lane catalog and
-  artifact verifiers ([ADR-0238](adr/0238-just-e2e-workflow-ownership.md)).
-  Local dispatch and distributed CI scheduling remain distinct; a
-  producer-output join alone does not establish the complete reconciled verdict.
+  Each backend/browser pair owns its browser's retained shard lanes (Chromium
+  three, Firefox five) and one reconciliation. `dev` owns coverage/doctest
+  composition and hard status-gate requests. `dev e2e` owns the full local E2E
+  workflow; CI calls its producer and reconciliation boundaries directly, using
+  the shared enabled-lane catalog and artifact verifiers
+  ([ADR-0238](adr/0238-just-e2e-workflow-ownership.md)). Local dispatch and
+  distributed CI scheduling remain distinct; a producer-output join alone does
+  not establish the complete reconciled verdict.
 
 CI invokes four independent commands: `dev ci-validate-host`,
 `dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and `dev coverage`.

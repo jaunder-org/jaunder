@@ -101,16 +101,20 @@ below makes that safe.
 has exactly one project, `<browser>`, running every test, `@visual` included,
 under the lane's retry policy. It has no dependency. A `snapshotPathTemplate`
 keeps the reviewed baselines' `<name>-<browser>-visual-<platform>.png` names.
-Each backend/browser pair runs four lanes, `--shard=1/4` to `--shard=4/4`, each
-selecting that project, so plain sharding runs every test exactly once per pair.
-The shards keep ADR-0262's weighting: the catalog's per-browser `shardWeights`,
-exported as Playwright's `PWTEST_SHARD_WEIGHTS`, size the contiguous slices by
-measured duration. Four shards and their weights are provisional, derived from
-the three-shard lanes' reports, until a shard-count comparison on CI reports
-settles them. `end2end/e2e-lanes.json` and `scripts/e2e-matrix.jq` enforce that
-shape. The census's exactly-once check, run under the lanes' weights, catches
-any dependency edge added later, because an edge would rerun its dependency in
-every shard.
+Per backend, Chromium runs three lanes, `--shard=1/3` to `--shard=3/3`, and
+Firefox five, `--shard=1/5` to `--shard=5/5`, each selecting that browser's
+project, so plain sharding runs every test exactly once per pair. The shards
+keep ADR-0262's weighting: the catalog's per-browser `shardWeights`, exported as
+Playwright's `PWTEST_SHARD_WEIGHTS`, size the contiguous slices by measured
+duration, and a browser's weight count is its shard count. A shoot-out chose the
+layout: per-test durations from a four-shard CI run, replayed through
+Playwright's shard assignment for three, four and five shards per browser.
+Chromium at three and Firefox at five predict the same slowest lane (a Firefox
+one) as five shards everywhere, with fewer runner-minutes on Chromium.
+`end2end/e2e-lanes.json` and `scripts/e2e-matrix.jq` enforce that shape. The
+census's exactly-once check, run under the lanes' weights, catches any
+dependency edge added later, because an edge would rerun its dependency in every
+shard.
 
 **Gates cover every instance.** The zero-panic gate dumps each instance unit's
 journal and verifies it together with that instance's capture subdirectory. Any
@@ -170,7 +174,7 @@ each stays current.
 
 - Good: the site-global specs run in parallel with everything else, and no lane
   carries a concurrency-1 tail.
-- Good: each pair's four lanes are identical apart from the shard index, so the
+- Good: each pair's lanes are identical apart from the shard index, so the
   catalog, census and reconciliation need no special lane or project.
 - Good: global-state races are removed by construction. They no longer depend on
   quarantining the right specs.
