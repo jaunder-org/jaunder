@@ -805,10 +805,10 @@ def _progress(
 
 
 # A warning, and what makes it the same warning as an earlier one.
-Warning = tuple[tuple[Any, ...], str]
+Notice = tuple[tuple[Any, ...], str]
 
 
-def _optional(check: Check, head: str) -> Warning:
+def _optional(check: Check, head: str) -> Notice:
     """One warning per run attempt of an optional failure."""
     identity = (head, check.kind, check.run, check.attempt, check.name)
     where = f" ({check.url})" if check.url else ""
@@ -818,10 +818,10 @@ def _optional(check: Check, head: str) -> Warning:
 
 def _poll(
     github: GitHub, rules: Rules, watch: Watch, queued_head: str | None
-) -> tuple[Snapshot, Step, list[Warning]]:
+) -> tuple[Snapshot, Step, list[Notice]]:
     """One snapshot, its verdict and its warnings."""
     snapshot = github.snapshot()
-    warnings: list[Warning] = []
+    warnings: list[Notice] = []
     required: list[Check] = []
     ejection = None
     if _settled(snapshot, watch.expected_head) is None:
@@ -833,7 +833,9 @@ def _poll(
                 names, problem = github.workflow_jobs(check.workflow, snapshot.head)
                 if problem is not None:
                     detail = f"workflow {check.workflow} has no usable jobs: {problem}"
-                    warnings.append(((check.workflow, snapshot.head, problem), detail))
+                    # Once per file and head: a transient problem's detail can
+                    # differ on every retry.
+                    warnings.append(((check.workflow, snapshot.head), detail))
             if names.isdisjoint(rules.contexts):
                 warnings.append(_optional(check, snapshot.head))
             else:
