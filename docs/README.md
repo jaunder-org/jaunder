@@ -292,6 +292,7 @@ convention). See the Status column below for each ADR's current status.
 | [0261](adr/0261-tool-language-by-maintainability.md)                     | Infrastructure language is chosen by maintainability                                                         | accepted   |
 | [0262](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md)            | Give the Theme specs their own serial E2E lane and weight ordinary shards                                    | accepted   |
 | [0263](adr/0263-dev-traces-producer-timed-phases.md)                     | Dev traces the phases a sandboxed producer timed itself                                                      | accepted   |
+| [0264](adr/0264-pr-watch-native-python-observer.md)                      | PR observation is a native `dev pr-watch` with membership-based early failure                                | accepted   |
 
 <!-- adr-table:end -->
 

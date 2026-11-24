@@ -1596,7 +1596,7 @@ baseline.
   every ruleset context to succeed. Keep optional jobs out of workflows that
   define required contexts. The observer only reads this evidence: it does not
   cancel, rerun, rebase, enqueue, or otherwise mutate workflow jobs
-  ([native observer decision](docs/adr/drafts/pr-watch-native-python-observer.md)).
+  ([native observer decision](docs/adr/0264-pr-watch-native-python-observer.md)).
 
   ```bash
   dev pr-watch                             # wait for the next action
