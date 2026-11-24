@@ -17,29 +17,24 @@ from typing import Any
 
 import pytest
 from conftest import REAL_GIT, REPOSITORY, Checkout, require
+from test_pr_watch import E, V, green, merged, rules, runs
+
+from dev import pr_watch
 
 HEAD = "a" * 40
 MERGE = "b" * 40
 HISTORICAL = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 BASH = shutil.which("bash") or "/bin/sh"
 # Each native call must be the next scripted one. Checkout discovery, which
-# `dev` itself makes, goes to the real Git unrecorded. The observer's package
-# build only appends to `builds` and prints FAKE_TOOL_OUT, where the fixture
-# already put the scripted observer; its evaluation and cache queries go
-# unrecorded.
+# `dev` itself makes, goes to the real Git unrecorded. Unless a test runs the
+# real observer, `dev` on the scripts' PATH is scripted too: it replays
+# observer reports, so land tests never depend on observer internals.
 NATIVE = f"""#!{BASH}
 set -euo pipefail
 tool=${{0##*/}}
 if [[ "$tool $*" == 'git rev-parse --show-toplevel' ]]; then exec "$REAL_GIT" "$@"; fi
 if [[ "$tool" == git ]]; then
     [[ -z "${{GIT_DIR+x}}${{GIT_WORK_TREE+x}}${{GIT_INDEX_FILE+x}}${{GIT_OBJECT_DIRECTORY+x}}${{GIT_COMMON_DIR+x}}${{GIT_NAMESPACE+x}}" ]] || {{ echo 'Git redirect not scrubbed' >&2; exit 23; }}
-fi
-if [[ "$tool $*" == 'nix path-info --derivation '* ]]; then printf '/nix/store/fake.drv\\n'; exit 0; fi
-if [[ "$tool $*" == 'nix path-info '* ]]; then exit 1; fi
-if [[ "$tool $*" == 'nix build '* ]]; then
-    printf '%s\\n' "$*" >> "$FIXTURE/builds"
-    printf '%s\\n' "$FAKE_TOOL_OUT"
-    exit 0
 fi
 args=$(jq -cn --args '$ARGS.positional' -- "$@")
 jq -cn --arg tool "$tool" --argjson args "$args" '{{tool:$tool,args:$args}}' >> "$FIXTURE/calls"
@@ -90,14 +85,9 @@ class Native:
 def native(checkout: Checkout) -> Native:
     require(shutil.which("jq") is not None, "jq")
     checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
-    for tool in ["gh", "git", "cargo", "nix"]:
+    # pr-land.sh observes through `dev pr-watch`, here the scripted reports.
+    for tool in ["gh", "git", "cargo", "dev"]:
         checkout.executable(tool, NATIVE)
-    observer = checkout.tool_out / "bin" / "pr-observer"
-    observer.parent.mkdir(parents=True)
-    observer.write_text(NATIVE)
-    observer.chmod(0o755)
-    # pr-land.sh observes through `dev pr-watch`.
-    checkout.dev_on_path()
     return Native(checkout)
 
 
@@ -124,7 +114,7 @@ def live(armed: bool) -> dict[str, Any]:
 
 
 def observation(outcome: str, recovery: bool, once: bool) -> dict[str, Any]:
-    args = ["watch", "731"]
+    args = ["pr-watch", "731"]
     args += ["--once"] if once else ["--until", "merged"]
     args += ["--expected-head", HEAD]
     if recovery:
@@ -138,7 +128,7 @@ def observation(outcome: str, recovery: bool, once: bool) -> dict[str, Any]:
         "events": [],
     }
     return {
-        "tool": "pr-observer",
+        "tool": "dev",
         "args": args,
         "exit": 0 if outcome in ("merged", "ready-to-land") else 1,
         "text": json.dumps(report),
@@ -198,12 +188,40 @@ def test_an_approved_land_makes_one_head_bound_action_then_observes(
     assert native.count() == len(calls)
     report = json.loads(result.stdout)
     assert (report["outcome"], report["head_sha"]) == ("merged", HEAD)
-    # Each observation is its own `dev pr-watch`, which builds the observer.
-    observations = [call for call in calls if call["tool"] == "pr-observer"]
-    builds = (native.checkout.root.parent / "builds").read_text().splitlines()
-    assert builds == [
-        "build -L --accept-flake-config --print-out-paths --no-link .#pr-observer"
-    ] * len(observations)
+
+
+def watched(*observer: Any) -> list[Any]:
+    """The native calls of one real `dev pr-watch 731`: origin, ruleset, then
+    each scripted PR read."""
+    query = ["api", "graphql", "-f", f"query={pr_watch.PR_QUERY}"]
+    query += ["-f", "owner=jaunder-org", "-f", "name=jaunder", "-F", "number=731"]
+    rules_path = "repos/jaunder-org/jaunder/rules/branches/main"
+    runs_path = "repos/jaunder-org/jaunder/actions/runs?event=merge_group&per_page=100"
+    paths = {"pr": query, "rules": ["api", rules_path], "runs": ["api", runs_path]}
+    return [
+        {
+            "tool": "git",
+            "args": ["remote", "get-url", "origin"],
+            "text": "https://github.com/jaunder-org/jaunder.git\n",
+        },
+        {"tool": "gh", "args": paths["rules"], "body": rules(V, E)},
+    ] + [{"tool": "gh", "args": paths[name], "body": body} for name, body in observer]
+
+
+def test_land_runs_the_real_observer_end_to_end(native: Native) -> None:
+    native.checkout.dev_on_path()
+    calls = land_calls(False)
+    calls[4:5] = watched(("pr", green()), ("runs", runs()))
+    calls[-1:] = watched(("pr", merged()))
+    result = native.land(False, calls)
+    assert result.returncode == 0, result
+    assert native.count() == len(calls)
+    report = json.loads(result.stdout)
+    assert (report["outcome"], report["pointer"], report["pr"]) == (
+        "merged",
+        MERGE,
+        731,
+    )
 
 
 ADVERSE = ["pending", "blocked", "conflicted", "checks-failed", "ejected"]

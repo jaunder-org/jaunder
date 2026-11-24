@@ -6,9 +6,8 @@
 //! `cfg(test)` is not set for doc runs, that a bin-only crate yields no doctests —
 //! and the only honest way to establish that is to compile a real crate and look.
 //!
-//! Fixtures live in `testdata/` and are `include_str!`'d, following the
-//! `tools/pr-observer/src/pr/testdata/` convention. They are dependency-free so this needs no
-//! registry access.
+//! Fixtures live in `testdata/` and are `include_str!`'d. They are
+//! dependency-free so this needs no registry access.
 
 use std::process::Command;
 

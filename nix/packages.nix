@@ -523,11 +523,6 @@ let
     member = "tools/performance";
     bins = [ "perf-data" ];
   };
-  prObserverBin = mkHostTool {
-    pname = "pr-observer";
-    member = "tools/pr-observer";
-    bins = [ "pr-observer" ];
-  };
   # Every CSR bundle derivation runs this executable, and the product binary
   # embeds the bundle. Its own Cargo closure keeps edits to unrelated tools out
   # of the product derivation
@@ -813,6 +808,8 @@ let
     ps.click
     ps.opentelemetry-api
     ps.opentelemetry-sdk
+    # `dev pr-watch` reads workflow files for check membership.
+    ps.pyyaml
   ];
   devPython = pkgs.python3.withPackages devPythonDeps;
   devPythonCheck = pkgs.python3.withPackages (
@@ -821,6 +818,7 @@ let
     ++ [
       ps.coverage
       ps.mypy
+      ps.types-pyyaml
       ps.pytest
       # The suite drives `dev` as real processes; spreading it over the
       # available cores keeps it short enough for every commit's gate.
@@ -1635,7 +1633,6 @@ in
     host-proof = hostProofBin;
     coverage-check = coverageCheckBin;
     perf-data = perfDataBin;
-    pr-observer = prObserverBin;
     adr-promoter = adrPromoter;
     dev = devBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is

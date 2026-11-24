@@ -1,6 +1,0 @@
-name: remote reuse
-
-jobs:
-  reusable:
-    name: Remote checks
-    uses: jaunder-org/reusable/.github/workflows/check.yml@main
