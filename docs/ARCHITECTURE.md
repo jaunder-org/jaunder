@@ -3230,9 +3230,10 @@ Jaunder wrote still works after an in-place upgrade
 `jaunder`, `test-support` and e2e package create the production-baseline records
 and verify them, as the service user and with only earlier binaries touching the
 database. `switch-to-configuration test` then moves the node to a specialisation
-that differs only in `services.jaunder.package`. The service stops gracefully,
-and the current `preStart` migrates the database in place, because restore
-requires an exact schema match
+that differs only in `services.jaunder.package`. The lane's single server
+instance, `jaunder-0`, inherits that package from the module's unit, so it is
+the service that stops gracefully, and the current `preStart` migrates the
+database in place, because restore requires an exact schema match
 ([ADR-0174](adr/0174-backup-format-and-schema-compatibility.md)). The current
 e2e package verifies the same records from the author's saved browser session
 and mints and revokes an App Password. There are no goldens and no second
@@ -4453,12 +4454,12 @@ once per backend/browser pair
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
-retained catalog enumerates Chromium and Firefox only. WebKit keeps main's
-existing exclusions, `admin-site`, `invite`, `production-baseline-flow` and the
-visual tests: coverage parity with what it ran before, not a serial project.
-Each browser's visual coverage runs exactly once per backend, in whichever shard
-Playwright assigns it. Visual coverage adds no backend-specific baseline.
-Timeout budgets are stated for Chromium and scaled per browser
+retained catalog enumerates Chromium and Firefox only. WebKit excludes
+`admin-site`, `invite`, `production-baseline-flow` and the visual tests:
+coverage parity with what it ran before, not a serial project. Each browser's
+visual coverage runs exactly once per backend, in whichever shard Playwright
+assigns it. Visual coverage adds no backend-specific baseline. Timeout budgets
+are stated for Chromium and scaled per browser
 ([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
 for an individual wait and the ambient whole-test budget,
 `slowBrowserFirstNavigationTimeoutMs` for the coldest navigation. The `chromium`
