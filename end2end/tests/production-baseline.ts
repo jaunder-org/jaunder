@@ -115,7 +115,7 @@ type AuthorAccess = {
 /**
  * The shape `createProductionBaseline` writes. The upgrade test reads a state
  * an earlier build wrote, so `validateBaselineState` accepts every version
- * written since the latest tag (docs/adr/drafts/upgrade-test.md).
+ * written since the latest tag (docs/adr/0265-upgrade-test.md).
  */
 export const BASELINE_STATE_VERSION = 1;
 export type BaselineState = {

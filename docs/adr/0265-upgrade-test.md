@@ -1,6 +1,6 @@
-# ADR-DRAFT: An upgrade test replaces deployment qualification
+# ADR-0265: An upgrade test replaces deployment qualification
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-24
 - Issue: [#2069](https://github.com/jaunder-org/jaunder/issues/2069)
 
@@ -9,11 +9,10 @@
 `tools/qualification` (about 8,300 lines) proved deployments by booting QEMU,
 Caddy and `curl` probes by hand. It linked product code to learn facts the
 deployed server already exposes, and it carried three synthetic styling builds
-(`a`, `b-app`, `b-theme`).
-[ADR-0261](../0261-tool-language-by-maintainability.md) retired it in favour of
-a scheduled CI upgrade test. That ADR also left four choices to #2069: the
-earlier build to upgrade from, what to compare, where comparisons live, and
-whether one test can deploy two immutable revisions.
+(`a`, `b-app`, `b-theme`). [ADR-0261](0261-tool-language-by-maintainability.md)
+retired it in favour of a scheduled CI upgrade test. That ADR also left four
+choices to #2069: the earlier build to upgrade from, what to compare, where
+comparisons live, and whether one test can deploy two immutable revisions.
 
 The question the test answers is whether a site an earlier Jaunder wrote still
 works after an operator upgrades it. Pixel or byte goldens would fail on every
@@ -22,9 +21,9 @@ upgraded site cannot answer it either, because each test provisions its own data
 and never reads the earlier records.
 
 Restore requires an exact schema match
-([ADR-0174](../0174-backup-format-and-schema-compatibility.md)), so a backup
-cannot carry earlier data across a migration. Opening an existing database runs
-pending migrations, which is what a package upgrade does.
+([ADR-0174](0174-backup-format-and-schema-compatibility.md)), so a backup cannot
+carry earlier data across a migration. Opening an existing database runs pending
+migrations, which is what a package upgrade does.
 
 ## Decision
 
@@ -70,19 +69,18 @@ is green.
 
 **What changes in the ADRs this touches.**
 
-- This decision supersedes
-  [ADR-0239](../0239-qualification-workflow-ownership.md).
+- This decision supersedes [ADR-0239](0239-qualification-workflow-ownership.md).
 - It settles the four choices
-  [ADR-0261](../0261-tool-language-by-maintainability.md) deferred, replacing
-  its golden-file and retained-browser wording.
+  [ADR-0261](0261-tool-language-by-maintainability.md) deferred, replacing its
+  golden-file and retained-browser wording.
 - It removes the qualification provenance from
-  [ADR-0225](../0225-nix-cached-host-tooling.md).
+  [ADR-0225](0225-nix-cached-host-tooling.md).
 - It removes the qualification carveout from
-  [ADR-0247](../0247-host-tool-json-report-contract.md).
+  [ADR-0247](0247-host-tool-json-report-contract.md).
 - It removes the `production-baseline-*` commands from
-  [ADR-0251](../0251-dev-runner-replaces-just.md).
+  [ADR-0251](0251-dev-runner-replaces-just.md).
 - It removes `qualification-host` from the Nix-built host tools of
-  [ADR-0258](../0258-dev-runs-nix-built-host-tools.md).
+  [ADR-0258](0258-dev-runs-nix-built-host-tools.md).
 
 ## Consequences
 

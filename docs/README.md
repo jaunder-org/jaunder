@@ -292,6 +292,7 @@ convention). See the Status column below for each ADR's current status.
 | [0262](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md)            | Give the Theme specs their own serial E2E lane and weight ordinary shards                                    | accepted   |
 | [0263](adr/0263-dev-traces-producer-timed-phases.md)                     | Dev traces the phases a sandboxed producer timed itself                                                      | accepted   |
 | [0264](adr/0264-pr-watch-native-python-observer.md)                      | PR observation is a native `dev pr-watch` with membership-based early failure                                | accepted   |
+| [0265](adr/0265-upgrade-test.md)                                         | An upgrade test replaces deployment qualification                                                            | accepted   |
 
 <!-- adr-table:end -->
 
