@@ -793,9 +793,7 @@ def _queue_detail(snapshot: Snapshot) -> str:
 def _progress(
     log: _Log, previous: _View | None, current: _View, snapshot: Snapshot
 ) -> None:
-    """The first view whole, then only what changed."""
-    if previous is None or previous.phase != current.phase:
-        log("phase", current.phase)
+    """The checks and queue: the first view whole, then only what changed."""
     for index, (name, state) in enumerate(current.checks):
         if previous is None or previous.checks[index][1] != state:
             log("check", f"{name}: {state}")
@@ -933,9 +931,17 @@ def _watch(
             tuple((name, _label(snapshot, name)) for name in rules.contexts),
             (snapshot.queued, snapshot.position),
         )
-        # An outcome speaks for itself; passive readiness stays a phase.
-        if step.outcome is None and not (ready and not watch.until):
-            _progress(log, previous, current, snapshot)
+        # Passive readiness stays a phase; default readiness ends the watch.
+        terminal: tuple[str, str | None, str | None] | None = None
+        if step.outcome is not None:
+            terminal = (step.outcome, step.detail, step.pointer)
+        elif ready and not watch.until:
+            terminal = ("ready-to-land", READY_DETAIL, None)
+        # The terminal event stands in for the final phase, but check and
+        # queue changes on that poll still report.
+        if terminal is None and (previous is None or previous.phase != step.phase):
+            log("phase", step.phase)
+        _progress(log, previous, current, snapshot)
         previous = current
         for identity, detail in warnings:
             if identity not in warned:
@@ -943,12 +949,9 @@ def _watch(
                 log("warning", detail)
         if snapshot.queued:
             queued_head = snapshot.head
-        if step.outcome is not None:
-            log("terminal", step.outcome)
-            return end(step.outcome, step.detail, step.pointer)
-        if ready and not watch.until:
-            log("terminal", "ready-to-land")
-            return end("ready-to-land", READY_DETAIL)
+        if terminal is not None:
+            log("terminal", terminal[0])
+            return end(*terminal)
         if watch.once:
             return end("pending", phase=step.phase)
         if now() - log.last >= HEARTBEAT_SECONDS:
