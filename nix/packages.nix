@@ -822,6 +822,9 @@ let
       ps.coverage
       ps.mypy
       ps.pytest
+      # Tests that read GitHub workflows find their steps by YAML structure.
+      ps.pyyaml
+      ps.types-pyyaml
       # The suite drives `dev` as real processes; spreading it over the
       # available cores keeps it short enough for every commit's gate.
       ps.pytest-xdist

@@ -21,25 +21,14 @@ on:
       - server/src/assets.rs
       - server/src/cli.rs
       - server/src/commands/theme*.rs
-      - scripts/test-theme-repository-release-version.sh
       - storage/src/public_theme.rs
       - web/src/**
       - testdata/theme-repository/minimal/**
   workflow_dispatch:
 
 jobs:
-  release-version-contract:
-    name: Check release version contract
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: bash scripts/test-theme-repository-release-version.sh
-
   package:
     if: github.ref_type != 'tag'
-    needs: release-version-contract
     permissions:
       contents: read
     uses: ./.github/workflows/theme-repository.yml
@@ -49,7 +38,6 @@ jobs:
 
   release:
     if: github.ref_type == 'tag'
-    needs: release-version-contract
     permissions:
       contents: write
     uses: ./.github/workflows/theme-repository.yml
