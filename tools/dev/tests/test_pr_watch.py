@@ -1235,7 +1235,7 @@ def test_checks_render_as_words(observe: Any) -> None:
 def test_the_poll_that_ends_the_watch_still_reports_its_check_changes(
     observe: Any,
 ) -> None:
-    # #2085: the last required check settling on the final poll was silent.
+    # #2085: a check settling on the poll that ends the watch is still reported.
     result = observe(native(pr(status(V, "SUCCESS")), green()))
     assert result.outcome == "ready-to-land"
     assert result.events("check") == [
@@ -1244,11 +1244,9 @@ def test_the_poll_that_ends_the_watch_still_reports_its_check_changes(
         f"{E}: success",
     ]
     assert result.events("phase") == ["awaiting-checks"]
-    assert result.report["events"][-1] == {
-        "at": result.report["events"][-1]["at"],
-        "kind": "terminal",
-        "detail": "ready-to-land",
-    }
+    last, before = result.report["events"][-1], result.report["events"][-2]
+    assert (last["kind"], last["detail"]) == ("terminal", "ready-to-land")
+    assert (before["kind"], before["detail"]) == ("check", f"{E}: success")
 
 
 def test_an_adverse_final_poll_reports_the_check_that_ended_it(observe: Any) -> None:
