@@ -266,7 +266,7 @@ def upgrade_test(revision: str | None, tag: str | None, backend: str) -> None:
     """
     if revision is not None and tag is not None:
         raise click.UsageError("--from and --tag are exclusive")
-    _gate(lambda: upgrade.test(revision, tag, backend))
+    _gate(lambda: upgrade.run(revision, tag, backend))
 
 
 @cli.command("upgrade-dispatch")

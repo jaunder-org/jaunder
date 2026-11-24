@@ -4,8 +4,8 @@ import { expect, type APIRequestContext, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { allowSecondBoot } from "./bootBudget";
 
-import { fetchFeedContaining } from "./feeds";
-import type { NewTracedContext } from "./fixtures";
+import { FEED_POLL_TIMEOUT_MS, fetchFeedContaining } from "./feeds";
+import { setTestBudget, type NewTracedContext } from "./fixtures";
 import {
   BASE_URL,
   click,
@@ -546,6 +546,17 @@ async function createAuthorAccess(
   } finally {
     await context.close();
   }
+}
+
+const BASELINE_SETUP_ALLOWANCE_MS = 45_000;
+const BASELINE_SEQUENTIAL_FEED_POLLS = 9;
+
+/** The test budget for creating and verifying the baseline records. */
+export function setBaselineTestBudget(): void {
+  setTestBudget(
+    BASELINE_SEQUENTIAL_FEED_POLLS * FEED_POLL_TIMEOUT_MS +
+      BASELINE_SETUP_ALLOWANCE_MS,
+  );
 }
 
 /** The Site configuration the baseline records depend on. */

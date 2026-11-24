@@ -28,7 +28,6 @@ let
     }:
     let
       cfg = config.services.jaunder;
-      jaunderBin = cfg.package;
     in
     {
       options.services.jaunder = {
@@ -72,7 +71,7 @@ let
           group = "jaunder";
           home = "/var/lib/jaunder";
           createHome = true;
-          packages = [ jaunderBin ];
+          packages = [ cfg.package ];
           shell = pkgs.bashInteractive;
         };
 
@@ -93,14 +92,14 @@ let
           # No `target/site` symlink: the binary embeds its CSR bundle +
           # public assets (#237), so it serves them with no external files.
           preStart = ''
-            ${jaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
+            ${cfg.package}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
           '';
           serviceConfig = {
             User = "jaunder";
             Group = "jaunder";
             StateDirectory = "jaunder";
             WorkingDirectory = "%S/jaunder";
-            ExecStart = "${jaunderBin}/bin/jaunder serve";
+            ExecStart = "${cfg.package}/bin/jaunder serve";
             Restart = "on-failure";
             RestartSec = "2s";
             # Graceful stop takes a final backup; systemd's 90 s default would

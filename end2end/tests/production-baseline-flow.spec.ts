@@ -1,8 +1,8 @@
-import { setTestBudget, test } from "./fixtures";
-import { FEED_POLL_TIMEOUT_MS } from "./feeds";
+import { test } from "./fixtures";
 import {
   applyBaselineSiteConfig,
   createProductionBaseline,
+  setBaselineTestBudget,
   verifyFreshAppPasswordLifecycle,
   verifyProductionBaseline,
 } from "./production-baseline";
@@ -11,16 +11,11 @@ import { seedConfigViaTool, seedSandboxProfileViaTool } from "./seed";
 // This remains an ordinary cross-browser E2E spec; Playwright schedules it in
 // the serial admin-site project because profile seeding temporarily changes site config.
 
-const BASELINE_SETUP_ALLOWANCE_MS = 45_000;
-const BASELINE_SEQUENTIAL_FEED_POLLS = 9;
 test("production baseline creates and verifies canonical browser and AtomPub records", async ({
   page,
   tracedContext,
 }) => {
-  setTestBudget(
-    BASELINE_SEQUENTIAL_FEED_POLLS * FEED_POLL_TIMEOUT_MS +
-      BASELINE_SETUP_ALLOWANCE_MS,
-  );
+  setBaselineTestBudget();
   const seededManifest = await seedSandboxProfileViaTool("demo");
   await applyBaselineSiteConfig();
   try {

@@ -2,7 +2,7 @@
 
 The earlier build creates and verifies the baseline records, the service is
 upgraded in place to this checkout, and this checkout verifies the same
-records (nix/checks.nix `mkUpgradeCheck`). `test` builds that check here for
+records (nix/checks.nix `mkUpgradeCheck`). `run` builds that check here for
 one backend; `dispatch` starts the CI workflow, which runs both.
 """
 
@@ -41,8 +41,8 @@ def earlier(revision: str | None, tag: str | None) -> str:
     """The build to upgrade from, as a commit.
 
     An explicit revision wins. A tag run upgrades from the previous `v*` tag;
-    any other run from the newest green run of the workflow on `main`. With
-    neither, the build upgrades from itself.
+    any other run from the newest green run of the workflow on `main`, or
+    from itself when there is none.
     """
     if revision is not None:
         return _commit(revision)
@@ -90,7 +90,7 @@ def _lift(output: str, destination: Path) -> None:
             shutil.copyfile(artifact, destination / artifact.name)
 
 
-def test(revision: str | None, tag: str | None, backend: str) -> None:
+def run(revision: str | None, tag: str | None, backend: str) -> None:
     environment = {
         "JAUNDER_UPGRADE_FROM": earlier(revision, tag),
         "JAUNDER_UPGRADE_BACKEND": backend,
@@ -119,19 +119,21 @@ def dispatch(revision: str | None, ref: str) -> None:
     """Starts the CI workflow on `ref`; without `revision` it picks its own."""
     fields: list[str] = []
     if revision is not None:
-        earlier = _commit(revision)
+        commit = _commit(revision)
         # The runner fetches from origin, so the earlier build must be there.
         traced_git(
             "upgrade-from-on-origin",
             "branch",
             "--remotes",
+            "--list",
+            "origin/*",
             "--contains",
-            earlier,
+            commit,
             refusal=lambda branches: (
-                None if branches else f"{earlier} is on no origin branch"
+                None if branches else f"{commit} is on no origin branch"
             ),
         )
-        fields = ["-f", f"from={earlier}"]
+        fields = ["-f", f"from={commit}"]
     steps.run(
         "upgrade-dispatch", ["gh", "workflow", "run", WORKFLOW, "--ref", ref, *fields]
     )

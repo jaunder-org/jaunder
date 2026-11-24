@@ -517,7 +517,8 @@ pub mod test_variants {
     ///
     /// # Errors
     ///
-    /// As [`changed_application`].
+    /// Returns the normal compiler failure when the altered Studio source
+    /// cannot pass the ordinary bundled Theme Package boundary.
     pub fn changed_studio() -> Result<SystemArtifactInventory, SystemThemeError> {
         let mut studio = STUDIO_CSS.to_vec();
         studio.extend_from_slice(b"\nbody { --accent: #0f766e; }\n");

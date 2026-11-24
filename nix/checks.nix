@@ -507,6 +507,29 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
       print("failed to write e2e phase manifest: " + manifest_out)
 '';
 
+# The environment every in-guest Playwright run shares: browser and font pins,
+# and the database, storage and executable its seed tools act on. Python
+# string-concatenation pieces, spliced inside each caller's `machine.execute(`.
+e2ePlaywrightEnv =
+  {
+    browsers,
+    jaunderExecutable,
+    jaunderDb,
+  }:
+  ''
+    " PLAYWRIGHT_BROWSERS_PATH=${browsers}"
+          + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+          + " FONTCONFIG_FILE=${visualFontConfig}"
+          + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
+          + " JAUNDER_DB=${jaunderDb}"
+          + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
+          + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
+          + " JAUNDER_TEST_EXECUTABLE=${jaunderExecutable}"'';
+
+# Where the upgrade check's two phases hand over the baseline state and the
+# author's browser session.
+upgradeStateDir = "/tmp/upgrade-state";
+
 # The upgrade check's earlier-build half: the earlier e2e package creates and
 # verifies the baseline records against the earlier server, using only earlier
 # binaries (opening the database with a current one would migrate it early).
@@ -521,9 +544,9 @@ e2eUpgradeBaseline =
   }:
   ''
     machine.succeed(
-      "mkdir -p /tmp/upgrade-state && cp -r ${upgradeFrom.e2ePackage} /tmp/e2e-baseline"
+      "mkdir -p ${upgradeStateDir} && cp -r ${upgradeFrom.e2ePackage} /tmp/e2e-baseline"
       + " && chmod -R u+w /tmp/e2e-baseline"
-      + " && chown -R jaunder:jaunder /tmp/e2e-baseline /tmp/upgrade-state"
+      + " && chown -R jaunder:jaunder /tmp/e2e-baseline ${upgradeStateDir}"
     )
     # As the service user: the seed tools write the site's files (the database,
     # media, the publisher lock) before the earlier server ever has, and the
@@ -532,16 +555,13 @@ e2eUpgradeBaseline =
       "cd /tmp/e2e-baseline"
       + " && runuser -u jaunder -- env"
       + " PATH=${upgradeFrom.jaunder}/bin:${upgradeFrom.testSupport}/bin:$PATH"
-      + " PLAYWRIGHT_BROWSERS_PATH=${upgradeFrom.browsers}"
-      + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-      + " FONTCONFIG_FILE=${visualFontConfig}"
+      + ${e2ePlaywrightEnv {
+        inherit (upgradeFrom) browsers;
+        jaunderExecutable = "${upgradeFrom.jaunder}/bin/jaunder";
+        inherit jaunderDb;
+      }}
       + " JAUNDER_UPGRADE_PHASE=baseline"
-      + " JAUNDER_UPGRADE_STATE_DIR=/tmp/upgrade-state"
-      + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
-      + " JAUNDER_DB=${jaunderDb}"
-      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
-      + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
-      + " JAUNDER_TEST_EXECUTABLE=${upgradeFrom.jaunder}/bin/jaunder"
+      + " JAUNDER_UPGRADE_STATE_DIR=${upgradeStateDir}"
       + " ${upgradeFrom.nodejs}/bin/node node_modules/.bin/playwright test"
       + " --config playwright.config.ts --project chromium-upgrade",
       timeout=${toString e2ePlaywrightTimeout},
@@ -563,6 +583,13 @@ e2eUpgradeBaseline =
     machine.wait_for_open_port(3000, timeout=60)
     schema_after = machine.succeed("${schemaVersionQuery}").strip()
     print("upgrade schema version: earlier=" + schema_before + " current=" + schema_after)
+    # The switch must have replaced the running binary, and migrations only
+    # move forward.
+    machine.succeed(
+      "readlink /proc/$(systemctl show -p MainPID --value jaunder.service)/exe"
+      + " | grep -q '^${jaunderBin}/'"
+    )
+    assert int(schema_after) >= int(schema_before), "upgrade lowered the schema version"
   '';
 
 e2eRunAndCapture =
@@ -633,16 +660,14 @@ e2eRunAndCapture =
     gate_started_at = time.monotonic()
     pw_status, pw_out = machine.execute(
       "cd /tmp/e2e"
-      + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
-      + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-      + " FONTCONFIG_FILE=${visualFontConfig}"
+      + " &&"
+      + ${e2ePlaywrightEnv {
+        browsers = pkgs.playwright-driver.browsers;
+        jaunderExecutable = "${jaunderBin}/bin/jaunder";
+        inherit jaunderDb;
+      }}
       + " JAUNDER_E2E_PRODUCER_INPUT=/tmp/e2e/producer-input.json"
       + "${extraEnv}"
-      + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
-      + " JAUNDER_DB=${jaunderDb}"
-      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
-      + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
-      + " JAUNDER_TEST_EXECUTABLE=${jaunderBin}/bin/jaunder"
       + " JAUNDER_E2E_LANE=${identity}"
       + " JAUNDER_E2E_BACKEND=${backend}"
       + " JAUNDER_E2E_BROWSER=${browser}"
@@ -1122,7 +1147,7 @@ mkUpgradeCheck =
     traceSeed = if backend == "sqlite" then "a1" else "a2";
     projects = [ "chromium-upgrade" ];
     enabled = true;
-    extraEnv = " JAUNDER_UPGRADE_PHASE=upgraded JAUNDER_UPGRADE_STATE_DIR=/tmp/upgrade-state";
+    extraEnv = " JAUNDER_UPGRADE_PHASE=upgraded JAUNDER_UPGRADE_STATE_DIR=${upgradeStateDir}";
     upgradeFrom = {
       jaunder = earlier.jaunder;
       testSupport = earlier.test-support;

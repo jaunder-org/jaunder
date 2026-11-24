@@ -266,7 +266,7 @@ if [ "$name" = git ]; then
       'rev-parse --verify --end-of-options '*'^{commit}')
         revision=${4%^\{commit\}}; printf '%s\n' "$revision" ;;
       'tag --list v* --sort=-version:refname --merged v2^') printf 'v1\n' ;;
-      'branch --remotes --contains '*)
+      'branch --remotes --list origin/* --contains '*)
         [ -f not-on-origin ] || printf '  origin/main\n' ;;
     esac
 fi

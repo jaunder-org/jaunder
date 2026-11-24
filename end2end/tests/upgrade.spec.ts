@@ -1,47 +1,38 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTestBudget, test } from "./fixtures";
-import { FEED_POLL_TIMEOUT_MS } from "./feeds";
+import { test } from "./fixtures";
 import {
   applyBaselineSiteConfig,
   createProductionBaseline,
+  setBaselineTestBudget,
   verifyFreshAppPasswordLifecycle,
   verifyProductionBaseline,
   type BaselineState,
 } from "./production-baseline";
 import { seedSandboxProfileViaTool } from "./seed";
 
-// One half of the upgrade test (docs/superpowers/specs/*-issue-2069-*). The
+// One half of the upgrade test (docs/adr/drafts/upgrade-test.md). The
 // `baseline` phase runs on the earlier build: it creates and verifies the
 // baseline records, then hands their state and the author's browser session to
 // the `upgraded` phase, which runs on the current build after an in-place
 // upgrade and verifies the same records. Only the upgrade check selects this
-// spec; ordinary lanes never load it.
+// spec; without its phase it skips.
 
 const phase = process.env.JAUNDER_UPGRADE_PHASE;
-const stateDir = process.env.JAUNDER_UPGRADE_STATE_DIR;
-if ((phase !== "baseline" && phase !== "upgraded") || !stateDir) {
-  throw new Error(
-    "upgrade.spec.ts requires JAUNDER_UPGRADE_PHASE=baseline|upgraded and JAUNDER_UPGRADE_STATE_DIR",
-  );
-}
+const stateDir = process.env.JAUNDER_UPGRADE_STATE_DIR ?? "";
+test.skip(
+  (phase !== "baseline" && phase !== "upgraded") || stateDir === "",
+  "runs only as a phase of the upgrade check",
+);
 const statePath = join(stateDir, "baseline-state.json");
 const sessionPath = join(stateDir, "author-session.json");
-
-const BASELINE_SETUP_ALLOWANCE_MS = 45_000;
-const BASELINE_SEQUENTIAL_FEED_POLLS = 9;
-const budget = () =>
-  setTestBudget(
-    BASELINE_SEQUENTIAL_FEED_POLLS * FEED_POLL_TIMEOUT_MS +
-      BASELINE_SETUP_ALLOWANCE_MS,
-  );
 
 if (phase === "baseline") {
   test("earlier build creates and verifies the baseline records", async ({
     page,
     tracedContext,
   }) => {
-    budget();
+    setBaselineTestBudget();
     const seededManifest = await seedSandboxProfileViaTool("demo");
     await applyBaselineSiteConfig();
     const state = await createProductionBaseline(
@@ -64,7 +55,7 @@ if (phase === "baseline") {
   test("current build verifies the upgraded baseline records", async ({
     tracedContext,
   }) => {
-    budget();
+    setBaselineTestBudget();
     const state = JSON.parse(readFileSync(statePath, "utf8")) as BaselineState;
     // Only the author's context carries the earlier session; `test.use` would
     // also sign in the anonymous contexts verification opens.

@@ -148,7 +148,7 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         ["upgrade-dispatch", "--from", "earlier", "--ref", "topic"],
         [
             words("git rev-parse --verify --end-of-options earlier^{commit}"),
-            words("git branch --remotes --contains", "b" * 40),
+            words("git branch --remotes --list origin/* --contains", "b" * 40),
             words("gh workflow run upgrade.yml --ref topic -f", f"from={'b' * 40}"),
         ],
     ),
