@@ -2,6 +2,7 @@ import { test, expect } from "./fixtures";
 import { goto, signInAs, setAndVerifyEmail } from "./helpers";
 import { allowSecondBoot } from "./bootBudget";
 import { SEL } from "./selectors";
+import { seedConfigViaTool } from "./seed";
 
 // M3.10.11: Full email verification flow.
 test("email verification flow completes successfully", async ({
@@ -9,6 +10,8 @@ test("email verification flow completes successfully", async ({
   user,
   mailbox,
 }) => {
+  // The verification mail's link is built from the configured site base URL.
+  await seedConfigViaTool("site.base_url", "https://example.com");
   await signInAs(page, user.username);
 
   // Submit the address, read this recipient's verification mail

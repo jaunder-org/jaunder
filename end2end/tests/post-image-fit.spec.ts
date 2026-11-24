@@ -6,7 +6,6 @@ import { createPostViaApi } from "./posts";
 import {
   conformanceThemePackage,
   publishAndSelectTheme,
-  withSiteThemeSelection,
 } from "./theme-helpers";
 
 const BODY = '[data-jaunder-part="post-body"]';
@@ -191,47 +190,43 @@ test("a site Theme Package inherits the image fit on Local and public permalinks
   tracedContext,
   firstNav,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    const wide = await uploadMedia(
-      page,
-      "site-wide.svg",
-      imageBytes(1200, 800),
-      "image/svg+xml",
-    );
-    const post = await createPostViaApi(page, {
-      body: `![Site wide](${wide.url})`,
-    });
-    await mutate(() =>
-      publishAndSelectTheme(page, conformanceThemePackage(), "site"),
-    );
-    const context = await tracedContext();
-    try {
-      for (const route of ["/", post.permalink]) {
-        const publicPage = await context.newPage();
-        try {
-          await publicPage.setViewportSize({ width: 390, height: 844 });
-          await goto(publicPage, route, { timeout: firstNav });
-          await expect(publicPage.locator(".j-root")).toHaveAttribute(
-            "data-theme",
-            "custom",
-          );
-          const image = await imageGeometry(
-            publicPage,
-            post.post_id,
-            "Site wide",
-          );
-          expect(image.width).toBeLessThanOrEqual(image.bodyWidth + 1);
-          expect(image.width / image.height).toBeCloseTo(1.5, 2);
-          expect(image.documentOverflow).toBeLessThanOrEqual(1);
-        } finally {
-          await publicPage.close();
-        }
-      }
-    } finally {
-      await context.close();
-    }
+  await signInAs(page, "testoperator");
+  const wide = await uploadMedia(
+    page,
+    "site-wide.svg",
+    imageBytes(1200, 800),
+    "image/svg+xml",
+  );
+  const post = await createPostViaApi(page, {
+    body: `![Site wide](${wide.url})`,
   });
+  await publishAndSelectTheme(page, conformanceThemePackage(), "site");
+  const context = await tracedContext();
+  try {
+    for (const route of ["/", post.permalink]) {
+      const publicPage = await context.newPage();
+      try {
+        await publicPage.setViewportSize({ width: 390, height: 844 });
+        await goto(publicPage, route, { timeout: firstNav });
+        await expect(publicPage.locator(".j-root")).toHaveAttribute(
+          "data-theme",
+          "custom",
+        );
+        const image = await imageGeometry(
+          publicPage,
+          post.post_id,
+          "Site wide",
+        );
+        expect(image.width).toBeLessThanOrEqual(image.bodyWidth + 1);
+        expect(image.width / image.height).toBeCloseTo(1.5, 2);
+        expect(image.documentOverflow).toBeLessThanOrEqual(1);
+      } finally {
+        await publicPage.close();
+      }
+    }
+  } finally {
+    await context.close();
+  }
 });
 
 test("Markdown, Org, and HTML image rendering shares the Post-body wrapper", async ({

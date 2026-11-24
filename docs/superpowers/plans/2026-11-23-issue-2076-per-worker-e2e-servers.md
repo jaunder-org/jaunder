@@ -95,7 +95,7 @@ exactly once.
 
 ### Deliverable B — state rule, then topology
 
-- [ ] Task 3: Apply the state rule across the suite (old topology still in
+- [x] Task 3: Apply the state rule across the suite (old topology still in
       place)
   - Contract:
     - Remove pure-restore code. Where a `finally` also asserts something, keep

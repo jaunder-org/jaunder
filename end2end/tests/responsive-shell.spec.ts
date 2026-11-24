@@ -5,7 +5,7 @@ import {
   confirmedMutation,
   type MutationOutcome,
 } from "./helpers";
-import { openThemeAdvanced, withSiteThemeSelection } from "./theme-helpers";
+import { openThemeAdvanced } from "./theme-helpers";
 
 const THEME_ENDPOINTS = {
   save_editor: "/api/themes/save_editor",
@@ -34,75 +34,67 @@ test("custom Theme surface reaches the public rail and scroll canvas", async ({
   page,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    await goto(page, "/themes");
-    await page.getByRole("tab", { name: "Site", exact: true }).click();
-    await page
-      .getByRole("button", { name: "Create theme", exact: true })
-      .click();
-    const mutation = (endpoint: keyof typeof THEME_ENDPOINTS) =>
-      page.waitForResponse(
-        (response) =>
-          new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
-          response.request().method() === "POST",
-      );
-    await page
-      .getByLabel("Name", { exact: true })
-      .fill("Continuous shell proof");
-    await page
-      .getByLabel("Style (CSS)", { exact: true })
-      .fill(":root { background: rgb(1, 2, 3); }");
-    const [saved] = await Promise.all([
-      mutation("save_editor"),
-      page.getByRole("button", { name: "Save changes", exact: true }).click(),
-    ]);
-    expect(saved.status()).toBe(200);
-    confirmedMutation(
-      (await saved.json()) as MutationOutcome<unknown>,
-      "themes::save_editor",
+  await signInAs(page, "testoperator");
+  await goto(page, "/themes");
+  await page.getByRole("tab", { name: "Site", exact: true }).click();
+  await page.getByRole("button", { name: "Create theme", exact: true }).click();
+  const mutation = (endpoint: keyof typeof THEME_ENDPOINTS) =>
+    page.waitForResponse(
+      (response) =>
+        new URL(response.url()).pathname === THEME_ENDPOINTS[endpoint] &&
+        response.request().method() === "POST",
     );
-    await page
-      .getByRole("button", { name: "Edit Continuous shell proof", exact: true })
-      .click();
-    await openThemeAdvanced(page);
-    await Promise.all([
-      mutation("publish"),
-      page.getByRole("button", { name: "Publish", exact: true }).click(),
-    ]);
-    const selection = page.getByLabel("Use published version", { exact: true });
-    const id = await selection
-      .getByRole("option", { name: "Continuous shell proof" })
-      .getAttribute("value");
-    expect(id).not.toBeNull();
-    await mutate(async () => {
-      const [response] = await Promise.all([
-        mutation("select"),
-        selection.selectOption(id!),
-      ]);
-      expect(response.status()).toBe(200);
-      confirmedMutation(
-        (await response.json()) as MutationOutcome<null>,
-        "themes::select",
-      );
-    });
+  await page.getByLabel("Name", { exact: true }).fill("Continuous shell proof");
+  await page
+    .getByLabel("Style (CSS)", { exact: true })
+    .fill(":root { background: rgb(1, 2, 3); }");
+  const [saved] = await Promise.all([
+    mutation("save_editor"),
+    page.getByRole("button", { name: "Save changes", exact: true }).click(),
+  ]);
+  expect(saved.status()).toBe(200);
+  confirmedMutation(
+    (await saved.json()) as MutationOutcome<unknown>,
+    "themes::save_editor",
+  );
+  await page
+    .getByRole("button", { name: "Edit Continuous shell proof", exact: true })
+    .click();
+  await openThemeAdvanced(page);
+  await Promise.all([
+    mutation("publish"),
+    page.getByRole("button", { name: "Publish", exact: true }).click(),
+  ]);
+  const selection = page.getByLabel("Use published version", { exact: true });
+  const id = await selection
+    .getByRole("option", { name: "Continuous shell proof" })
+    .getAttribute("value");
+  expect(id).not.toBeNull();
+  const [response] = await Promise.all([
+    mutation("select"),
+    selection.selectOption(id!),
+  ]);
+  expect(response.status()).toBe(200);
+  confirmedMutation(
+    (await response.json()) as MutationOutcome<null>,
+    "themes::select",
+  );
 
-    const context = await tracedContext();
-    try {
-      const publicPage = await context.newPage();
-      await goto(publicPage, "/");
-      await expect(publicPage.locator(".j-root")).toHaveAttribute(
-        "data-theme",
-        "custom",
+  const context = await tracedContext();
+  try {
+    const publicPage = await context.newPage();
+    await goto(publicPage, "/");
+    await expect(publicPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "custom",
+    );
+    for (const selector of [".j-sidebar", ".j-scroll"]) {
+      await expect(publicPage.locator(selector)).toHaveCSS(
+        "background-color",
+        "rgba(0, 0, 0, 0)",
       );
-      for (const selector of [".j-sidebar", ".j-scroll"]) {
-        await expect(publicPage.locator(selector)).toHaveCSS(
-          "background-color",
-          "rgba(0, 0, 0, 0)",
-        );
-      }
-    } finally {
-      await context.close();
     }
-  });
+  } finally {
+    await context.close();
+  }
 });

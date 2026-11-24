@@ -12,7 +12,7 @@ import { navigateInApp } from "./navigate";
 import { allowSecondBoot } from "./bootBudget";
 import { fetchFeedContaining } from "./feeds";
 import { createPostViaApi } from "./posts";
-import { applySeededSession, seedUserViaTool } from "./seed";
+import { applySeededSession, seedConfigViaTool, seedUserViaTool } from "./seed";
 import { SEL } from "./selectors";
 
 // The profile "Update Profile" control is a plain button that dispatches the
@@ -202,6 +202,7 @@ test("default post format round-trips through the typed dispatch", async ({
 test("User Default Audience round-trips and can return to site inheritance", async ({
   registeredPage,
 }) => {
+  await seedConfigViaTool("posts.default_audience", "private");
   const page = await registeredPage("/profile");
 
   await expect(page.locator(DEFAULT_AUDIENCE)).toHaveValue("inherit");
@@ -259,6 +260,7 @@ test("failed default post format load shows an error and gates Save", async ({
 test("Content License persists and updates existing public Post declarations", async ({
   page,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const username = await signInAsNewUser(page);
   const post = await createPostViaApi(page, {
     body: "# Existing Content Rights Post\n\nThe authored body stays unchanged.",

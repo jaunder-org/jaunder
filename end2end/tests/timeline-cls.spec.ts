@@ -27,11 +27,7 @@ import { test, expect, slowBrowserTimeoutMs } from "./fixtures";
 import { signInAsNewUser } from "./helpers";
 import { createPostViaApi } from "./posts";
 import { expectNoShiftAcrossMount } from "./layout-shift";
-import {
-  restoreConfigViaTool,
-  snapshotConfigViaTool,
-  seedConfigViaTool,
-} from "./seed";
+import { seedConfigViaTool } from "./seed";
 
 async function expectSemanticHero(page: Page): Promise<void> {
   const hero = page.locator('[data-jaunder-part="hero"]');
@@ -111,14 +107,8 @@ for (const route of ROUTES) {
     // configured masthead—not only the default one—coincides with CSR on first paint.
     const configuredLocalIdentity = route.name === "/";
     let guestContext: Awaited<ReturnType<typeof tracedContext>> | undefined;
-    let priorTitle:
-      Awaited<ReturnType<typeof snapshotConfigViaTool>> | undefined;
-    let priorTagline:
-      Awaited<ReturnType<typeof snapshotConfigViaTool>> | undefined;
     try {
       if (configuredLocalIdentity) {
-        priorTitle = await snapshotConfigViaTool("site.title");
-        priorTagline = await snapshotConfigViaTool("site.tagline");
         await seedConfigViaTool("site.title", "CLS <Site>");
         await seedConfigViaTool("site.tagline", "A <configured> & tagline");
       }
@@ -236,19 +226,6 @@ for (const route of ROUTES) {
       });
     } finally {
       await guestContext?.close();
-      if (configuredLocalIdentity) {
-        // This spec writes process-global config; restore the exact prior rows even
-        // when the first restoration command fails.
-        try {
-          if (priorTagline !== undefined) {
-            await restoreConfigViaTool("site.tagline", priorTagline);
-          }
-        } finally {
-          if (priorTitle !== undefined) {
-            await restoreConfigViaTool("site.title", priorTitle);
-          }
-        }
-      }
     }
   });
 }

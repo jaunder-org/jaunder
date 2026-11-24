@@ -1,5 +1,6 @@
 import { expect, type Page } from "@playwright/test";
 import { BASE_URL, confirmedMutation, type MutationOutcome } from "./helpers";
+import { seedConfigViaTool } from "./seed";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -14,13 +15,17 @@ export function cleanImage(): Buffer {
 
 export type UploadedMedia = { url: string; filename: string };
 
-/** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
+/**
+ * Enables the site's Media Upload Capability, uploads `name` and returns the
+ * upload response (`url`, canonical `filename`).
+ */
 export async function uploadMedia(
   page: Page,
   name: string,
   content: Buffer = cleanImage(),
   mimeType = "image/jpeg",
 ): Promise<UploadedMedia> {
+  await seedConfigViaTool("media.uploads_enabled", "true");
   const response = await page.request.post(BASE_URL + "/api/media/upload", {
     multipart: {
       file: {
