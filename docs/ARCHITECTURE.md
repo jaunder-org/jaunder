@@ -75,13 +75,13 @@ the host coverage denominator
 
 One sibling tree is outside the root workspace as its own cargo workspace:
 `tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
-`host-proof`, `host-tool`, `perf-producer`, `performance`,
-`repository-policy`, `system-artifacts`, and `traced-run`). The host-side dev/CI
-commands live in its concern packages rather than a separate driver workspace,
-and each executable that runs inside a Nix derivation lives in the crate that
-owns its logic ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
-`performance` is the pure versioned dataset, producer-artifact, statistics, and
-comparison library shared by sandbox producers and host analysis under
+`host-proof`, `host-tool`, `perf-producer`, `performance`, `repository-policy`,
+`system-artifacts`, and `traced-run`). The host-side dev/CI commands live in its
+concern packages rather than a separate driver workspace, and each executable
+that runs inside a Nix derivation lives in the crate that owns its logic
+([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). `performance` is
+the pure versioned dataset, producer-artifact, statistics, and comparison
+library shared by sandbox producers and host analysis under
 [ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
 provides the host-only `perf-data` CLI for evidence policy; the Nix performance
 producers run the separate `perf-producer` crate, which links the library with
@@ -5290,8 +5290,8 @@ with traps only for cleanup or failed-step reporting and concurrency only from
 standard tools; signal forwarding, supervising long-lived children, or data
 shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
 steps is outside the rule. Under that decision `e2e-local` and `perf-data` move
-to Python, each in its own follow-up; `pr-observer` has already become the native
-`dev pr-watch`
+to Python, each in its own follow-up; `pr-observer` has already become the
+native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
 [upgrade test](adr/drafts/upgrade-test.md). Until the remaining moves land the
