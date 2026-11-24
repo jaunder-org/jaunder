@@ -35,7 +35,7 @@ MERGE = "b" * 40
 OTHER = "c" * 40
 V, E = "Validate (no e2e)", "e2e gate"
 AGGREGATE = "Aggregate verdict"
-QUEUE_RULES = Rules((V, E))
+QUEUE_RULES = Rules((V, E), strict=False, queue=True)
 WORKFLOW = ".github/workflows/ci.yml"
 OPTIONAL_WORKFLOW = ".github/workflows/diagnostics.yml"
 ORIGIN = "https://github.com/jaunder-org/jaunder.git\n"
@@ -301,6 +301,11 @@ def observe(capsys: pytest.CaptureFixture[str]) -> Any:
     return watch
 
 
+def rules_for(*contexts: str) -> Rules:
+    """A non-strict merge-queue ruleset requiring `contexts`."""
+    return Rules(contexts, strict=False, queue=True)
+
+
 def snap(body: Any) -> Snapshot:
     return pr_watch.parse_snapshot(body, 731)[0]
 
@@ -351,7 +356,6 @@ def error(code: int, stdout: str, stderr: str = "") -> GhError:
         ),
         (1, '{"message":"Bad credentials","status":"401"}', "", Kind.UNAUTHENTICATED),
         (127, "", "gh: command not found", Kind.MISSING),
-        (1, "", "sh: gh: command not found", Kind.MISSING),
         (1, '{"message":"Server Error","status":"502"}', "", Kind.TRANSPORT),
         (1, '{"status":"500"}', "", Kind.TRANSPORT),
         (1, "", "connection reset by peer", Kind.TRANSPORT),
@@ -453,7 +457,6 @@ BAD_POLICIES: list[dict[str, Any]] = [
     {},
     {"strict_required_status_checks_policy": None},
     {"strict_required_status_checks_policy": "false"},
-    {"strict_required_status_checks_policy": False, "do_not_enforce_on_create": None},
 ]
 
 
@@ -574,8 +577,6 @@ def test_another_apps_check_run_and_an_unknown_node_carry_no_actions_identity() 
         {"databaseId": 42.5, "runAttempt": 1, "file": {"path": WORKFLOW}},
         {"databaseId": "42", "runAttempt": 1, "file": {"path": WORKFLOW}},
         {"databaseId": True, "runAttempt": 1, "file": {"path": WORKFLOW}},
-        {"databaseId": 42, "runAttempt": None, "file": {"path": WORKFLOW}},
-        {"databaseId": 42, "runAttempt": 1, "file": None},
     ],
 )
 def test_malformed_actions_run_identity_fails_closed(workflow_run: Any) -> None:
@@ -584,6 +585,23 @@ def test_malformed_actions_run_identity_fails_closed(workflow_run: Any) -> None:
     with pytest.raises(GhError) as raised:
         snap(pr(node))
     assert raised.value.kind is Kind.MALFORMED
+
+
+@pytest.mark.parametrize(
+    "workflow_run",
+    [{"databaseId": 42, "file": None}, {"databaseId": 42, "runAttempt": None}],
+)
+def test_an_actions_check_needs_no_attempt_or_workflow_file(workflow_run: Any) -> None:
+    # GraphQL may leave both out; such a failure is only ever optional.
+    node = job("lane")
+    node["checkSuite"]["workflowRun"] = workflow_run
+    (check,) = snap(pr(node)).checks
+    assert (check.kind, check.run, check.attempt, check.workflow) == (
+        "actions",
+        42,
+        None,
+        None,
+    )
 
 
 def test_maximum_u64_actions_database_ids_remain_exact() -> None:
@@ -817,17 +835,19 @@ jobs:
     name: 7
   bare: null
 """
-    assert pr_watch.job_names(source) == {
-        V,
-        "e2e-gate",
-        "e2e (${{ matrix.lane }})",
-        "bare",
-    }
+    assert pr_watch.job_names(source) == frozenset(
+        {
+            V,
+            "e2e-gate",
+            "e2e (${{ matrix.lane }})",
+            "bare",
+        }
+    )
 
 
 @pytest.mark.parametrize("source", ["jobs: [", "jobs: []", "- a list", ""])
 def test_an_unparseable_workflow_has_no_jobs(source: str) -> None:
-    assert pr_watch.job_names(source) == frozenset()
+    assert pr_watch.job_names(source) is None
 
 
 CI_FILE = f"contents:{WORKFLOW}"
@@ -835,28 +855,53 @@ CI_FILE = f"contents:{WORKFLOW}"
 
 def test_a_workflow_is_read_once_per_path_and_head() -> None:
     reader, fake = github(**{CI_FILE: [contents(workflow(E))]})
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == {E}
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == {E}
-    assert reader.workflow_jobs(WORKFLOW, OTHER) == {E}
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
+    assert reader.workflow_jobs(WORKFLOW, OTHER) == (frozenset({E}), None)
     assert fake.asked("contents") == [
         ["gh", "api", f"repos/o/r/contents/{WORKFLOW}?ref={ref}"]
         for ref in [HEAD, OTHER]
     ]
 
 
+UNDECODABLE = "its contents are not base64 UTF-8 text"
+
+
 @pytest.mark.parametrize(
-    "reply",
-    [NOT_FOUND, TRANSPORT, ok({"message": "no content"}), ok({"content": "%%%"})]
-    + [ok({"content": base64.b64encode(b"\xff").decode()})],
+    ("reply", "problem"),
+    [
+        (NOT_FOUND, "it is unreadable: not found"),
+        (ok({"message": "no content"}), UNDECODABLE),
+        (ok({"content": base64.b64encode(b"\xff").decode()}), UNDECODABLE),
+        (ok({"content": "%%%"}), "it is not a workflow"),
+        (ok(contents("jobs: [")), "it is not a workflow"),
+    ],
 )
-def test_an_unreadable_workflow_has_no_jobs(reply: Reply) -> None:
-    reader, _ = github(**{CI_FILE: [reply]})
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == frozenset()
+def test_an_unusable_workflow_has_no_jobs_and_says_why_once(
+    reply: Reply, problem: str
+) -> None:
+    reader, fake = github(**{CI_FILE: [reply, ok(contents(workflow(E)))]})
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset(), problem)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset(), problem)
+    assert len(fake.asked("contents")) == 1
+
+
+@pytest.mark.parametrize("reply", [TRANSPORT, RATE_LIMITED, (0, "not json", "")])
+def test_a_transient_read_failure_is_retried_on_the_next_poll(reply: Reply) -> None:
+    reader, fake = github(**{CI_FILE: [reply, ok(contents(workflow(E)))]})
+    names, problem = reader.workflow_jobs(WORKFLOW, HEAD)
+    assert names == frozenset() and problem is not None
+    assert problem.startswith("it is unreadable: ")
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
+    assert len(fake.asked("contents")) == 2
 
 
 def test_a_file_outside_the_workflows_directory_is_never_read() -> None:
     reader, fake = github()
-    assert reader.workflow_jobs(".github/actions/x/action.yml", HEAD) == frozenset()
+    assert reader.workflow_jobs(".github/actions/x/action.yml", HEAD) == (
+        frozenset(),
+        "it is outside .github/workflows/",
+    )
     assert fake.asked("contents") == []
 
 
@@ -904,7 +949,7 @@ def test_a_membership_required_failure_is_terminal_before_the_aggregate_settles(
     None
 ):
     failure = snap(pr(job("renamed lane"), status(AGGREGATE, "PENDING")))
-    step = decide(failure, Rules((AGGREGATE,)), required=failure.checks[:1])
+    step = decide(failure, rules_for(AGGREGATE), required=failure.checks[:1])
     assert step == Step(
         "terminal", "checks-failed", "required check failed: renamed lane", URL
     )
@@ -1036,11 +1081,13 @@ def test_the_ejection_probe_fires_only_when_green_open_and_unqueued() -> None:
     assert pr_watch.needs_ejection_probe(snap(green()), QUEUE_RULES)
     for body in [pending(), queued(1), merged()]:
         assert not pr_watch.needs_ejection_probe(snap(body), QUEUE_RULES)
-    assert not pr_watch.needs_ejection_probe(snap(green()), Rules((V, E), queue=False))
+    assert not pr_watch.needs_ejection_probe(
+        snap(green()), Rules((V, E), strict=False, queue=False)
+    )
 
 
 def test_an_empty_required_set_fails_closed_without_an_ejection_probe() -> None:
-    empty = Rules(())
+    empty = rules_for()
     assert not pr_watch.needs_ejection_probe(snap(green()), empty)
     assert decide(snap(green()), empty).outcome == "watcher-error"
 
@@ -1081,7 +1128,7 @@ def test_queue_history_from_an_old_head_does_not_dequeue_the_new_head() -> None:
 
 def test_no_check_name_is_hardcoded() -> None:
     body = pr(status("Alpha", "FAILURE"))
-    assert decide(snap(body), Rules(("Alpha",))).outcome == "checks-failed"
+    assert decide(snap(body), rules_for("Alpha")).outcome == "checks-failed"
 
 
 def test_the_expected_head_outranks_every_other_verdict() -> None:
@@ -1464,13 +1511,15 @@ def test_a_non_actions_optional_failure_reads_no_workflow(observe: Any) -> None:
     assert fake.asked("contents") == []
 
 
-def test_an_unreadable_workflow_is_optional_not_a_poll_error(observe: Any) -> None:
-    lane = job("Renamed validation lane", workflow=".github/workflows/missing.yml")
-    result = observe(membership(pr(lane, ON_HOLD)), once=True)
-    assert result.outcome == "pending"
+def test_an_unreadable_workflow_is_optional_and_says_why_once(observe: Any) -> None:
+    missing = ".github/workflows/missing.yml"
+    lane = job("Renamed validation lane", workflow=missing)
+    result = observe(membership(pr(lane, ON_HOLD), pr(lane, ON_HOLD), merged()))
+    assert result.outcome == "merged"
     assert result.events("poll-error") == []
     assert result.events("warning") == [
-        f"optional check failed: Renamed validation lane ({URL})"
+        f"workflow {missing} has no usable jobs: it is unreadable: not found",
+        f"optional check failed: Renamed validation lane ({URL})",
     ]
 
 

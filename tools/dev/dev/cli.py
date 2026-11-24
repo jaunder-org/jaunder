@@ -400,7 +400,7 @@ _full_sha = _matching(_SHA, "a full lowercase 40-hex head SHA")
 @click.option(
     "--interval",
     type=click.IntRange(min=5),
-    default=30,
+    default=pr_watch.Watch.interval,
     show_default=True,
     metavar="SECONDS",
     help="Seconds between polls.",
@@ -408,7 +408,7 @@ _full_sha = _matching(_SHA, "a full lowercase 40-hex head SHA")
 @click.option(
     "--timeout",
     type=click.IntRange(min=1),
-    default=90,
+    default=pr_watch.Watch.timeout,
     show_default=True,
     metavar="MINUTES",
     help="Minutes to observe before reporting timed-out.",

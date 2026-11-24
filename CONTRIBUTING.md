@@ -1589,12 +1589,13 @@ baseline.
   GitHub Actions check whose workflow file (read at the PR head) defines a job
   named after a ruleset context is immediately `checks-failed`, as if that
   context had failed. Any other failed check emits one explicitly optional
-  warning with its log URL and remains non-terminal; an unreadable workflow file
-  also means optional, which can only delay `checks-failed` until the required
-  aggregate fails. Readiness still requires every ruleset context to succeed.
-  Keep optional jobs out of workflows that define required contexts. The
-  observer only reads this evidence: it does not cancel, rerun, rebase, enqueue,
-  or otherwise mutate workflow jobs
+  warning with its log URL and remains non-terminal; an unusable workflow file
+  also means optional, with its own warning naming the file and the reason (a
+  transient read failure is retried on the next poll). That can only delay
+  `checks-failed` until the required aggregate fails. Readiness still requires
+  every ruleset context to succeed. Keep optional jobs out of workflows that
+  define required contexts. The observer only reads this evidence: it does not
+  cancel, rerun, rebase, enqueue, or otherwise mutate workflow jobs
   ([native observer decision](docs/adr/drafts/pr-watch-native-python-observer.md)).
 
   ```bash

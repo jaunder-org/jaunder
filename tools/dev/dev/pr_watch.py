@@ -41,8 +41,8 @@ import yaml
 
 from dev import steps
 
-# Runs one native command (`gh` or `git`): its status, stdout and stderr.
-Native = Callable[[Sequence[str]], tuple[int, str, str]]
+# Runs one command (`gh` or `git`): its status, stdout and stderr.
+Runner = Callable[[Sequence[str]], tuple[int, str, str]]
 
 MAX_STRIKES = 5
 HEARTBEAT_SECONDS = 600
@@ -95,16 +95,15 @@ class Kind(StrEnum):
 
 # A poll failing for one of these spends a strike; any other ends the watch.
 TRANSIENT = (Kind.RATE_LIMITED, Kind.TRANSPORT, Kind.MALFORMED)
-_FIXED_DETAILS = {
+# How each kind reads in an event or report; `{}` is the error's message.
+_DETAILS = {
     Kind.MISSING: "`gh` is not on PATH",
     Kind.UNAUTHENTICATED: "`gh` is not authenticated",
     Kind.NOT_FOUND: "not found",
     Kind.RATE_LIMITED: "rate limited",
-}
-_DETAIL_PREFIXES = {
-    Kind.GRAPHQL: "graphql",
-    Kind.TRANSPORT: "transport",
-    Kind.MALFORMED: "malformed response",
+    Kind.GRAPHQL: "graphql: {}",
+    Kind.TRANSPORT: "transport: {}",
+    Kind.MALFORMED: "malformed response: {}",
 }
 
 
@@ -120,8 +119,7 @@ class GhError(Exception):
 
     @property
     def detail(self) -> str:
-        fixed = _FIXED_DETAILS.get(self.kind)
-        return fixed or f"{_DETAIL_PREFIXES[self.kind]}: {self.message}"
+        return _DETAILS[self.kind].format(self.message)
 
 
 class NoSubject(Exception):
@@ -143,8 +141,8 @@ def classify(code: int, stdout: str, stderr: str) -> Any:
     `gh api` exits 1 for every failure, so the body decides; a nonzero exit is
     never success, and a GraphQL `errors` array is an error even on exit 0.
     """
-    # First: a missing binary's message would otherwise read as gh speaking.
-    if code == 127 or "command not found" in stderr:
+    # `steps` reports an executable it cannot find as a shell's 127.
+    if code == 127:
         raise GhError(Kind.MISSING)
     try:
         body, parsed = json.loads(stdout), True
@@ -187,7 +185,7 @@ def _get(value: Any, *keys: str) -> Any:
     return value
 
 
-def _count(value: Any) -> bool:
+def _is_natural(value: Any) -> bool:
     """A JSON whole number that can identify something; never a boolean."""
     return type(value) is int and value >= 0
 
@@ -244,14 +242,14 @@ class Snapshot:
     # Git refreshes it on rebase and amend, so a re-pushed head post-dates a
     # merge-group run from before the push.
     committed: datetime
-    checks: tuple[Check, ...] = ()
-    mergeable: str = "MERGEABLE"
-    merge_state: str = "CLEAN"
-    armed: bool = False
-    queued: bool = False
-    position: int | None = None
-    merged_at: str | None = None
-    merge_commit: str | None = None
+    checks: tuple[Check, ...]
+    mergeable: str
+    merge_state: str
+    armed: bool
+    queued: bool
+    position: int | None
+    merged_at: str | None
+    merge_commit: str | None
 
 
 @dataclass(frozen=True)
@@ -259,8 +257,8 @@ class Rules:
     """The live ruleset's requirements: its contexts, strictness and queue."""
 
     contexts: tuple[str, ...]
-    strict: bool = False
-    queue: bool = True
+    strict: bool
+    queue: bool
 
 
 @dataclass(frozen=True)
@@ -300,9 +298,6 @@ def parse_rules(value: Any) -> Rules:
             raise _invalid_rule(index, "required_status_checks")
         if not isinstance(rule_strict, bool):
             raise _invalid_rule(index, "strict_required_status_checks_policy")
-        # Optional, and only about branch creation; a bad value is still bad.
-        if not isinstance(parameters.get("do_not_enforce_on_create", False), bool):
-            raise _invalid_rule(index, "do_not_enforce_on_create")
         for position, check in enumerate(checks):
             context = _get(check, "context")
             if not (isinstance(context, str) and context):
@@ -336,17 +331,17 @@ def parse_check(node: Any) -> Check | None:
         if _get(node, "checkSuite", "app", "slug") != "github-actions":
             return check
         run = _get(node, "checkSuite", "workflowRun")
-        workflow = _text(run, "file", "path")
-        if not (_count(_get(run, "databaseId")) and _count(_get(run, "runAttempt"))):
+        # The run identifies a re-run, so it must be there. The attempt only
+        # tells warnings apart, and a check without a workflow file is optional.
+        if not _is_natural(_get(run, "databaseId")):
             raise _malformed(f"GitHub Actions check {name} has no workflow run")
-        if workflow is None:
-            raise _malformed(f"GitHub Actions check {name} has no workflow file")
+        attempt = run.get("runAttempt")
         return replace(
             check,
             kind="actions",
             run=run["databaseId"],
-            attempt=run["runAttempt"],
-            workflow=workflow,
+            attempt=attempt if _is_natural(attempt) else None,
+            workflow=_text(run, "file", "path"),
         )
     context = _get(node, "context")
     if not isinstance(context, str):
@@ -373,7 +368,7 @@ def parse_snapshot(value: Any, number: int) -> tuple[Snapshot, str | None]:
     pr = _get(value, "data", "repository", "pullRequest")
     if not isinstance(pr, dict):
         raise _malformed("no pullRequest node in response")
-    if not (_count(pr.get("number")) and pr["number"] == number):
+    if not (_is_natural(pr.get("number")) and pr["number"] == number):
         raise _malformed("pull request number does not match the requested PR")
     if pr.get("state") not in ("OPEN", "MERGED", "CLOSED"):
         raise _malformed("pull request has invalid state")
@@ -418,7 +413,7 @@ def parse_snapshot(value: Any, number: int) -> tuple[Snapshot, str | None]:
         # Only a recorded auto-merge request is an arm.
         armed=_text(pr, "autoMergeRequest", "enabledAt") is not None,
         queued=pr["isInMergeQueue"],
-        position=position if _count(position) else None,
+        position=position if _is_natural(position) else None,
         merged_at=_text(pr, "mergedAt"),
         merge_commit=_text(pr, "mergeCommit", "oid"),
     )
@@ -446,7 +441,7 @@ def parse_runs(value: Any, number: int) -> Run | None:
         created = _instant(run.get("created_at"))
         conclusion = run.get("conclusion", 0)
         if not (
-            _count(run.get("id"))
+            _is_natural(run.get("id"))
             and isinstance(run.get("html_url"), str)
             and created is not None
             and (conclusion is None or isinstance(conclusion, str))
@@ -457,15 +452,15 @@ def parse_runs(value: Any, number: int) -> Run | None:
     return newest
 
 
-def job_names(source: str) -> frozenset[str]:
+def job_names(source: str) -> frozenset[str] | None:
     """What a ruleset context can match in one workflow file: each job's
-    literal `name`, or its key when it has none. Unparseable gives nothing."""
+    literal `name`, or its key when it has none; None if it is no workflow."""
     try:
         jobs = _get(yaml.safe_load(source), "jobs")
     except yaml.YAMLError:
-        return frozenset()
+        return None
     if not isinstance(jobs, dict):
-        return frozenset()
+        return None
     names = (
         job.get("name", key) if isinstance(job, dict) else key
         for key, job in jobs.items()
@@ -562,6 +557,20 @@ def head_drift_detail(expected: str, observed: str) -> str:
     )
 
 
+def _settled(snapshot: Snapshot, expected_head: str | None) -> Step | None:
+    """The outcome the snapshot alone decides; no check evidence can change it."""
+    if expected_head is not None and snapshot.head != expected_head:
+        return _end("stale", head_drift_detail(expected_head, snapshot.head))
+    if snapshot.state == "MERGED":
+        return _end("merged", snapshot.merged_at, snapshot.merge_commit)
+    if snapshot.state == "CLOSED":
+        return _end("closed-unmerged")
+    if snapshot.mergeable == "CONFLICTING":
+        detail = "the branch conflicts with the base and needs a rebase"
+        return _end("conflicted", detail)
+    return None
+
+
 def decide(
     snapshot: Snapshot,
     rules: Rules,
@@ -576,15 +585,8 @@ def decide(
     `required` are the failed checks outside the ruleset that workflow
     membership makes required; `queued_head` the head last seen queued.
     """
-    if expected_head is not None and snapshot.head != expected_head:
-        return _end("stale", head_drift_detail(expected_head, snapshot.head))
-    if snapshot.state == "MERGED":
-        return _end("merged", snapshot.merged_at, snapshot.merge_commit)
-    if snapshot.state == "CLOSED":
-        return _end("closed-unmerged")
-    if snapshot.mergeable == "CONFLICTING":
-        detail = "the branch conflicts with the base and needs a rebase"
-        return _end("conflicted", detail)
+    if settled := _settled(snapshot, expected_head):
+        return settled
     ruleset = [resolve(snapshot.checks, name) for name in rules.contexts]
     failed = [check for check in ruleset if check and check.state == FAILURE]
     failed += required
@@ -628,7 +630,7 @@ def decide(
 # Reading GitHub.
 
 
-def _native(argv: Sequence[str]) -> tuple[int, str, str]:
+def _traced(argv: Sequence[str]) -> tuple[int, str, str]:
     code, output, diagnostics = steps.captured(argv[0], argv)
     return code, output.decode(errors="replace"), diagnostics.decode(errors="replace")
 
@@ -637,15 +639,15 @@ class GitHub:
     """The read-only `gh` calls of one watch of one pull request."""
 
     def __init__(
-        self, native: Native, owner: str, repository: str, number: int
+        self, runner: Runner, owner: str, repository: str, number: int
     ) -> None:
-        self.native = native
+        self.runner = runner
         self.slug = f"{owner}/{repository}"
         self.owner, self.repository, self.number = owner, repository, number
-        self._jobs: dict[tuple[str, str], frozenset[str]] = {}
+        self._jobs: dict[tuple[str, str], tuple[frozenset[str], str | None]] = {}
 
     def call(self, *args: str) -> Any:
-        return classify(*self.native(["gh", *args]))
+        return classify(*self.runner(["gh", *args]))
 
     def rules(self) -> Rules:
         return parse_rules(self.call("api", f"repos/{self.slug}/rules/branches/main"))
@@ -703,23 +705,35 @@ class GitHub:
             page += 1
         return run
 
-    def workflow_jobs(self, path: str, head: str) -> frozenset[str]:
-        """The job names in workflow file `path` at commit `head`, read once.
+    def workflow_jobs(self, path: str, head: str) -> tuple[frozenset[str], str | None]:
+        """The job names in workflow file `path` at commit `head`, and why the
+        file could not be used, if it could not.
 
-        A path outside `.github/workflows/`, or a file that cannot be read,
-        has none: its failures stay optional rather than failing the poll.
+        An unusable file has no jobs, so its failures stay optional rather than
+        failing the poll. Each answer is kept for the watch, except a transient
+        read failure: the next poll reads the file again.
         """
-        if (path, head) not in self._jobs:
-            names: frozenset[str] = frozenset()
-            if path.startswith(".github/workflows/"):
-                contents = f"repos/{self.slug}/contents/{path}?ref={head}"
-                try:
-                    encoded = _get(self.call("api", contents), "content")
-                    names = job_names(base64.b64decode(encoded).decode())
-                except GhError, TypeError, ValueError:
-                    pass
-            self._jobs[path, head] = names
-        return self._jobs[path, head]
+        if (path, head) in self._jobs:
+            return self._jobs[path, head]
+        names: frozenset[str] | None = None
+        problem, settled = "it is outside .github/workflows/", True
+        if path.startswith(".github/workflows/"):
+            contents = f"repos/{self.slug}/contents/{path}?ref={head}"
+            try:
+                encoded = _get(self.call("api", contents), "content")
+                names = job_names(base64.b64decode(encoded).decode())
+                problem = "it is not a workflow"
+            except GhError as error:
+                problem, settled = (
+                    f"it is unreadable: {error.detail}",
+                    not error.transient,
+                )
+            except TypeError, ValueError:
+                problem = "its contents are not base64 UTF-8 text"
+        found = (frozenset(), problem) if names is None else (names, None)
+        if settled:
+            self._jobs[path, head] = found
+        return found
 
 
 # The watch loop.
@@ -730,6 +744,7 @@ class Watch:
     """One invocation's options, as `dev pr-watch` takes them."""
 
     number: int | None = None
+    # Seconds between polls, and minutes before `timed-out`; also the CLI's.
     interval: int = 30
     timeout: int = 90
     once: bool = False
@@ -789,38 +804,40 @@ def _progress(
         log("queue", _queue_detail(snapshot))
 
 
-def _optional_detail(check: Check) -> str:
+# A warning, and what makes it the same warning as an earlier one.
+Warning = tuple[tuple[Any, ...], str]
+
+
+def _optional(check: Check, head: str) -> Warning:
+    """One warning per run attempt of an optional failure."""
+    identity = (head, check.kind, check.run, check.attempt, check.name)
     where = f" ({check.url})" if check.url else ""
-    return f"optional check failed: {check.name}{where}"
+    detail = f"optional check failed: {check.name}{where}"
+    return (*identity, check.started, check.completed), detail
 
 
 def _poll(
     github: GitHub, rules: Rules, watch: Watch, queued_head: str | None
-) -> tuple[Snapshot, Step, list[Check]]:
-    """One snapshot, its verdict and its optional failures."""
+) -> tuple[Snapshot, Step, list[Warning]]:
+    """One snapshot, its verdict and its warnings."""
     snapshot = github.snapshot()
-    failures: list[Check] = []
+    warnings: list[Warning] = []
     required: list[Check] = []
     ejection = None
-    if (
-        snapshot.head == (watch.expected_head or snapshot.head)
-        and snapshot.state == "OPEN"
-        and snapshot.mergeable != "CONFLICTING"
-    ):
-        failures = [
-            check
-            for check in resolved_failures(snapshot.checks)
-            if check.name not in rules.contexts
-        ]
-        required = [
-            check
-            for check in failures
-            if check.kind == "actions"
-            and check.workflow is not None
-            and not github.workflow_jobs(check.workflow, snapshot.head).isdisjoint(
-                rules.contexts
-            )
-        ]
+    if _settled(snapshot, watch.expected_head) is None:
+        for check in resolved_failures(snapshot.checks):
+            if check.name in rules.contexts:
+                continue
+            names: frozenset[str] = frozenset()
+            if check.kind == "actions" and check.workflow is not None:
+                names, problem = github.workflow_jobs(check.workflow, snapshot.head)
+                if problem is not None:
+                    detail = f"workflow {check.workflow} has no usable jobs: {problem}"
+                    warnings.append(((check.workflow, snapshot.head, problem), detail))
+            if names.isdisjoint(rules.contexts):
+                warnings.append(_optional(check, snapshot.head))
+            else:
+                required.append(check)
         if needs_ejection_probe(snapshot, rules):
             ejection = github.ejection()
             # Only this invocation's acknowledged run is disregarded, and only
@@ -835,38 +852,20 @@ def _poll(
         queued_head=queued_head,
         required=required,
     )
-    return snapshot, step, [check for check in failures if check not in required]
-
-
-def _report(
-    outcome: str,
-    pr: int,
-    head: str,
-    events: list[dict[str, str]],
-    detail: str | None = None,
-    pointer: str | None = None,
-    phase: str | None = None,
-) -> dict[str, Any]:
-    optional = {"phase": phase, "detail": detail, "pointer": pointer}
-    return {
-        "outcome": outcome,
-        "pr": pr,
-        "head_sha": head,
-        **{key: value for key, value in optional.items() if value is not None},
-        "events": events,
-    }
+    return snapshot, step, warnings
 
 
 def _watch(
-    github: GitHub,
     watch: Watch,
+    runner: Runner,
     now: Callable[[], float],
     sleep: Callable[[float], None],
 ) -> dict[str, Any]:
-    """Polls until an outcome, the deadline or the strike budget ends it."""
+    """The report: polls until an outcome, the deadline or the strike budget
+    ends the watch. Raises NoSubject without a pull request to watch."""
     log = _Log(now)
     deadline = log.last + watch.timeout * 60
-    head = watch.expected_head or ""
+    number, head = watch.number or 0, watch.expected_head or ""
     queued_head = watch.observed_queued_head
     rules: Rules | None = None
     strikes, ever_read = 0, False
@@ -879,8 +878,17 @@ def _watch(
         pointer: str | None = None,
         phase: str | None = None,
     ) -> dict[str, Any]:
-        return _report(outcome, github.number, head, log.events, detail, pointer, phase)
+        optional = {"phase": phase, "detail": detail, "pointer": pointer}
+        present = {key: value for key, value in optional.items() if value is not None}
+        report = {"outcome": outcome, "pr": number, "head_sha": head}
+        return report | present | {"events": log.events}
 
+    try:
+        owner, repository, number = _subject(watch.number, runner)
+    except GhError as error:
+        # The tooling broke, which is more actionable than "no such PR".
+        return end("watcher-error", error.detail)
+    github = GitHub(runner, owner, repository, number)
     while True:
         if now() >= deadline:
             # Whether GitHub never finished or we never could see.
@@ -895,11 +903,11 @@ def _watch(
         try:
             if rules is None:
                 rules = github.rules()
-            snapshot, step, optional = _poll(github, rules, watch, queued_head)
+            snapshot, step, warnings = _poll(github, rules, watch, queued_head)
             if step.outcome == "dequeued":
                 # Disappearance alone cannot tell a dequeue from a merge:
                 # confirm once with fresh evidence.
-                snapshot, step, optional = _poll(github, rules, watch, queued_head)
+                snapshot, step, warnings = _poll(github, rules, watch, queued_head)
         except GhError as error:
             # An absorbed failure is still an event: silence would read as
             # "nothing changed".
@@ -927,12 +935,10 @@ def _watch(
         if step.outcome is None and not (ready and not watch.until):
             _progress(log, previous, current, snapshot)
         previous = current
-        for check in optional:
-            attempt = (snapshot.head, check.kind, check.run, check.attempt)
-            identity = (*attempt, check.name, check.started, check.completed)
+        for identity, detail in warnings:
             if identity not in warned:
                 warned.add(identity)
-                log("warning", _optional_detail(check))
+                log("warning", detail)
         if snapshot.queued:
             queued_head = snapshot.head
         if step.outcome is not None:
@@ -949,57 +955,42 @@ def _watch(
         sleep(watch.interval)
 
 
-def _subject(number: int | None, native: Native) -> tuple[str, str, int]:
+def _subject(number: int | None, runner: Runner) -> tuple[str, str, int]:
     """The repository from the origin remote, and the PR: `number`, or the
     current branch's open PR."""
-    code, url, _ = native(["git", "remote", "get-url", "origin"])
+    code, url, _ = runner(["git", "remote", "get-url", "origin"])
     remote = None if code else parse_remote(url)
     if remote is None:
         raise NoSubject("no GitHub origin remote")
     if number is not None:
         return *remote, number
-    code, branch, _ = native(["git", "branch", "--show-current"])
+    code, branch, _ = runner(["git", "branch", "--show-current"])
     branch = branch.strip()
     if code or not branch:
         raise NoSubject("no current branch; pass a PR number")
     listing = ["pr", "list", "--head", branch, "--state", "open"]
     listing += ["--repo", "/".join(remote), "--json", "number"]
     try:
-        found = classify(*native(["gh", *listing]))
+        found = classify(*runner(["gh", *listing]))
     except GhError as error:
         if error.kind is not Kind.NOT_FOUND:
             raise
         found = None
     first = _get(found[0] if isinstance(found, list) and found else None, "number")
-    if not _count(first):
+    if not _is_natural(first):
         raise NoSubject(f"no open PR for branch {branch}; pass a PR number")
     return *remote, first
 
 
-def observe(
-    watch: Watch,
-    native: Native = _native,
-    now: Callable[[], float] = time.time,
-    sleep: Callable[[float], None] = time.sleep,
-) -> dict[str, Any]:
-    """The report on `watch`'s pull request; raises NoSubject without one."""
-    try:
-        owner, repository, number = _subject(watch.number, native)
-    except GhError as error:
-        # The tooling broke, which is more actionable than "no such PR".
-        return _report("watcher-error", watch.number or 0, "", [], error.detail)
-    return _watch(GitHub(native, owner, repository, number), watch, now, sleep)
-
-
 def run(
     watch: Watch,
-    native: Native = _native,
+    runner: Runner = _traced,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Prints the report; its outcome is the exit status."""
     try:
-        report = observe(watch, native, now, sleep)
+        report = _watch(watch, runner, now, sleep)
     except steps.StepFailed:
         raise
     except NoSubject as refusal:

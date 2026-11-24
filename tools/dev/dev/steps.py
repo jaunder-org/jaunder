@@ -170,12 +170,12 @@ def _supervise(
     capture: bool,
     environment: Environment | None = None,
     stdin: bytes | None = None,
-    errors: bool = False,
+    capture_stderr: bool = False,
 ) -> tuple[int, bool, bytes, bytes]:
     """Runs the child to completion, relaying termination requests to it.
 
     With `capture`, the child's stdout is returned instead of passed through,
-    and with `errors` its stderr likewise; `stdin`, if given, is the child's
+    and with `capture_stderr` its stderr likewise; `stdin`, if given, is the child's
     whole standard input.
     """
     child_environment = changed(
@@ -191,7 +191,7 @@ def _supervise(
                 env=child_environment,
                 stdin=None if stdin is None else subprocess.PIPE,
                 stdout=subprocess.PIPE if capture else None,
-                stderr=subprocess.PIPE if errors else None,
+                stderr=subprocess.PIPE if capture_stderr else None,
             )
         except FileNotFoundError as error:
             print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
@@ -346,7 +346,9 @@ def captured(name: str, argv: Sequence[str]) -> tuple[int, bytes, bytes]:
     the end of the gate; only a termination request still stops it.
     """
     with _step(name, argv) as span:
-        code, signalled, output, diagnostics = _supervise(argv, True, errors=True)
+        code, signalled, output, diagnostics = _supervise(
+            argv, True, capture_stderr=True
+        )
         _record_outcome(span, code, signalled)
     if signalled:
         raise StepFailed(code, signalled)
