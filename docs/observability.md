@@ -783,7 +783,7 @@ lane; fast feedback only in the static one.
   without an e2e run.
 - **E2e** (`dev e2e`, or `dev e2e-reconcile sqlite chromium <root>`): after the
   SQLite/Chromium pair reconciles, derives the snapshot from the union of its
-  four lanes' lifted captures and fails on any difference; it never regenerates
+  three lanes' lifted captures and fails on any difference; it never regenerates
   automatically.
 
 **Regeneration is explicit.** Every output is lane-qualified. The reconciled

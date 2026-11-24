@@ -44,67 +44,67 @@
       "equivalentTo": "packages.x86_64-linux.e2e-checks"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-chromium-1-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-1-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-chromium-2-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-2-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-chromium-3-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-chromium-3-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-chromium-4-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-1-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-firefox-1-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-2-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-firefox-2-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-3-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-firefox-3-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-4-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-postgres-firefox-4-of-4",
+      "attr": "checks.x86_64-linux.e2e-postgres-firefox-5-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-1-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-1-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-2-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-2-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-3-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-3-of-3",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-chromium-4-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-1-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-1-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-2-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-2-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-3-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-3-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-4-of-5",
       "classification": "final"
     },
     {
-      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-4-of-4",
+      "attr": "checks.x86_64-linux.e2e-sqlite-firefox-5-of-5",
       "classification": "final"
     },
     {
@@ -118,22 +118,17 @@
       "sourceFamily": "e2e-package"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-chromium-1-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-1-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-chromium-2-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-2-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-chromium-3-of-4-driver",
-      "classification": "support",
-      "sourceFamily": "e2e-driver"
-    },
-    {
-      "attr": "packages.x86_64-linux.e2e-postgres-chromium-4-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-chromium-3-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
@@ -147,22 +142,27 @@
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-firefox-1-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-1-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-firefox-2-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-2-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-firefox-3-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-3-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-postgres-firefox-4-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-4-of-5-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-postgres-firefox-5-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
@@ -194,22 +194,17 @@
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-1-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-1-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-2-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-2-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-3-of-4-driver",
-      "classification": "support",
-      "sourceFamily": "e2e-driver"
-    },
-    {
-      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-4-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-chromium-3-of-3-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
@@ -223,22 +218,27 @@
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-1-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-1-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-2-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-2-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-3-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-3-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },
     {
-      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-4-of-4-driver",
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-4-of-5-driver",
+      "classification": "support",
+      "sourceFamily": "e2e-driver"
+    },
+    {
+      "attr": "packages.x86_64-linux.e2e-sqlite-firefox-5-of-5-driver",
       "classification": "support",
       "sourceFamily": "e2e-driver"
     },

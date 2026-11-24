@@ -67,7 +67,8 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
     assert_eq!(emitted.len(), 16);
     let mut pairs = Vec::new();
     for backend in ["postgres", "sqlite"] {
-        for browser in ["chromium", "firefox"] {
+        // Each browser's shard count is its own (Chromium 3, Firefox 5).
+        for (browser, shards) in [("chromium", 3), ("firefox", 5)] {
             pairs.push(serde_json::json!({"backend": backend, "browser": browser}));
             assert_eq!(
                 values["lanes"]
@@ -76,7 +77,7 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
                     .iter()
                     .filter(|lane| lane["backend"] == backend && lane["browser"] == browser)
                     .count(),
-                4
+                shards
             );
         }
     }
@@ -121,19 +122,19 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_ungated_browsers
             .position(|lane| lane["identity"] == identity)
             .unwrap()
     };
-    let shard = index("sqlite-chromium-4-of-4");
+    let shard = index("sqlite-chromium-3-of-3");
     let mut duplicate = base.clone();
     duplicate["lanes"][2]["identity"] = duplicate["lanes"][0]["identity"].clone();
     // A pair whose shards repeat one index, or miss one.
     let mut shards = base.clone();
     shards["lanes"][shard]["shardIndex"] = 1.into();
-    shards["lanes"][shard]["identity"] = "sqlite-chromium-1-of-4".into();
+    shards["lanes"][shard]["identity"] = "sqlite-chromium-1-of-3".into();
     let mut missing_shard = base.clone();
     missing_shard["lanes"][shard]["enabled"] = false.into();
     // A lane's browser selects its one project, so it must be a gated browser.
     let mut ungated = base.clone();
     ungated["lanes"][shard]["browser"] = "webkit".into();
-    ungated["lanes"][shard]["identity"] = "sqlite-webkit-4-of-4".into();
+    ungated["lanes"][shard]["identity"] = "sqlite-webkit-3-of-3".into();
     // An enabled unsplit lane.
     let mut unsplit = base.clone();
     unsplit["lanes"][index("sqlite-chromium-unsplit")]["enabled"] = true.into();
@@ -141,8 +142,13 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_ungated_browsers
     // exactly the gated browsers.
     let mut malformed_weights = base.clone();
     malformed_weights["shardWeights"]["firefox"] = "34/22/22/22".into();
+    // A browser's weight count must match its lanes' shard count.
     let mut miscounted_weights = base.clone();
     miscounted_weights["shardWeights"]["firefox"] = "34:33:33".into();
+    // A lane's shard count must be its own browser's, not another browser's.
+    let mut foreign_count = base.clone();
+    foreign_count["lanes"][shard]["shardCount"] = 5.into();
+    foreign_count["lanes"][shard]["identity"] = "sqlite-chromium-3-of-5".into();
     let mut missing_weights = base.clone();
     missing_weights["shardWeights"]
         .as_object_mut()
@@ -161,6 +167,7 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_ungated_browsers
         unsplit,
         malformed_weights,
         miscounted_weights,
+        foreign_count,
         missing_weights,
         colliding_seed,
         zero_seed,
@@ -168,4 +175,48 @@ fn runtime_projection_rejects_duplicate_identity_bad_shards_and_ungated_browsers
         let output = project(&broken);
         assert!(!output.status.success(), "malformed catalog accepted");
     }
+}
+
+#[test]
+fn runtime_projection_takes_each_browser_shard_count_from_its_weights() {
+    // Retarget Firefox to four shards: drop its fifth lanes, renumber the
+    // rest and give it four weights. Chromium keeps three.
+    let mut catalog = catalog();
+    catalog["shardWeights"]["firefox"] = "25:25:25:25".into();
+    let lanes = catalog["lanes"].as_array_mut().unwrap();
+    lanes.retain(|lane| !(lane["browser"] == "firefox" && lane["shardIndex"] == 5));
+    for lane in lanes.iter_mut() {
+        if lane["browser"] == "firefox" && lane["enabled"] == true {
+            lane["shardCount"] = 4.into();
+            lane["identity"] = format!(
+                "{}-firefox-{}-of-4",
+                lane["backend"].as_str().unwrap(),
+                lane["shardIndex"]
+            )
+            .into();
+        }
+    }
+    let output = project(&catalog);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let emitted: Value = serde_json::from_str(
+        stdout
+            .lines()
+            .find_map(|line| line.strip_prefix("lanes="))
+            .unwrap(),
+    )
+    .unwrap();
+    let count = |browser: &str| {
+        emitted
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|lane| lane["browser"] == browser)
+            .count()
+    };
+    assert_eq!((count("chromium"), count("firefox")), (6, 8));
 }

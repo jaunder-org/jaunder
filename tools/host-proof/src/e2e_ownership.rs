@@ -327,31 +327,39 @@ mod tests {
     const M3: &str = include_str!("testdata/e2e-ownership/shard-3-manifest.json");
     const R4: &str = include_str!("testdata/e2e-ownership/shard-4-report.json");
     const M4: &str = include_str!("testdata/e2e-ownership/shard-4-manifest.json");
+    const R5: &str = include_str!("testdata/e2e-ownership/shard-5-report.json");
+    const M5: &str = include_str!("testdata/e2e-ownership/shard-5-manifest.json");
     fn e() -> Vec<(String, String, String, String)> {
         vec![
             (
-                "sqlite-firefox-1-of-4".into(),
+                "sqlite-firefox-1-of-5".into(),
                 C.into(),
                 R1.into(),
                 M1.into(),
             ),
             (
-                "sqlite-firefox-2-of-4".into(),
+                "sqlite-firefox-2-of-5".into(),
                 C.into(),
                 R2.into(),
                 M2.into(),
             ),
             (
-                "sqlite-firefox-3-of-4".into(),
+                "sqlite-firefox-3-of-5".into(),
                 C.into(),
                 R3.into(),
                 M3.into(),
             ),
             (
-                "sqlite-firefox-4-of-4".into(),
+                "sqlite-firefox-4-of-5".into(),
                 C.into(),
                 R4.into(),
                 M4.into(),
+            ),
+            (
+                "sqlite-firefox-5-of-5".into(),
+                C.into(),
+                R5.into(),
+                M5.into(),
             ),
         ]
     }
@@ -360,7 +368,7 @@ mod tests {
     fn producer_population_rejects_unowned_projects_mixed_reports_and_wrong_lane() {
         let lane = catalog()
             .into_iter()
-            .find(|lane| lane.identity == "sqlite-firefox-1-of-4")
+            .find(|lane| lane.identity == "sqlite-firefox-1-of-5")
             .unwrap();
         assert!(super::validate_population(&lane, R1, M1).is_ok());
         assert!(super::validate_population(&lane, R2, M1).is_err());
