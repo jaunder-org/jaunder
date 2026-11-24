@@ -77,12 +77,12 @@ const diagnosticCoverage = Boolean(process.env.JAUNDER_WASM_COVERAGE_OUT);
 const measurementMode = Boolean(process.env.JAUNDER_WASM_COVERAGE_MODE);
 const performanceMode = performanceEnabled();
 const runnerTrace = performanceMode ? "off" : "retain-on-failure";
-const productionBaselineTls = process.env.JAUNDER_PRODUCTION_BASELINE_TLS
-  ? { ignoreHTTPSErrors: true }
-  : {};
 const diagnosticCoverageSpec = /wasm-coverage\.spec\.ts/;
 const measurementSpec = /wasm-coverage-measure\.spec\.ts/;
 const performanceMeasurementSpec = /browser-performance\.measure\.spec\.ts/;
+// The upgrade check (nix/checks.nix `mkUpgradeCheck`) alone runs this spec.
+const upgradeMode = Boolean(process.env.JAUNDER_UPGRADE_PHASE);
+const upgradeSpec = /upgrade\.spec\.ts/;
 const diagnosticSpec = measurementMode
   ? measurementSpec
   : diagnosticCoverageSpec;
@@ -92,6 +92,7 @@ const ignoreUnavailableSpecializedSpecs = (pattern: RegExp) => {
     sources.push(diagnosticCoverageSpec.source, measurementSpec.source);
   }
   if (!performanceMode) sources.push(performanceMeasurementSpec.source);
+  if (!upgradeMode) sources.push(upgradeSpec.source);
   return new RegExp(sources.join("|"));
 };
 
@@ -137,7 +138,7 @@ function gatedProjects(browser: GatedBrowser): Project[] {
         specPattern([...site, ...themeSpecs, ...inviteSpecs]),
       ),
       grepInvert: visualTag,
-      use: browser === "chromium" ? { ...use, ...productionBaselineTls } : use,
+      use,
     },
     siteSettings: { ...serialConfiguration, testMatch: specPattern(site) },
     theme: { ...serialConfiguration, testMatch: specPattern(themeSpecs) },
@@ -236,6 +237,17 @@ export default defineConfig({
   // theme, SMTP, and media coverage; production baseline remains excluded there.
   projects: [
     ...gatedBrowsers.flatMap(gatedProjects),
+    ...(upgradeMode
+      ? [
+          {
+            name: "chromium-upgrade",
+            testMatch: upgradeSpec,
+            fullyParallel: false,
+            workers: 1,
+            use: gatedBrowserUse.chromium,
+          },
+        ]
+      : []),
     {
       name: "webkit",
       testIgnore: ignoreUnavailableSpecializedSpecs(

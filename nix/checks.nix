@@ -91,8 +91,6 @@ let
     assert !(wasmTestTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(siteTargetSource "tools/qualification/src/lib.rs");
-    assert !(wasmTestTargetSource "tools/qualification/src/lib.rs");
     assert !(siteTargetSource "tools/host-proof/src/lib.rs");
     assert !(wasmTestTargetSource "tools/host-proof/src/lib.rs");
     true;
@@ -138,7 +136,6 @@ let
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
     assert !(builtins.elem "tools/system-artifacts" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
-    assert !(builtins.elem "tools/qualification" coverageMembers);
     assert !(builtins.elem "tools/host-proof" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
     assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
@@ -510,6 +507,64 @@ e2ePhaseTimingHelpers = backend: browser: identity: ''
       print("failed to write e2e phase manifest: " + manifest_out)
 '';
 
+# The upgrade check's earlier-build half: the earlier e2e package creates and
+# verifies the baseline records against the earlier server, using only earlier
+# binaries (opening the database with a current one would migrate it early).
+# It then upgrades the service in place; the caller's ordinary Playwright run
+# is the current build's verification.
+e2eUpgradeBaseline =
+  {
+    upgradeFrom,
+    identity,
+    jaunderDb,
+    schemaVersionQuery,
+  }:
+  ''
+    machine.succeed(
+      "mkdir -p /tmp/upgrade-state && cp -r ${upgradeFrom.e2ePackage} /tmp/e2e-baseline"
+      + " && chmod -R u+w /tmp/e2e-baseline"
+      + " && chown -R jaunder:jaunder /tmp/e2e-baseline /tmp/upgrade-state"
+    )
+    # As the service user: the seed tools write the site's files (the database,
+    # media, the publisher lock) before the earlier server ever has, and the
+    # server must still be able to open them.
+    baseline_status, baseline_out = machine.execute(
+      "cd /tmp/e2e-baseline"
+      + " && runuser -u jaunder -- env"
+      + " PATH=${upgradeFrom.jaunder}/bin:${upgradeFrom.testSupport}/bin:$PATH"
+      + " PLAYWRIGHT_BROWSERS_PATH=${upgradeFrom.browsers}"
+      + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
+      + " FONTCONFIG_FILE=${visualFontConfig}"
+      + " JAUNDER_UPGRADE_PHASE=baseline"
+      + " JAUNDER_UPGRADE_STATE_DIR=/tmp/upgrade-state"
+      + " JAUNDER_CAPTURE_DIR=/var/lib/jaunder/capture"
+      + " JAUNDER_DB=${jaunderDb}"
+      + " JAUNDER_STORAGE_PATH=/var/lib/jaunder/data"
+      + " JAUNDER_TEST_IMAGE_DIR=${../server/tests/fixtures/image-privacy}"
+      + " JAUNDER_TEST_EXECUTABLE=${upgradeFrom.jaunder}/bin/jaunder"
+      + " ${upgradeFrom.nodejs}/bin/node node_modules/.bin/playwright test"
+      + " --config playwright.config.ts --project chromium-upgrade",
+      timeout=${toString e2ePlaywrightTimeout},
+    )
+    print(baseline_out)
+    machine.execute("tar czf /tmp/upgrade-baseline-${identity}.tar.gz -C /tmp/e2e-baseline test-results 2>/dev/null || true")
+    machine.copy_from_machine("/tmp/upgrade-baseline-${identity}.tar.gz", "")
+    if baseline_status != 0:
+      # The ordinary lift below never runs; keep the earlier server's account.
+      machine.execute("journalctl --no-pager -o short-precise > /tmp/upgrade-baseline-journal-${identity}.log")
+      machine.copy_from_machine("/tmp/upgrade-baseline-journal-${identity}.log", "")
+      stop_e2e_capture_writers()
+      retain_e2e_capture()
+    assert baseline_status == 0, "upgrade baseline phase failed on the earlier build (exit %d) for ${identity}" % baseline_status
+
+    schema_before = machine.succeed("${schemaVersionQuery}").strip()
+    machine.succeed("/run/current-system/specialisation/upgraded/bin/switch-to-configuration test")
+    machine.wait_for_unit("jaunder.service", timeout=120)
+    machine.wait_for_open_port(3000, timeout=60)
+    schema_after = machine.succeed("${schemaVersionQuery}").strip()
+    print("upgrade schema version: earlier=" + schema_before + " current=" + schema_after)
+  '';
+
 e2eRunAndCapture =
   {
     backend,
@@ -713,14 +768,20 @@ mkE2eCheck =
     extraNodeConfig ? (_: { }),
     playwrightTimeout ? e2ePlaywrightTimeout,
     vmGlobalTimeout ? playwrightTimeout + e2eLifecycleAllowance + e2eDeadlineReserve,
+    # An earlier build to upgrade from (`mkUpgradeCheck`): { jaunder,
+    # testSupport, e2ePackage, nodejs, browsers }. Null for ordinary lanes,
+    # which then add no upgrade steps.
+    upgradeFrom ? null,
   }:
   assert (producer == null) != (lane == null);
+  assert upgradeFrom == null || producer == null;
   let
     backendPolicy =
       if backend == "sqlite" then
         {
           package = pkgs.sqlite;
           jaunderDb = "sqlite:/var/lib/jaunder/data/jaunder.db";
+          schemaVersionQuery = "${pkgs.sqlite}/bin/sqlite3 /var/lib/jaunder/data/jaunder.db 'SELECT MAX(version) FROM _sqlx_migrations'";
           nodeConfig = _: { };
           setupBeforeJaunder = "";
           seedBeforeStart = true;
@@ -736,6 +797,7 @@ mkE2eCheck =
         {
           package = pkgs.postgresql_18;
           jaunderDb = "postgres://jaunder:testpassword@127.0.0.1/jaunder";
+          schemaVersionQuery = "${pkgs.postgresql_18}/bin/psql -tA postgres://jaunder:testpassword@127.0.0.1/jaunder -c 'SELECT MAX(version) FROM _sqlx_migrations'";
           nodeConfig = lib: {
             services.postgresql = {
               enable = true;
@@ -818,7 +880,12 @@ mkE2eCheck =
           self.nixosModules.jaunder
           (backendPolicy.nodeConfig lib)
           (extraNodeConfig { inherit pkgs lib; })
-        ];
+        ] ++ lib.optional (upgradeFrom != null) {
+          # The earlier build serves first; the `upgraded` specialisation swaps
+          # in the current build in place, as an operator's upgrade does.
+          services.jaunder.package = upgradeFrom.jaunder;
+          specialisation.upgraded.configuration.services.jaunder.package = lib.mkForce jaunderBin;
+        };
 
         virtualisation.memorySize = vmMemory;
         # Default (null) leaves the nixosTest core count alone. The gate
@@ -921,7 +988,11 @@ mkE2eCheck =
           machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")${afterPackageCopy}# Seed a fresh DB and run the one browser this derivation targets.
           # Browsers run as separate derivations (one VM each) so their state
           # mutations cannot interfere; that also lets CI fan them out.
-          seed_db()
+          ${if upgradeFrom == null then "seed_db()" else e2eUpgradeBaseline {
+            inherit upgradeFrom identity;
+            jaunderDb = backendPolicy.jaunderDb;
+            schemaVersionQuery = backendPolicy.schemaVersionQuery;
+          }}
           ${e2eRunAndCapture {
             inherit
               backend
@@ -995,6 +1066,7 @@ mkE2eCombo =
     vmCores ? null,
     vmDiskSize ? null,
     playwrightTimeout ? e2ePlaywrightTimeout,
+    upgradeFrom ? null,
   }:
   let
     # The seed is one or two hex digits (scripts/e2e-matrix.jq), repeated to fill each id.
@@ -1017,7 +1089,7 @@ mkE2eCombo =
     # JAUNDER_E2E_SALT. Changing the hash is its whole job. Spliced here
     # rather than per-family so every combo salts alike.
     extraEnv = extraEnv + pkgs.lib.optionalString (e2eSalt != "") " JAUNDER_E2E_SALT=${e2eSalt}";
-    inherit backend browser traceId traceParent vmMemory vmCores playwrightTimeout;
+    inherit backend browser traceId traceParent vmMemory vmCores playwrightTimeout upgradeFrom;
     lane = {
       inherit
         identity
@@ -1029,6 +1101,34 @@ mkE2eCombo =
         expectedCensusProjectArgs
         expectedCensusTopology
         ;
+    };
+  };
+
+# The upgrade check: an earlier Jaunder flake (`previous`, from getFlake) creates
+# and verifies the baseline records, the service upgrades in place, and the
+# current build verifies the same records. Built on demand by `dev upgrade-test`;
+# never a check, so ordinary CI never fetches an earlier revision.
+mkUpgradeCheck =
+  { previous, backend }:
+  let
+    earlierPkgs = previous.inputs.nixpkgs.legacyPackages.${system};
+    earlier = previous.packages.${system};
+  in
+  mkE2eCombo {
+    inherit backend;
+    browser = "chromium";
+    partition = "upgrade";
+    identity = "upgrade-${backend}";
+    traceSeed = if backend == "sqlite" then "a1" else "a2";
+    projects = [ "chromium-upgrade" ];
+    enabled = true;
+    extraEnv = " JAUNDER_UPGRADE_PHASE=upgraded JAUNDER_UPGRADE_STATE_DIR=/tmp/upgrade-state";
+    upgradeFrom = {
+      jaunder = earlier.jaunder;
+      testSupport = earlier.test-support;
+      e2ePackage = earlier.e2e-support;
+      nodejs = earlierPkgs.nodejs;
+      browsers = earlierPkgs.playwright-driver.browsers;
     };
   };
 
@@ -2874,9 +2974,6 @@ mkWasmCoverageMeasurementProducer =
     else
     sqlxSqlitePatchSource path
     || type == "directory"
-    # Qualification compiles in its evidence schema; its tests embed .gitignore.
-    || path == "${toString ../.}/docs/production-baseline.schema.json"
-    || path == "${toString ../.}/.gitignore"
     || path == "${toString ../.}/.github/workflows/ci.yml"
     # host-proof's performance workflow contract test embeds this owner.
     || path == "${toString ../.}/.github/workflows/performance.yml"
@@ -2921,7 +3018,6 @@ mkWasmCoverageMeasurementProducer =
       assert clippySourceFilter "${toString ../.}/testdata/theme-repository/minimal/preview.png" "regular";
       assert !(clippySourceFilter "${toString ../.}/README.md" "regular");
       assert !(clippySourceFilter "${toString ../.}/docs/ARCHITECTURE.md" "regular");
-      assert clippySourceFilter "${toString ../.}/docs/production-baseline.schema.json" "regular";
       assert builtins.all (relative: clippySourceFilter (cargoSourcePath relative) "directory") [
         "vendor" "${sqlxSqlitePatchRoot}" "${sqlxSqlitePatchRoot}/src" "${sqlxSqlitePatchRoot}/src/connection"
       ];
@@ -2968,7 +3064,7 @@ in
 {
 
   internals = {
-    inherit mkE2eCheck mkPerformanceProducer selectPerformanceProducers;
+    inherit mkE2eCheck mkPerformanceProducer selectPerformanceProducers mkUpgradeCheck;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
     e2eSupportPackages

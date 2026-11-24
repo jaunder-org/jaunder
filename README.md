@@ -77,9 +77,7 @@ If you are deploying with NixOS, import the shared module, select the deployable
 }
 ```
 
-TLS remains the external reverse-proxy boundary. For the opt-in isolated NixOS
-deployment/recovery qualification harness, see the
-[production baseline runbook](./docs/production-baseline.md).
+TLS remains the external reverse-proxy boundary.
 
 For information on the design of `Jaunder`, see
 [the Design document](./docs/DESIGN.md).

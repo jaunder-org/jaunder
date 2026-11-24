@@ -18,10 +18,10 @@ from dev import (
     issues,
     perf,
     pr_watch,
-    qualification,
     static,
     steps,
     summary,
+    upgrade,
 )
 from dev.gates import Docs
 from dev.static import Mode
@@ -255,31 +255,30 @@ _forwarding(
 )
 
 
-@cli.command("production-baseline-discover")
-@click.argument("revision")
-def production_baseline_discover(revision: str) -> None:
-    """Qualify REVISION against this clean, pushed HEAD as the harness."""
-    _gate(lambda: qualification.discover(revision))
+@cli.command("upgrade-test")
+@click.option("--from", "revision", help="Earlier revision to upgrade from.")
+@click.option("--tag", help="Upgrade from the `v*` tag before this one.")
+@click.argument("backend", type=click.Choice(upgrade.BACKENDS))
+def upgrade_test(revision: str | None, tag: str | None, backend: str) -> None:
+    """Upgrade a site an earlier build wrote to this checkout, on BACKEND, in a VM.
+
+    Without --from or --tag the earlier build is the newest green CI run on main.
+    """
+    if revision is not None and tag is not None:
+        raise click.UsageError("--from and --tag are exclusive")
+    _gate(lambda: upgrade.test(revision, tag, backend))
 
 
-@cli.command("production-baseline-accept")
-@click.argument("source")
-@click.argument("target", callback=qualification.nonempty_target)
-def production_baseline_accept(source: str, target: str) -> None:
-    """Accept the change from SOURCE to TARGET with this clean, pushed HEAD."""
-    _gate(lambda: qualification.accept(source, target))
-
-
-@cli.command("production-baseline-qualify-styling")
-def production_baseline_qualify_styling() -> None:
-    """Styling qualification with this clean HEAD as the harness."""
-    _gate(qualification.qualify_styling)
-
-
-@cli.command("production-baseline-smoke")
-def production_baseline_smoke() -> None:
-    """Mutable local lifecycle diagnostic; deliberately no qualification."""
-    _gate(qualification.smoke)
+@cli.command("upgrade-dispatch")
+@click.option(
+    "--from", "revision", help="Earlier revision; default: the last green run."
+)
+@click.option(
+    "--ref", default="main", show_default=True, help="Branch the workflow runs on."
+)
+def upgrade_dispatch(revision: str | None, ref: str) -> None:
+    """Start the CI upgrade workflow."""
+    _gate(lambda: upgrade.dispatch(revision, ref))
 
 
 @cli.command("build-csr")

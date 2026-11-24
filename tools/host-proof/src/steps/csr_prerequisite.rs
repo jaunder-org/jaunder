@@ -38,10 +38,7 @@ pub(crate) mod tests {
     use super::*;
     // Sanitized Vite contract fixture; it is not runnable wasm or a startup proof.
     pub(crate) fn write_bundle(root: &Path) -> host::vite_manifest::CsrViteOutputs {
-        let inventory = host::system_theme::qualification::compile(
-            host::system_theme::qualification::Fixture::A,
-        )
-        .unwrap();
+        let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
         host::system_theme::stage_system_artifact_inventory(
             &inventory,
             &root.join("system-artifacts"),

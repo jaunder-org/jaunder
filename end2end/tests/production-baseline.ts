@@ -17,14 +17,11 @@ import {
 import {
   applySeededSession,
   createSessionViaTool,
+  seedConfigViaTool,
   seedUserViaTool,
   SEEDED_MEDIA_SHA256,
-  parseOrdinaryFixture,
-  parseOrdinarySeedManifest,
-  type OrdinarySeedManifest,
-  type OrdinaryFixture,
-  type OrdinarySeedState,
-  bindOrdinarySeedState,
+  parseSandboxSeedManifest,
+  type SandboxSeedManifest,
   type SeedRecord,
 } from "./seed";
 import {
@@ -35,7 +32,6 @@ import {
 } from "./posts";
 import { mintAppPassword } from "./sessions";
 import { SEL } from "./selectors";
-import { navigateInApp } from "./navigate";
 
 export const OPERATION_MANIFEST = {
   version: 1,
@@ -82,16 +78,12 @@ const PNG = Buffer.from([
   0x60, 0x82,
 ]);
 
-/** Verify the selected fixture's seeded HTTP representations, not row ownership. */
+/** Verify the seeded Media's HTTP representations, not row ownership. */
 export async function verifySeededMedia(
-  state: OrdinarySeedState,
+  state: { seededManifest: SandboxSeedManifest },
   request: APIRequestContext,
 ): Promise<void> {
-  const seededMediaRecords =
-    state.fixture === "modern"
-      ? state.seededManifest.media
-      : [state.seededManifest.media!];
-  for (const seededMedia of seededMediaRecords) {
+  for (const seededMedia of state.seededManifest.media) {
     const expectedSha256 = SEEDED_MEDIA_SHA256[seededMedia.filename];
     expect(expectedSha256, seededMedia.filename).toBeDefined();
     expect(seededMedia.sha256).toBe(expectedSha256);
@@ -100,13 +92,7 @@ export async function verifySeededMedia(
     );
     expect(seededContent.status(), seededMedia.contentUrl).toBe(200);
     expect(seededContent.headers()["content-type"]).toBe(
-      // The pinned historical helper detects .txt as octet-stream.
-      state.fixture === "legacy1419" &&
-        seededMedia.filename === "baseline-seeded.txt"
-        ? "application/octet-stream"
-        : seededMedia.filename.endsWith(".svg")
-          ? "image/svg+xml"
-          : "text/plain",
+      seededMedia.filename.endsWith(".svg") ? "image/svg+xml" : "text/plain",
     );
     const bytes = new Uint8Array(await seededContent.body());
     expect(bytes).toHaveLength(seededMedia.sizeBytes);
@@ -126,7 +112,15 @@ type AuthorAccess = {
   appPassword: string;
   postsCollectionUrl: string;
 };
-export type BaselineState = OrdinarySeedState & {
+/**
+ * The shape `createProductionBaseline` writes. The upgrade test reads a state
+ * an earlier build wrote, so `validateBaselineState` accepts every version
+ * written since the latest tag (docs/adr/drafts/upgrade-test.md).
+ */
+export const BASELINE_STATE_VERSION = 1;
+export type BaselineState = {
+  version: typeof BASELINE_STATE_VERSION;
+  seededManifest: SandboxSeedManifest;
   username: string;
   appPassword: string;
   aliceSession: SeedRecord;
@@ -161,12 +155,7 @@ type SavedPost = {
   permalink: string;
 };
 
-/** Each fixture owns exactly one response contract, independent of replies. */
-export function parseCreatedPost(
-  fixture: OrdinaryFixture,
-  raw: unknown,
-): SavedPost {
-  parseOrdinaryFixture(fixture);
+export function parseCreatedPost(raw: unknown): SavedPost {
   const object = (value: unknown): Record<string, unknown> => {
     if (!value || typeof value !== "object" || Array.isArray(value))
       throw new Error("invalid Post create object");
@@ -177,24 +166,26 @@ export function parseCreatedPost(
     throw new Error("Post creation was not confirmed");
   const confirmed = object(envelope.Confirmed);
   if (
-    fixture === "modern" &&
-    (!Object.keys(confirmed).every((key) =>
+    !Object.keys(confirmed).every((key) =>
       ["post", "publication"].includes(key),
     ) ||
-      typeof confirmed.publication !== "string" ||
-      !["draft", "published", "scheduled"].includes(confirmed.publication))
+    typeof confirmed.publication !== "string" ||
+    !["draft", "published", "scheduled"].includes(confirmed.publication)
   )
-    throw new Error("invalid modern Post publication");
-  const saved = fixture === "legacy1419" ? confirmed : object(confirmed.post);
-  const savedKeys =
-    fixture === "modern"
-      ? ["timezone", "post_id", "slug", "published_at", "permalink"]
-      : ["post_id", "slug", "published_at", "permalink"];
+    throw new Error("invalid Post publication");
+  const saved = object(confirmed.post);
+  const savedKeys = [
+    "timezone",
+    "post_id",
+    "slug",
+    "published_at",
+    "permalink",
+  ];
   if (
     Object.keys(saved).length !== savedKeys.length ||
     !savedKeys.every((key) => key in saved) ||
-    (fixture === "modern" &&
-      (typeof saved.timezone !== "string" || saved.timezone.trim() === "")) ||
+    typeof saved.timezone !== "string" ||
+    saved.timezone.trim() === "" ||
     !Number.isSafeInteger(saved.post_id) ||
     Number(saved.post_id) <= 0 ||
     typeof saved.slug !== "string" ||
@@ -208,29 +199,17 @@ export function parseCreatedPost(
     !saved.permalink.startsWith("/") ||
     saved.permalink.startsWith("//")
   )
-    throw new Error("invalid selected SavedPost");
+    throw new Error("invalid SavedPost");
   return saved as SavedPost;
 }
 
-export function baselineAudience(
-  fixture: OrdinaryFixture,
-  audience: "public" | "subscribers" | "private",
-) {
-  parseOrdinaryFixture(fixture);
-  return fixture === "legacy1419"
-    ? { base: audience, named: [] }
-    : audienceForWire(audience);
-}
-
-/** Only the host-selected fixture can bind retained state. */
-export function validateBaselineState(
-  state: BaselineState,
-  fixture: OrdinaryFixture,
-): void {
-  parseOrdinaryFixture(fixture);
-  if (state.fixture !== fixture)
-    throw new Error("persisted ordinary fixture changed");
-  parseOrdinarySeedManifest(fixture, state.seededManifest);
+/** Accepts the state versions an earlier build may have written. */
+export function validateBaselineState(state: BaselineState): void {
+  // States written before the field existed are version 1.
+  const version = (state as { version?: unknown }).version ?? 1;
+  if (version !== BASELINE_STATE_VERSION)
+    throw new Error(`unsupported baseline state version ${String(version)}`);
+  parseSandboxSeedManifest(state.seededManifest);
 }
 
 type BaselinePostInputs = {
@@ -241,11 +220,7 @@ type BaselinePostInputs = {
   publishAt?: string;
 };
 
-export function baselinePostRequest(
-  fixture: OrdinaryFixture,
-  opts: BaselinePostInputs,
-) {
-  parseOrdinaryFixture(fixture);
+export function baselinePostRequest(opts: BaselinePostInputs) {
   return {
     post: {
       body: opts.body,
@@ -253,74 +228,27 @@ export function baselinePostRequest(
       slug_override: opts.slug ?? null,
       publish: true,
       ...(opts.publishAt ? { publish_at: opts.publishAt } : {}),
-      ...(opts.audience
-        ? { audience: baselineAudience(fixture, opts.audience) }
-        : {}),
+      ...(opts.audience ? { audience: audienceForWire(opts.audience) } : {}),
     },
   };
 }
 
-async function createLegacyPostViaApi(
+async function createPostViaApi(
   page: Page,
-  fixture: OrdinaryFixture,
   opts: BaselinePostInputs,
 ): Promise<SavedPost> {
   const response = await withTimedAction(page, "api.posts.create", () =>
     page.request.post(`${BASE_URL}/api/posts/create`, {
-      data: baselinePostRequest(fixture, opts),
+      data: baselinePostRequest(opts),
     }),
   );
   expect(
     response.ok(),
     `posts::create failed (${response.status()}): ${await response.text()}`,
   ).toBeTruthy();
-  return parseCreatedPost(fixture, await response.json());
+  return parseCreatedPost(await response.json());
 }
-type SeededPost = OrdinarySeedManifest["posts"][number];
-
-export const HISTORICAL_COMPOSER = {
-  body: SEL.postBody,
-  slug: SEL.postSlug,
-  audience: "#audience-base",
-  format: SEL.formatButton("Org"),
-  publish: SEL.publishButton("true"),
-  summary: SEL.saveSummary,
-} as const;
-
-async function openBaselineComposer(
-  page: Page,
-  fixture: OrdinaryFixture,
-): Promise<void> {
-  if (fixture === "modern") return openComposerFromSidebar(page);
-  await navigateInApp(page, () => click(page, '.j-nav a[href="/posts/new"]'), {
-    url: "/posts/new",
-    ready: HISTORICAL_COMPOSER.audience,
-  });
-}
-
-export async function composeBaselinePost(
-  page: Page,
-  fixture: OrdinaryFixture,
-  opts: Parameters<typeof composePost>[1],
-) {
-  parseOrdinaryFixture(fixture);
-  if (fixture === "modern") return composePost(page, opts);
-  return withTimedAction(page, "flow.compose_post", async () => {
-    await page.locator(HISTORICAL_COMPOSER.body).waitFor();
-    await page.fill(HISTORICAL_COMPOSER.body, opts.body);
-    if (opts.format)
-      await click(
-        page,
-        SEL.formatButton(opts.format === "org" ? "Org" : "Markdown"),
-      );
-    if (opts.slug) await page.fill(HISTORICAL_COMPOSER.slug, opts.slug);
-    if (opts.audience)
-      await page.selectOption(HISTORICAL_COMPOSER.audience, opts.audience);
-    await click(page, SEL.publishButton(opts.publish ? "true" : "false"));
-    await page.locator(HISTORICAL_COMPOSER.summary).waitFor();
-    return page.locator(HISTORICAL_COMPOSER.summary);
-  });
-}
+type SeededPost = SandboxSeedManifest["posts"][number];
 
 type FormattedTitleExpectation = {
   slug: string;
@@ -492,9 +420,7 @@ export async function verifySeededManifest(
           },
         );
         expect(audience.status()).toBe(200);
-        expect(await audience.json()).toEqual(
-          baselineAudience(state.fixture, post.visibility),
-        );
+        expect(await audience.json()).toEqual(audienceForWire(post.visibility));
         if (post.publishedAt === null) {
           expect(entry!).toMatch(/<app:draft>yes<\/app:draft>/i);
         } else {
@@ -580,28 +506,9 @@ async function discoverAtomPub(
   };
 }
 
-/** Ordinary controls follow the source-selected fixture, never the DOM. */
-export async function mintBaselineAppPassword(
-  page: Page,
-  fixture: OrdinaryFixture,
-  label: string,
-): Promise<string> {
-  parseOrdinaryFixture(fixture);
-  if (fixture === "modern") return mintAppPassword(page, label);
-  if (new URL(page.url()).pathname !== "/sessions") {
-    await goto(page, "/sessions");
-  }
-  await page.fill('input[name="label"]', label);
-  await click(page, '.j-app-passwords button:has-text("Create app password")');
-  const token = page.locator(".j-app-password-token code");
-  await token.waitFor({ state: "visible", timeout: 15_000 });
-  return ((await token.textContent()) ?? "").trim();
-}
-
 async function createAuthorAccess(
   tracedContext: NewTracedContext,
   username: string,
-  fixture: OrdinaryFixture,
 ): Promise<AuthorAccess> {
   const session = await createSessionViaTool(
     username,
@@ -613,9 +520,8 @@ async function createAuthorAccess(
     const page = await context.newPage();
     try {
       await goto(page, "/sessions");
-      const appPassword = await mintBaselineAppPassword(
+      const appPassword = await mintAppPassword(
         page,
-        fixture,
         `Production baseline manifest ${username}`,
       );
       const authorization = `Basic ${Buffer.from(`${username}:${appPassword}`).toString("base64")}`;
@@ -642,13 +548,21 @@ async function createAuthorAccess(
   }
 }
 
+/** The Site configuration the baseline records depend on. */
+export async function applyBaselineSiteConfig(): Promise<void> {
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  // Baseline records exercise public HTML and Syndication Feed projections.
+  // Make that intent explicit instead of depending on the safe Private
+  // fallback for an unset Site Default Audience.
+  await seedConfigViaTool("posts.default_audience", "public");
+}
+
 export async function createProductionBaseline(
   page: Page,
   tracedContext: NewTracedContext,
-  seededManifest: OrdinarySeedManifest,
-  fixture: OrdinaryFixture = "modern",
+  seededManifest: SandboxSeedManifest,
 ): Promise<BaselineState> {
-  parseOrdinarySeedManifest(fixture, seededManifest);
+  parseSandboxSeedManifest(seededManifest);
   const aliceSession = await createSessionViaTool(
     "alice",
     "Production baseline read-only",
@@ -669,36 +583,35 @@ export async function createProductionBaseline(
     "the real login cold render is part of the baseline, and App Password management has no in-app navigation control",
   );
   await goto(page, "/sessions");
-  const appPassword = await mintBaselineAppPassword(
+  const appPassword = await mintAppPassword(
     page,
-    fixture,
     "Production baseline primary",
   );
-  await openBaselineComposer(page, fixture);
-  const markdown = await composeBaselinePost(page, fixture, {
+  await openComposerFromSidebar(page);
+  const markdown = await composePost(page, {
     ...OPERATION_MANIFEST.browserMarkdown,
     publish: true,
   });
   const browserMarkdownPermalink = await followPermalink(page, markdown);
-  await openBaselineComposer(page, fixture);
-  const org = await composeBaselinePost(page, fixture, {
+  await openComposerFromSidebar(page);
+  const org = await composePost(page, {
     ...OPERATION_MANIFEST.browserOrg,
     format: "org",
     publish: true,
   });
   const browserOrgPermalink = await followPermalink(page, org);
-  await openBaselineComposer(page, fixture);
-  const subscribers = await composeBaselinePost(page, fixture, {
+  await openComposerFromSidebar(page);
+  const subscribers = await composePost(page, {
     ...OPERATION_MANIFEST.subscribers,
     audience: "subscribers",
     publish: true,
   });
   const subscriberPermalink = await followPermalink(page, subscribers);
-  const webHtml = await createLegacyPostViaApi(page, fixture, {
+  const webHtml = await createPostViaApi(page, {
     ...OPERATION_MANIFEST.webHtml,
     format: "html",
   });
-  const scheduled = await createLegacyPostViaApi(page, fixture, {
+  const scheduled = await createPostViaApi(page, {
     ...OPERATION_MANIFEST.scheduledMarkdown,
     publishAt: "2035-01-01T00:00:00Z",
   });
@@ -721,10 +634,11 @@ export async function createProductionBaseline(
     .map((post) => post.author)
     .filter((author, index, all) => all.indexOf(author) === index);
   const authorAccess = await Promise.all(
-    authors.map((author) => createAuthorAccess(tracedContext, author, fixture)),
+    authors.map((author) => createAuthorAccess(tracedContext, author)),
   );
   const state: BaselineState = {
-    ...bindOrdinarySeedState(fixture, seededManifest),
+    version: BASELINE_STATE_VERSION,
+    seededManifest,
     username,
     appPassword,
     aliceSession,
@@ -829,7 +743,7 @@ export async function verifyProductionBaseline(
   state: BaselineState,
   tracedContext: NewTracedContext,
 ): Promise<void> {
-  validateBaselineState(state, state.fixture);
+  validateBaselineState(state);
   const authorization = auth(state);
   await goto(page, "/sessions");
   await expect(
@@ -854,52 +768,50 @@ export async function verifyProductionBaseline(
   }
   await verifySeededManifest(state, tracedContext);
 
-  if (state.fixture === "modern") {
-    const formattedPosts = FORMATTED_TITLE_EXPECTATIONS.map((expected) => {
-      const post = state.seededManifest.posts.find(
-        (candidate) => candidate.slug === expected.slug,
-      );
-      expect(post, `sandbox manifest contains ${expected.slug}`).toBeDefined();
-      expect(post!.visibility, `${expected.slug} is public`).toBe("public");
-      expect(post!.publishedAt, `${expected.slug} is published`).not.toBeNull();
-      return { expected, post: post! };
-    });
-    const formattedContext = await tracedContext();
+  const formattedPosts = FORMATTED_TITLE_EXPECTATIONS.map((expected) => {
+    const post = state.seededManifest.posts.find(
+      (candidate) => candidate.slug === expected.slug,
+    );
+    expect(post, `sandbox manifest contains ${expected.slug}`).toBeDefined();
+    expect(post!.visibility, `${expected.slug} is public`).toBe("public");
+    expect(post!.publishedAt, `${expected.slug} is published`).not.toBeNull();
+    return { expected, post: post! };
+  });
+  const formattedContext = await tracedContext();
+  try {
+    const timeline = await formattedContext.newPage();
     try {
-      const timeline = await formattedContext.newPage();
-      try {
-        await goto(timeline, "/~alice");
-        for (const { expected, post } of formattedPosts) {
-          const article = timeline
-            .locator("article.j-post")
-            .filter({ hasText: expected.visibleText });
-          await expect(article).toHaveCount(1);
-          await expectSafeRenderedTitle(article, expected);
-          await expect(article.locator(".j-post-title a")).toHaveAttribute(
-            "href",
-            new RegExp(`/${post.slug}$`),
-          );
-        }
-      } finally {
-        await timeline.close();
-      }
-
+      await goto(timeline, "/~alice");
       for (const { expected, post } of formattedPosts) {
-        const permalink = await formattedContext.newPage();
-        try {
-          await goto(permalink, seededPostPath(post));
-          expect(new URL(permalink.url()).pathname).toBe(seededPostPath(post));
-          await expectSafeRenderedTitle(
-            permalink.locator("article.j-post"),
-            expected,
-          );
-        } finally {
-          await permalink.close();
-        }
+        const article = timeline
+          .locator("article.j-post")
+          .filter({ hasText: expected.visibleText });
+        await expect(article).toHaveCount(1);
+        await expectSafeRenderedTitle(article, expected);
+        await expect(article.locator(".j-post-title a")).toHaveAttribute(
+          "href",
+          new RegExp(`/${post.slug}$`),
+        );
       }
     } finally {
-      await formattedContext.close();
+      await timeline.close();
     }
+
+    for (const { expected, post } of formattedPosts) {
+      const permalink = await formattedContext.newPage();
+      try {
+        await goto(permalink, seededPostPath(post));
+        expect(new URL(permalink.url()).pathname).toBe(seededPostPath(post));
+        await expectSafeRenderedTitle(
+          permalink.locator("article.j-post"),
+          expected,
+        );
+      } finally {
+        await permalink.close();
+      }
+    }
+  } finally {
+    await formattedContext.close();
   }
 
   for (const viewer of [
@@ -1132,11 +1044,7 @@ export async function verifyFreshAppPasswordLifecycle(
   state: BaselineState,
   tracedContext: NewTracedContext,
 ): Promise<string> {
-  const fresh = await mintBaselineAppPassword(
-    page,
-    state.fixture,
-    "Production baseline revocable",
-  );
+  const fresh = await mintAppPassword(page, "Production baseline revocable");
   const authorization = `Basic ${Buffer.from(`${state.username}:${fresh}`).toString("base64")}`;
   const atomContext = await isolatedRequest(tracedContext);
   try {

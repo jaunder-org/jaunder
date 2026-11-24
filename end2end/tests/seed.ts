@@ -59,55 +59,25 @@ export const SEEDED_MEDIA_SHA256: Readonly<Record<string, string>> = {
     "2e8d0525784fb6a8b04b82131e9d82cddca52445e21c1faa0baccbc7ad44290c",
 };
 
-export type OrdinaryFixture = "modern" | "legacy1419";
-export type HistoricalSeedManifest = Omit<
-  SandboxSeedManifest,
-  "version" | "media"
-> & {
-  version: 1;
-  media: SandboxSeedManifest["media"][number] | null;
-};
-export type OrdinarySeedManifest = SandboxSeedManifest | HistoricalSeedManifest;
-export type OrdinarySeedState =
-  | { fixture: "modern"; seededManifest: SandboxSeedManifest }
-  | { fixture: "legacy1419"; seededManifest: HistoricalSeedManifest };
-
-export function bindOrdinarySeedState(
-  fixture: OrdinaryFixture,
-  raw: unknown,
-): OrdinarySeedState {
-  const manifest = parseOrdinarySeedManifest(fixture, raw);
-  return fixture === "modern"
-    ? { fixture, seededManifest: manifest as SandboxSeedManifest }
-    : { fixture, seededManifest: manifest as HistoricalSeedManifest };
-}
-
-export function parseOrdinaryFixture(raw: unknown): OrdinaryFixture {
-  if (raw !== "modern" && raw !== "legacy1419")
-    throw new Error("unknown ordinary fixture");
-  return raw;
-}
-
 function record(raw: unknown): Record<string, unknown> {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw))
     throw new Error("manifest requires an object");
   return raw as Record<string, unknown>;
 }
 
-/** Selection precedes parsing; the wire representation cannot select policy. */
-export function parseOrdinarySeedManifest(
-  fixture: OrdinaryFixture,
-  raw: unknown,
-): OrdinarySeedManifest {
-  parseOrdinaryFixture(fixture);
+/**
+ * The exact demo-profile manifest. The upgrade test also parses the manifest an
+ * earlier build wrote, so a change to the demo profile keeps accepting every
+ * version written since the latest tag (docs/adr/drafts/upgrade-test.md).
+ */
+export function parseSandboxSeedManifest(raw: unknown): SandboxSeedManifest {
   const manifest = record(raw);
-  const historical = fixture === "legacy1419";
   if (
-    manifest.version !== (historical ? 1 : 2) ||
+    manifest.version !== 2 ||
     Object.keys(manifest).length !== 3 ||
     !Array.isArray(manifest.posts)
   )
-    throw new Error("manifest does not match selected fixture");
+    throw new Error("manifest is not the version 2 demo profile");
   const expected = new Set<string>();
   for (const [author, markdown, org] of [
     ["user", "horizon-worth-keeping", "calm-field-note"],
@@ -130,8 +100,9 @@ export function parseOrdinarySeedManifest(
     expected.add(`${author}/sandbox-post-15`);
   }
   for (const slug of [
-    historical ? "baseline-seeded-html" : "formatted-html-title",
-    ...(!historical ? ["formatted-markdown-title", "formatted-org-title"] : []),
+    "formatted-html-title",
+    "formatted-markdown-title",
+    "formatted-org-title",
     "baseline-seeded-scheduled",
     "baseline-seeded-subscribers",
     "baseline-seeded-private",
@@ -160,19 +131,15 @@ export function parseOrdinarySeedManifest(
     )
       throw new Error("malformed or duplicate seeded Post");
   }
-  const media = historical ? [manifest.media] : manifest.media;
-  if (!Array.isArray(media) || media.length !== (historical ? 1 : 5))
+  const media = manifest.media;
+  if (!Array.isArray(media) || media.length !== 5)
     throw new Error("manifest omitted Media");
   const owners = new Map<string, string>([
     ["baseline-seeded.txt", "alice"],
-    ...(!historical
-      ? ([
-          ["blue-horizon.svg", "user"],
-          ["warm-workshop.svg", "operator"],
-          ["green-field.svg", "alice"],
-          ["violet-night.svg", "bob"],
-        ] as const)
-      : []),
+    ["blue-horizon.svg", "user"],
+    ["warm-workshop.svg", "operator"],
+    ["green-field.svg", "alice"],
+    ["violet-night.svg", "bob"],
   ]);
   for (const value of media) {
     const item = record(value);
@@ -197,7 +164,7 @@ export function parseOrdinarySeedManifest(
     )
       throw new Error("wrong seeded text Media");
   }
-  return raw as OrdinarySeedManifest;
+  return raw as SandboxSeedManifest;
 }
 
 /** The subset `applySeededSession` needs — `fixtures.ts`'s `TestUser` also
@@ -240,21 +207,13 @@ function runSeedTool(args: string[]): SeedRecord {
 }
 
 /** Seed a sandbox profile once and return its exact Rust-owned manifest. */
-export function seedSandboxProfileViaTool(
-  profile: "standard" | "demo",
-): Promise<SandboxSeedManifest>;
-export function seedSandboxProfileViaTool(
-  profile: "demo",
-  fixture: OrdinaryFixture,
-): Promise<OrdinarySeedManifest>;
 export async function seedSandboxProfileViaTool(
   profile: "standard" | "demo",
-  fixture: OrdinaryFixture = "modern",
-): Promise<OrdinarySeedManifest> {
+): Promise<SandboxSeedManifest> {
   return withTimedAction(null, "tool.sandbox.seed", async () => {
     const raw = runSeedToolJson(["seed-sandbox-profile", "--profile", profile]);
     return profile === "demo"
-      ? parseOrdinarySeedManifest(fixture, raw)
+      ? parseSandboxSeedManifest(raw)
       : (raw as unknown as SandboxSeedManifest);
   });
 }

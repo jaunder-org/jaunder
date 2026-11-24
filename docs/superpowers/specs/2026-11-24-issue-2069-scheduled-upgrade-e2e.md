@@ -47,13 +47,14 @@ a state path. Capture lift, the panic gate and the assertions run once, at the
 end. Only Chromium runs, as a single Playwright project.
 
 1. **Earlier build: create, then verify.**
-   - **Earlier binary.** The base node `mkForce`s the service's
-     `preStart`/`ExecStart` to the earlier `jaunder`, as the wasm-coverage
-     checks already do. The module has no `package` option.
+   - **Earlier binary.** The NixOS module gains a standard
+     `services.jaunder.package` option (replacing its factory argument); the
+     base node sets it to the earlier `jaunder`.
    - **No current binaries.** The earlier `jaunder` and `test-support` lead
-     `PATH`, and the seed process points at them. No current-build binary
-     touches the database in this phase. This matters because opening a database
-     migrates it.
+     `PATH`. No current-build binary touches the database in this phase. This
+     matters because opening a database migrates it. The phase runs as the
+     service user, so the files its seed tools create (database, Media, the
+     publisher lock) stay openable by the service.
    - **Earlier toolchain.** The earlier `e2e-support` package runs under the
      earlier nixpkgs' `nodejs` and `playwright-driver.browsers`, so a Playwright
      bump inside the window can't break this phase.
@@ -66,7 +67,7 @@ end. Only Chromium runs, as a single Playwright project.
    - A failure here belongs to the earlier build, not to the upgrade.
 2. **Upgrade in place.**
    - `switch-to-configuration test` moves the node into a specialisation that
-     differs only in the binary, overriding at a stronger priority.
+     differs only in `services.jaunder.package`.
    - systemd stops `jaunder` gracefully, as in production (ADR-0250).
    - It then runs the current `preStart` (`jaunder init --skip-if-exists`),
      which applies pending migrations to the existing database. That is what an
@@ -92,7 +93,7 @@ tests provision their own data and never read the earlier records.
 - The reader accepts every state shape written since the latest tag, because tag
   runs span every change since the previous release. Readers for older shapes
   are pruned only after a newer tag's upgrade run is green.
-- The same rule covers the seeded-manifest parser, `parseOrdinarySeedManifest`,
+- The same rule covers the seeded-manifest parser, `parseSandboxSeedManifest`,
   because that manifest comes from the earlier build's `seed-sandbox-profile`.
 - The writer and reader are the same TypeScript module, so no separate schema is
   needed.
@@ -104,10 +105,12 @@ three triggers:
 
 | Trigger                                 | Upgrades from                                                                                                                                          |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| tag push (`v*`)                         | the previous tag (`git describe --tags --abbrev=0 <tag>^`): the release-to-release path operators take                                                 |
+| tag push (`v*`)                         | the previous `v*` tag merged into `<tag>^`: the release-to-release path operators take                                                                 |
 | weekly cron                             | the `headSha` of the newest successful run of this workflow on `main` (`gh run list … --branch main --status success`): early warning between releases |
 | `workflow_dispatch` with a `from` input | `from`, for example the last tag before cutting a release                                                                                              |
 
+`dev upgrade-test [--from <rev> | --tag <tag>] <backend>` applies these rules,
+so the workflow only passes the trigger through and the rules have unit tests.
 When there is no earlier tag or green run, the build upgrades from itself, which
 still proves the mechanism. Every from-build after this change carries
 `upgrade.spec.ts`, so older revisions need no shim. A tag run reports after the
@@ -129,8 +132,8 @@ call `gh`.
 **Getting the earlier build in.** This follows the existing `performanceLib`
 precedent (`flake.nix`, `tools/dev/dev/perf.py`). The main flake exports
 `upgradeLib.mkUpgradeCheck { previous, backend }` and adds no flake inputs.
-`dev upgrade-test --from <rev> <backend>` resolves `<rev>` locally. It builds
-with `--impure --expr`, using `builtins.getFlake` on the current checkout and on
+`dev upgrade-test` resolves the earlier build to a local commit. It builds with
+`--impure --expr`, using `builtins.getFlake` on the current checkout and on
 `git+file://<checkout>?rev=<sha>`, so any fetched commit works, including
 unpushed probe commits.
 

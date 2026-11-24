@@ -46,7 +46,6 @@
     in
     {
       inherit (nixosLayer) nixosModules nixosConfigurations;
-      lib.productionBaselineVm = nixosLayer.productionBaselineVm;
     }
     // flake-utils.lib.eachSystem [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" ] (
       system:
@@ -65,12 +64,13 @@
         };
       in
       {
-        packages = packageLayer.packages // nixosLayer.packagesForSystem { inherit system pkgs; } // checkLayer.packages;
+        packages = packageLayer.packages // checkLayer.packages;
         emacsPackages = packageLayer.emacsPackages;
         apps = nixosLayer.appsForSystem { inherit system pkgs; };
         checks = checkLayer.checks;
         performanceLib.mkPerformanceProducer = checkLayer.internals.mkPerformanceProducer;
         performanceLib.selectPerformanceProducers = checkLayer.internals.selectPerformanceProducers;
+        upgradeLib.mkUpgradeCheck = checkLayer.internals.mkUpgradeCheck;
         inherit devShells;
       }
     );

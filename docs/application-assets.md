@@ -75,53 +75,27 @@ applicable.
 
 After successful import, start the exact selected package, verify runtime
 identity and actual restored schema, and configure the canonical base URL before
-routing browser traffic to that target. Startup re-verifies system content. The
-styling harness enforces this with a masked initial boot followed by an ordinary
-but proxy-isolated boot; only explicit post-verification admission switches the
-stable origin.
+routing browser traffic to that target. Startup re-verifies system content.
 
-## Qualification and limits
+## Upgrade test and limits
 
-From a clean checkout in the repository devShell:
+The scheduled upgrade test ([upgrade test decision](adr/drafts/upgrade-test.md))
+has an earlier build create and verify a site, upgrades the service in place,
+and has the current build verify the same records on SQLite and PostgreSQL. It
+runs on each `v*` tag (from the previous tag), weekly (from the last green run)
+and on demand:
 
 ```sh
-traced-run -- dev production-baseline-qualify-styling
+traced-run -- dev upgrade-test --from <revision> sqlite   # local VM
+traced-run -- dev upgrade-dispatch --from <revision>       # CI workflow
 ```
 
-This opt-in `dev` workflow is not a production operation or an automatic CI job.
-`dev` captures clean local `HEAD`; the host binds that expected SHA to its clean
-`SourcePin` before Nix harness admission or lifecycle mutation. The immutable
-`git+file:…?rev=<commit>` source requires no canonical origin, upstream
-availability or Git-network preflight. Nix may still need ordinary dependency
-downloads. It binds the executing tools, three canonical fixture products/CSR
-bundles and six VM profiles to one clean source pin, retaining
-anonymous/authenticated Chromium contexts behind one Caddy origin per backend.
-On each SQLite and PostgreSQL backend it proves Create → A warm → B application
-→ A rollback → B public theme → A rollback → same-backend restored A. It checks
-actual cache events, exact running identities, computed presentation,
-retained-byte 200 and empty 304 responses, retired-route 404s, Home protection
-and restored readability. Restore uses the canonical current backup-format
-constant and compares actual schema before browser admission.
-
-Only a fully validated, cleaned run publishes sanitized JSON/Markdown atomically
-under `.xtask/review/evidence/styling-qualification/` for temporary PR review or
-CI artifacts, not committed as repository documentation. Styling validates its
-own evidence identity/phase/context and canary-scans JSON and separately
-generated Markdown; it does not use the ordinary baseline schema/Markdown parity
-validator or publish failed-outcome reports. Both files are staged privately,
-lifecycle cleanup and source recheck precede the final rename, and a workflow
-error exits nonzero without durable evidence. Output is plain process status and
-focused diagnostics, not a generic xtask JSON report, last-result sidecar or
-sentinel. Raw credentials, traces, backups, disks and logs stay private. Each
-result binds its observations to the exact source and product identities tested;
-rerun the harness when fresh proof is needed. Qualification complements, rather
-than replaces, comparable visual pairs and focused interaction/accessibility
-tests.
+It checks that the upgraded site still serves the earlier records, sessions, App
+Passwords and Media, not how stylesheets change across the upgrade. A regression
+in retained stylesheet revisions or their immutable responses surfaces only on a
+run where CSS really changed between the two builds; the rules themselves stay
+covered by ordinary server, storage and Theme e2e tests on both backends.
 
 Chromium (or automated WebKit elsewhere) is **not actual Safari or iPhone
 qualification**. Desktop Safari and iPhone remain unqualified until separately
-observed. Styling qualification does not widen the ordinary format-1 baseline
-validators, replace its four-restore matrix, prove production rollout, satisfy
-[#1419](https://github.com/jaunder-org/jaunder/issues/1419), or establish
-milestone acceptance. See [production baseline](production-baseline.md) for that
-separate contract and [architecture](ARCHITECTURE.md) for delivery ownership.
+observed. See [architecture](ARCHITECTURE.md) for delivery ownership.

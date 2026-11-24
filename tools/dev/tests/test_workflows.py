@@ -143,7 +143,15 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         ["pr-cleanup", "731", "f" * 40, "unmanaged"],
         [["bash", "scripts/pr-cleanup.sh", "731", "f" * 40, "unmanaged"]],
     ),
-    (["production-baseline-smoke"], [words("nix run .#qualification-host")]),
+    (["upgrade-dispatch"], [words("gh workflow run upgrade.yml --ref main")]),
+    (
+        ["upgrade-dispatch", "--from", "earlier", "--ref", "topic"],
+        [
+            words("git rev-parse --verify --end-of-options earlier^{commit}"),
+            words("git branch --remotes --contains", "b" * 40),
+            words("gh workflow run upgrade.yml --ref topic -f", f"from={'b' * 40}"),
+        ],
+    ),
 ]
 
 
@@ -280,6 +288,87 @@ def test_each_entry_point_runs_its_command_with_arguments_kept_as_argv(
     assert workflow.commands() == expected
     assert not (workflow.root / "pwned").exists()
     assert f"dev {args[0]}" in workflow.checkout.merged()
+
+
+LAST_GREEN = words(
+    "gh run list --workflow upgrade.yml --branch main --status success --limit 1"
+    " --json headSha --jq",
+    '.[0].headSha // ""',
+)
+
+
+@pytest.mark.parametrize(
+    ("args", "last_green", "resolution"),
+    [
+        (
+            ["--from", "earlier"],
+            "",
+            [words("git rev-parse --verify --end-of-options earlier^{commit}")],
+        ),
+        (
+            ["--tag", "v2"],
+            "",
+            [
+                words("git tag --list v* --sort=-version:refname --merged v2^"),
+                words("git rev-parse --verify --end-of-options v1^{commit}"),
+            ],
+        ),
+        (
+            ["--tag", "v1"],
+            "",
+            [
+                words("git tag --list v* --sort=-version:refname --merged v1^"),
+                words("git rev-parse --verify --end-of-options v1^{commit}"),
+            ],
+        ),
+        (
+            [],
+            "c" * 40,
+            [
+                LAST_GREEN,
+                words(f"git rev-parse --verify --end-of-options {'c' * 40}^{{commit}}"),
+            ],
+        ),
+        (
+            [],
+            "",
+            [
+                LAST_GREEN,
+                words("git rev-parse --verify --end-of-options HEAD^{commit}"),
+            ],
+        ),
+    ],
+)
+def test_upgrade_test_resolves_its_earlier_build_first(
+    workflow: Workflow,
+    args: list[str],
+    last_green: str,
+    resolution: Commands,
+) -> None:
+    result = workflow.dev("upgrade-test", *args, "sqlite", GH_LAST_GREEN=last_green)
+    assert result.returncode == 0, result
+    assert workflow.commands()[: len(resolution)] == resolution
+
+
+def test_upgrade_test_refuses_both_an_explicit_build_and_a_tag(
+    workflow: Workflow,
+) -> None:
+    result = workflow.dev("upgrade-test", "--from", "earlier", "--tag", "v2", "sqlite")
+    assert result.returncode == 2, result
+    assert workflow.commands() == []
+
+
+def test_upgrade_dispatch_refuses_an_earlier_build_absent_from_origin(
+    workflow: Workflow,
+) -> None:
+    (workflow.root / "not-on-origin").touch()
+    result = workflow.dev("upgrade-dispatch", "--from", "earlier")
+    assert result.returncode != 0, result
+    assert ["gh", "workflow", "run"] not in [
+        command[:3] for command in workflow.commands()
+    ]
+    refusal = f"{'b' * 40} is on no origin branch".encode()
+    assert refusal in result.stdout + result.stderr
 
 
 @pytest.mark.parametrize("code", [0, 3])
@@ -573,9 +662,10 @@ def test_build_csr_assembles_the_bundle_into_target_site(
         ["issue-edit", "731", "title", "Task", "3", "P2", "tooling"],
         ["pr-land", "731"],
         ["pr-cleanup", "731", "f" * 40],
-        ["production-baseline-discover"],
-        ["production-baseline-accept", "source"],
-        ["production-baseline-qualify-styling", "extra"],
+        ["upgrade-test"],
+        ["upgrade-test", "--from", "earlier"],
+        ["upgrade-test", "mysql"],
+        ["upgrade-dispatch", "extra"],
         ["build-csr", "bogus"],
         ["static-all", "bogus"],
         ["adr-format", "extra"],

@@ -82,10 +82,10 @@ evidence, not current-schema materialization.
 
 The schema-51 evidence extends the independent format-3 table inventory and
 retains its exact schema version and complete path set. Its populated writer
-seed installs canonical A, B-app and B-theme inventories; the raw-wire checks
-require current application/theme identities, binary manifest cells,
-live/retained references and six exact immutable content members. The public
-backup interoperability tests and canonical styling qualification separately
+seed installs the release inventory and its changed-application and
+changed-Studio variants; the raw-wire checks require current application/theme
+identities, binary manifest cells, live/retained references and six exact
+immutable content members. The public backup interoperability tests separately
 prove populated restoration/readability. Neither proof relabels a historical
 fixture or changes the format version.
 

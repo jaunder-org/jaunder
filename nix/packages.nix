@@ -496,7 +496,6 @@ let
       mkToolsWorkspacePackage
       ;
   };
-  qualificationHostBin = import ./qualification.nix { inherit mkHostTool; };
   # The tools `dev` runs on the host, from cached outputs instead of compiling
   # the tools workspace. Names stay clear of setup-ci's Cachix pushFilter.
   hostProofBin = mkHostTool {
@@ -548,10 +547,6 @@ let
     assert !(package.sourceAdmits "tools/perf-producer/src/main.rs" "regular");
     package;
   systemArtifactsBin = mkSystemArtifacts { };
-  qualificationSystemArtifactsBin = mkSystemArtifacts {
-    pname = "jaunder-system-artifact-qualification-system-artifacts";
-    features = [ "qualification" ];
-  };
 
   repositoryPolicyBin = import ./repository-policy.nix {
     inherit pkgs craneLib cargoMemberSource cargoPackageClosure workspaceMembers withWorkspacePlaceholders vendorPinnedFork mkToolsWorkspacePackage;
@@ -895,7 +890,6 @@ let
     || (
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
-      && !(pkgs.lib.hasPrefix "tools/qualification/" relative && relative != "tools/qualification/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
       && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
@@ -959,7 +953,6 @@ let
         "test-support"
         "web"
         "tools/repository-policy"
-        "tools/qualification"
         "tools/host-proof"
       ];
   # `checks.tools-doctests` documents every tools member, so the members toolsSrc
@@ -969,7 +962,6 @@ let
     let
       hostRunMembers = [
         "tools/repository-policy"
-        "tools/qualification"
         "tools/host-proof"
       ];
     in
@@ -981,10 +973,7 @@ let
           let
             relative = pkgs.lib.removePrefix "${toString ../.}/" (toString path);
           in
-          toolsSourceFilter path type
-          || cargoMemberSource hostRunMembers path type
-          # Compiled into the qualification library (production_baseline.rs).
-          || relative == "docs/production-baseline.schema.json";
+          toolsSourceFilter path type || cargoMemberSource hostRunMembers path type;
       })
       [
         "client"
@@ -1286,12 +1275,11 @@ let
   mkCsrWasmBundle =
     {
       systemArtifacts,
-      fixture ? null,
       wasm ? csrWasm,
       name ? "jaunder-csr-vite-bundle",
     }:
     pkgs.buildNpmPackage {
-      pname = "${name}${pkgs.lib.optionalString (fixture != null) "-${fixture}"}";
+      pname = name;
       version = "0.1.0";
       src = csrViteSrc;
       npmDepsHash = "sha256-iq1ioeuLXIqCugh1mDvDsdjZCvwoJx87Cfp+rDVdoPU=";
@@ -1313,9 +1301,7 @@ let
         mkdir -p "$input" "$system_artifacts"
         cp csr/index.html "$input/index.html"
         cp csr/entry.js "$input/entry.js"
-        system-artifacts --out "$system_artifacts"${
-          pkgs.lib.optionalString (fixture != null) " --fixture ${fixture}"
-        }
+        system-artifacts --out "$system_artifacts"
         CSR_VITE_PUBLIC_DIR="${../public}" bash scripts/build-csr-assets.sh \
           "$CSR_WASM_INPUT" "$PWD" "$input" "$system_artifacts" "$dist"
         runHook postBuild
@@ -1333,32 +1319,6 @@ let
     wasm = csrDebugWasm;
     name = "jaunder-csr-debug-wasm-bundle";
   };
-  mkSystemArtifactQualificationPackage =
-    fixture:
-    if
-      !builtins.elem fixture [
-        "a"
-        "b-app"
-        "b-theme"
-      ]
-    then
-      throw "unknown system-artifact qualification fixture `${fixture}`"
-    else
-      let
-        csrBundle = mkCsrWasmBundle {
-          systemArtifacts = qualificationSystemArtifactsBin;
-          inherit fixture;
-        };
-      in
-      mkJaunderBin {
-        pname = "jaunder-system-artifact-qualification-${fixture}";
-        inherit csrBundle;
-        passthru = {
-          inherit csrBundle fixture;
-          systemArtifactInventory = "${csrBundle}/system-artifacts";
-        };
-      };
-
   # Separately instrumented CSR producer for the Playwright/WASM coverage probe.
   #
   # Cargo is deliberately only an LLVM-IR producer here.  Its ordinary final
@@ -1632,7 +1592,6 @@ in
         ;
     };
     repository-policy = repositoryPolicyBin;
-    qualification-host = qualificationHostBin;
     host-proof = hostProofBin;
     coverage-check = coverageCheckBin;
     perf-data = perfDataBin;
@@ -1644,22 +1603,6 @@ in
     test-support = testSupportBin;
   }
   // pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux {
-    qualification-harness = import ./qualification-harness.nix {
-      inherit pkgs;
-      qualificationHost = qualificationHostBin;
-      testSupport = testSupportBin;
-      browser = e2ePackage;
-    };
-    qualification-harness-legacy-1419 = import ./qualification-harness.nix {
-      inherit pkgs;
-      name = "jaunder-qualification-harness-legacy-1419";
-      qualificationHost = qualificationHostBin;
-      # Keep the accepted fixture's complete historical dependency graph.
-      testSupport =
-        (builtins.getFlake "github:jaunder-org/jaunder/78d201e6969ed17b8a54b87d3de24be6afa1f5ee")
-        .packages.${pkgs.stdenv.hostPlatform.system}.test-support;
-      browser = e2ePackage;
-    };
     theme-thumbnail-environment = themeThumbnailEnvironment;
     # The manually linked diagnostic module and its retained IR/link evidence.
     # A failed producer still exposes its durable `status.json` and `pipeline.log`
@@ -1698,7 +1641,6 @@ in
       leanTestProfile
       leanDevAndTestProfile
       jaunderBin
-      mkSystemArtifactQualificationPackage
       diagnosticJaunderBin
       diagnosticBaselineJaunderBin
       diagnosticCsrWasmBundle

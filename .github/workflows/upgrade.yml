@@ -1,0 +1,83 @@
+name: Upgrade
+
+# A site an earlier build wrote must survive an in-place upgrade to this
+# commit (the upgrade test decision, docs/ARCHITECTURE.md "Upgrade test").
+# `dev upgrade-test` picks the earlier build: the previous tag for a tag push,
+# the `from` input on dispatch, otherwise the newest green run of this workflow
+# on main.
+on:
+  push:
+    tags: ["v*"]
+  schedule:
+    # Wednesdays 05:41 UTC, off the hour and clear of the other scheduled runs.
+    - cron: "41 5 * * 3"
+  workflow_dispatch:
+    inputs:
+      from:
+        description: Earlier revision to upgrade from (default the last green run)
+        required: false
+        default: ""
+
+concurrency:
+  group: upgrade-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # The last-green lookup reads this workflow's own runs.
+  actions: read
+
+jobs:
+  upgrade:
+    name: upgrade (${{ matrix.backend }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [sqlite, postgres]
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          # The earlier build is loaded from this checkout's own Git objects.
+          fetch-depth: 0
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Upgrade test
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FROM: ${{ inputs.from }}
+        run: |
+          if [[ -n "${FROM:-}" ]]; then
+            earlier=(--from "$FROM")
+          elif [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            earlier=(--tag "$GITHUB_REF_NAME")
+          else
+            earlier=()
+          fi
+          nix develop .#ci-nix --accept-flake-config -c dev upgrade-test "${earlier[@]}" ${{ matrix.backend }}
+      # Diagnostic only: the table never decides the job's result.
+      - name: Trace summary
+        if: always()
+        run:
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
+      - name: Upload upgrade evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: upgrade-${{ matrix.backend }}
+          path: .xtask/diagnostics/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Upload upgrade traces
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: upgrade-trace-${{ matrix.backend }}
+          path: .xtask/run/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

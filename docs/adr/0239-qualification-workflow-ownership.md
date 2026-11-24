@@ -1,6 +1,6 @@
 # ADR-0239: Just Owns Qualification Workflow Entry Points; Nix Owns Provenance
 
-- Status: accepted
+- Status: superseded
 - Date: 2026-11-06
 - Issue: [#1895](https://github.com/jaunder-org/jaunder/issues/1895)
 
@@ -155,3 +155,10 @@ workspace ownership and host unit tests remain. ADR-0225's Nix provenance and
 retained qualification guarantees remain. Numberless proposed status follows
 ADR-0152; this decision is not accepted until its approval/promotion lifecycle.
 No implementation is authorized by this draft.
+
+## Addendum (2026-11-24)
+
+As of #2069 this decision is superseded by
+[the upgrade test decision](drafts/upgrade-test.md): `tools/qualification`, its
+`production-baseline-*` workflows and their evidence contracts were retired.
+Current state: `docs/ARCHITECTURE.md`, "Upgrade test".

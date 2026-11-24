@@ -1,6 +1,7 @@
 import { setTestBudget, test } from "./fixtures";
 import { FEED_POLL_TIMEOUT_MS } from "./feeds";
 import {
+  applyBaselineSiteConfig,
   createProductionBaseline,
   verifyFreshAppPasswordLifecycle,
   verifyProductionBaseline,
@@ -21,11 +22,7 @@ test("production baseline creates and verifies canonical browser and AtomPub rec
       BASELINE_SETUP_ALLOWANCE_MS,
   );
   const seededManifest = await seedSandboxProfileViaTool("demo");
-  await seedConfigViaTool("site.base_url", "https://example.com");
-  // Baseline records exercise public HTML and Syndication Feed projections.
-  // Make that fixture intent explicit instead of depending on the safe Private
-  // fallback for an unset Site Default Audience.
-  await seedConfigViaTool("posts.default_audience", "public");
+  await applyBaselineSiteConfig();
   try {
     const state = await createProductionBaseline(
       page,

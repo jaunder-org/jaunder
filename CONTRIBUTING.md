@@ -883,18 +883,15 @@ source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`), `host-proof` (`e2e-local`,
 `e2e-evidence`, `trace-analysis`, `wasm-audit`, `source-diagnostics`, and
-`test-local`'s `admit-inputs` and `csr-prerequisite`), `coverage`
-(`coverage-check`, nondefault `host` feature) and `qualification`
-(`qualification-host`). `dev` runs them with locked Cargo from the active
-checkout; CI's E2E verifier and the production-baseline workflows use their Nix
-outputs (`packages.host-proof`, `nix run .#qualification-host`). Host tools run
-only on the host, never inside derivations. Runtime paths belong to the active
-checkout, not the tool's store build directory. The executables that run inside
-derivations are likewise owned by the crates whose logic they run:
-`coverage-sandbox` (`coverage`), `doctests` (`doctests`), and the dedicated
-`perf-producer` and `system-artifacts` crates (the latter's `qualification`
-feature only for the system-artifact qualification packages). Each is its own
-Nix package, and a derivation takes only the one it runs.
+`test-local`'s `admit-inputs` and `csr-prerequisite`) and `coverage`
+(`coverage-check`, nondefault `host` feature). `dev` runs them with locked Cargo
+from the active checkout; CI's E2E verifier uses its Nix output
+(`packages.host-proof`). Host tools run only on the host, never inside
+derivations. Runtime paths belong to the active checkout, not the tool's store
+build directory. The executables that run inside derivations are likewise owned
+by the crates whose logic they run: `coverage-sandbox` (`coverage`), `doctests`
+(`doctests`), and the dedicated `perf-producer` and `system-artifacts` crates.
+Each is its own Nix package, and a derivation takes only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -918,9 +915,15 @@ New, nonignored tooling inputs must be included in the Git-backed flake snapshot
 owns this admission; a missing input or failed realization is a refusal, not a
 fallback to an older tool. Explicit
 `cargo test --manifest-path tools/Cargo.toml` and native Cargo builds remain
-source-development diagnostics. Native builds do not qualify production-baseline
-evidence: that requires the Nix-selected executable and harness described in
-[production baseline](docs/production-baseline.md).
+source-development diagnostics.
+
+The scheduled upgrade test upgrades a site an earlier build wrote to this
+checkout and verifies its records
+([upgrade test decision](docs/adr/drafts/upgrade-test.md)).
+`dev upgrade-test --from <rev> <sqlite|postgres>` runs it in a local VM and
+`dev upgrade-dispatch [--from <rev>] [--ref <branch>]` starts the CI workflow.
+Changing `BaselineState` (`end2end/tests/production-baseline.ts`) or the demo
+sandbox profile keeps a reader for every version written since the latest tag.
 
 Host-side steps cover static checks, clippy, the standalone `tools` workspace,
 and day-to-day root-workspace Rust tests. `prepush` adds the Nix doctest
@@ -2285,9 +2288,9 @@ without a compiled Rust docs tool. The documentation and site source filters
 remain narrow; derivation identity includes transitive executable inputs as well
 as admitted sources. Tooling preparation uses generated dummy sources and a
 file-scoped lockfile, with repository-root target alignment and nonempty archive
-admission for ordinary and qualification consumers. Release artifacts are not
-assumed to seed dev-profile clippy. Stable identity is not proof of compiler
-freshness or local/remote realization reuse.
+admission for tool consumers. Release artifacts are not assumed to seed
+dev-profile clippy. Stable identity is not proof of compiler freshness or
+local/remote realization reuse.
 
 Artifact compatibility includes compiler, target, profile, resolved features,
 flags and native inputs; incompatible work must rebuild. Cache legitimate build

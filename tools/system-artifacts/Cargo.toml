@@ -8,11 +8,6 @@ publish.workspace = true
 [lints]
 workspace = true
 
-[features]
-# Internal-only A/B styling artifact production for the system-artifact
-# qualification packages. Normal and public package outputs omit it.
-qualification = ["host/qualification"]
-
 [dependencies]
 anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
