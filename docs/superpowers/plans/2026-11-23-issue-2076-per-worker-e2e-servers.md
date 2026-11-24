@@ -171,12 +171,49 @@ exactly once.
     - `dev check-no-test` is green.
     - A `jaunder-adr-projection` audit of the touched ARCHITECTURE sections.
 
+### Deliverable D — integrate #2065 and choose the shard layout
+
+- [ ] Task 6: Rebase onto `main` (#2065 landed); one project per browser;
+      provisional 4 weighted shards
+  - Contract:
+    - Rebase onto `origin/main`, resolving by intent. This topology supersedes
+      #2065's serial Theme role and lane. ADR-0262's weighting mechanism is kept
+      (`ordinaryShardWeights` → `PWTEST_SHARD_WEIGHTS`).
+    - Drop `<browser>-visual`: each gated browser has one project, `<browser>`.
+      Visual tests take the lane's retry policy. A retried visual test reuses
+      its fixed-name user (`createSessionViaTool` when it already exists). A
+      `snapshotPathTemplate` keeps the existing `…-<browser>-visual-linux.png`
+      names, so no PNGs change.
+    - Catalog: 4 lanes per pair, `--shard=k/4`, with provisional weights.
+    - The ADR draft also supersedes ADR-0262's serial Theme lane and keeps its
+      weighting. Docs follow.
+  - Verification:
+    - The census selects every test exactly once per pair.
+    - Focused `dev e2e-local` runs cover a visual spec and a former Theme spec.
+    - `tsc`, host-proof/dev tests and `dev check-no-test` are green.
+    - One hermetic lane per backend is green.
+
+- [ ] Task 7: Shard shoot-out
+  - Contract:
+    - Open the PR, a ship action, at the Task 6 configuration.
+    - From that CI run's Playwright reports, take per-test durations for each
+      backend×browser pair. Simulate Playwright's weighted shard assignment for
+      3, 4 and 5 shards. Estimate each lane's wall-clock as two-worker time plus
+      the fixed VM boot and seed cost.
+    - Report a table: the slowest lane, the spread, the runner-minutes and the
+      best weights. The user picks the count.
+    - Apply the chosen count and weights to the catalog and docs.
+  - Verification:
+    - The simulation is validated against that CI run's actual lane times for
+      the 4-shard configuration.
+
 ### Ship-boundary proof (owned by jaunder-ship, listed for coverage)
 
-- Run PR CI E2E 5 times, each with its own salt.
-  - Pass if the slowest lane's median is below 14.0 min.
-  - Record the per-lane medians and runner-minutes, and confirm no new class of
-    flake.
+- Run PR CI E2E 5 times on the chosen configuration, each with its own salt.
+  - Pass if the slowest lane's median is below `main`'s current post-#2065
+    slowest-lane median.
+  - Record the per-lane medians and runner-minutes against `main`, and confirm
+    no new class of flake.
 - Put the RSS evidence from Task 4 in the PR body.
 - After landing, re-scope or close #2065.
 
@@ -186,9 +223,8 @@ exactly once.
   reporters must not bind to instance 0, and nothing the runner forks may
   inherit an instance's env.
 - A restarted worker reuses its `parallelIndex`. That's expected, because no
-  test depends on a fresh instance. Visual's fixed-name users assume one run per
-  instance, which `retries: 0` guarantees; `--repeat-each` on a visual test is
-  unsupported.
+  test depends on a fresh instance. A retried visual test reuses its fixed-name
+  user. `--repeat-each` on a visual test is unsupported.
 - Hard-coded `:3000` in `bootBudgetAccounting.spec.ts` and `websub.spec.ts` is
   string data. Confirm that, and leave it unchanged.
 - After the merge, the duration-pressure, boot-decomposition and trace-capture

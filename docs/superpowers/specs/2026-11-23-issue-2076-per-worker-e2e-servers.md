@@ -111,18 +111,30 @@ one-entry instance map is defined once and shared.
   - Each sets the global settings its screenshot renders (title, tagline, site
     theme, registration policy, default audience) to the seed values.
 
-  So visual needs no fresh database and no ordering. It stays a project only for
-  its `@visual` filter and `retries: 0`, with no dependency edges. It is sharded
-  together with ordinary. Under `--shard`, dependency projects would rerun in
-  every shard, so there must be none.
+  So visual needs no fresh database and no ordering. It is an ordinary test in
+  every respect: one project per gated browser, the lane's retry policy, and no
+  dependency edges. A retried visual test reuses its existing fixed-name user. A
+  `snapshotPathTemplate` keeps the existing baseline filenames. Under `--shard`,
+  dependency projects would rerun in every shard, so there must be none.
 
-- Each pair keeps today's 3 runners as plain `--shard` ordinary shards.
+- `main` landed #2065 first: a serial Theme lane plus duration-weighted shards
+  (ADR-0262), for 4 lanes per pair. This work supersedes the serial Theme lane
+  and keeps ADR-0262's weighting mechanism (`PWTEST_SHARD_WEIGHTS` from the
+  catalog).
+- The shard count per pair is chosen by a shoot-out:
+  1. Open the PR at a provisional 4 weighted shards and collect per-test
+     durations from CI.
+  2. Simulate 3, 4 and 5 shards offline. Report for each: the slowest lane, the
+     spread, the runner-minutes and the best weights.
+  3. The user picks the count.
+  4. Re-derive the weights for the picked count.
 - These all follow the new layout: `end2end/e2e-lanes.json`,
   `scripts/e2e-matrix.jq`, the census and reconciliation, and the documentation.
 
 **Decision record.** A `jaunder-adr` draft records per-worker instances and the
 state rule. It supersedes ADR-0039's quarantine rule (point 3), and the
-serial-special parts of ADR-0203 and ADR-0253. It amends ADR-0032 (the panic
+serial-special parts of ADR-0203 and ADR-0253, plus ADR-0262's serial Theme
+lane, while keeping ADR-0262's weighted shards. It amends ADR-0032 (the panic
 gate covers every instance) and ADR-0057 (the capture layout).
 `docs/ARCHITECTURE.md` and `CONTRIBUTING.md` are updated in the same commit.
 
@@ -138,10 +150,11 @@ Proof to execute:
   least two different orderings (for example, reversed file order). Any test
   that fails only under one ordering is fixed by the state rule.
 - **CI timing:** PR CI runs E2E at least 5 times, each with a distinct
-  `e2eSalt`, on both backends. The slowest E2E lane's median must come in under
-  the #2065 baseline of 14.0 min (postgres-firefox-serial-special). Record the
-  per-lane medians and the total E2E runner-minutes. No new class of flaky
-  failure may appear in the retry or flaky reporting.
+  `e2eSalt`, on both backends, using the chosen shard configuration. The slowest
+  E2E lane's median must come in under `main`'s current post-#2065 slowest-lane
+  median, taken from recent merge-queue runs. Record the per-lane medians and
+  the total E2E runner-minutes against `main`. No new class of flaky failure may
+  appear in the retry or flaky reporting.
 - **Memory:** measure peak RSS per instance and the VM's memory headroom in at
   least one Firefox lane per backend, and record them in the PR.
 - **Visual baselines:** the `@visual` baselines pass with visual tests
