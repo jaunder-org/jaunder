@@ -1040,7 +1040,7 @@ mkE2eCheck =
 # unknown load. Set this to a distinct value per measurement run to force
 # a fresh build; REVERT TO "" BEFORE COMMITTING. Empty is a byte-exact
 # no-op: it must not change any e2e derivation hash.
-e2eSalt = "";
+e2eSalt = "2076-run2";
 
 # Enforced by repository-policy's `e2e-scaffold` source contract: a committed non-empty
 # salt costs every CI e2e job its cache, and the only symptom is "CI got
