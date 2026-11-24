@@ -951,9 +951,14 @@ mkE2eCheck =
       ++ [
         "  # The collector truncates its trace file on each restart, so each"
         "  # verification sees only the spans of the instance just seeded."
+        "  # Seeding runs as the service user against the instance's own storage:"
+        "  # its site-config writes create that storage's publisher gate, which the"
+        "  # server and the root-run Playwright children share. Created by root,"
+        "  # the gate would lock the server out of publishing."
         "  for instance in e2e_instances():"
         "    machine.succeed("
-        "      \"JAUNDER_CAPTURE_DIR=\" + instance[\"captureDir\"]"
+        "      \"runuser -u jaunder -- env JAUNDER_STORAGE_PATH=\" + instance[\"storagePath\"]"
+        "      + \" JAUNDER_CAPTURE_DIR=\" + instance[\"captureDir\"]"
         "      + \" JAUNDER_OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4317 test-support seed-e2e\""
         "      + \" --db \" + instance[\"db\"]"
         "      + \" --jaunder-bin jaunder\""
@@ -965,9 +970,15 @@ mkE2eCheck =
       { config, ... }:
       {
         # One unit per instance, each the module's unit with its own port,
-        # database, storage root and capture subdirectory (#2076). The test
-        # script starts them only after the collector receivers and any
-        # backend-specific database setup are ready.
+        # database, storage root and capture subdirectory (#2076). The whole
+        # evaluated serviceConfig carries over, including the ExecStartPre the
+        # module's preStart became, which reads this unit's JAUNDER_DB; so the
+        # instance must not restate preStart, or init would run twice. The
+        # module's environment carries over too, with the per-instance keys
+        # overriding it; its PATH is derived from the unit's `path`, which each
+        # instance derives again itself. No wantedBy: the test script starts
+        # them only after the collector receivers and any backend-specific
+        # database setup are ready.
         systemd.services = builtins.listToAttrs (map (instance: {
           inherit (instance) name;
           value = {
@@ -975,20 +986,8 @@ mkE2eCheck =
             after = [ "otel-collector.service" ];
             requires = [ "otel-collector.service" ];
             unitConfig.RequiresMountsFor = [ "/var/lib/jaunder/capture" ];
-            inherit (config.systemd.services.jaunder) preStart;
-            serviceConfig = {
-              inherit (config.systemd.services.jaunder.serviceConfig)
-                User
-                Group
-                StateDirectory
-                WorkingDirectory
-                ExecStart
-                Restart
-                RestartSec
-                TimeoutStopSec
-                ;
-            };
-            environment = {
+            inherit (config.systemd.services.jaunder) serviceConfig;
+            environment = removeAttrs config.systemd.services.jaunder.environment [ "PATH" ] // {
               JAUNDER_BIND = "127.0.0.1:${toString instance.port}";
               JAUNDER_DB = instance.db;
               JAUNDER_STORAGE_PATH = instance.storagePath;
@@ -1654,6 +1653,23 @@ selectPerformanceProducers =
     inherit profile selection producers;
   };
 
+# The wasm-coverage producers run the module's own single jaunder.service, with
+# no collector, capture or gates, so Playwright's instance map has one entry.
+wasmCoverageServer =
+  let
+    port = 3000;
+    db = "sqlite:/var/lib/jaunder/data/jaunder.db";
+  in
+  {
+    inherit port db;
+    instancesEnv = e2eInstancesEnv [
+      {
+        baseUrl = "http://localhost:${toString port}";
+        inherit db;
+      }
+    ];
+  };
+
 # Each producer owns one browser and one SQLite VM.  They deliberately are
 # separate derivations: evaluating Chromium must neither short-circuit Firefox
 # nor share an artifact directory with it.
@@ -1674,8 +1690,8 @@ mkWasmCoverageProducer =
         pkgs.jq
       ];
       services.jaunder.enable = true;
-      services.jaunder.db = "sqlite:/var/lib/jaunder/data/jaunder.db";
-      services.jaunder.bind = "127.0.0.1:3000";
+      services.jaunder.db = wasmCoverageServer.db;
+      services.jaunder.bind = "127.0.0.1:${toString wasmCoverageServer.port}";
       systemd.services.jaunder.wantedBy = lib.mkForce [ ];
       systemd.services.jaunder.preStart = lib.mkForce ''
         ${diagnosticJaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
@@ -1691,7 +1707,7 @@ mkWasmCoverageProducer =
         + " coverage-sandbox wasm initialize"
       )
       machine.wait_for_unit("jaunder.service", timeout=60)
-      machine.wait_for_open_port(3000, timeout=30)
+      machine.wait_for_open_port(${toString wasmCoverageServer.port}, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e")
       if "${failure}" == "early":
         status, output = machine.execute(
@@ -1702,7 +1718,7 @@ mkWasmCoverageProducer =
         status, output = machine.execute(
           # The instance map is exported to bash rather than spliced into its
           # single-quoted script, whose quoting the map's own quotes would break.
-          ${e2eInstancesEnv [ { baseUrl = "http://localhost:3000"; db = "sqlite:/var/lib/jaunder/data/jaunder.db"; } ]}
+          ${wasmCoverageServer.instancesEnv}
           + " bash -o pipefail -c 'cd /tmp/e2e"
           + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
           + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
@@ -1765,8 +1781,8 @@ mkWasmCoverageMeasurementProducer =
       imports = [ self.nixosModules.jaunder ];
       environment.systemPackages = [ pkgs.sqlite testSupportBin pkgs.python3 ];
       services.jaunder.enable = true;
-      services.jaunder.db = "sqlite:/var/lib/jaunder/data/jaunder.db";
-      services.jaunder.bind = "127.0.0.1:3000";
+      services.jaunder.db = wasmCoverageServer.db;
+      services.jaunder.bind = "127.0.0.1:${toString wasmCoverageServer.port}";
       systemd.services.jaunder.wantedBy = lib.mkForce [ ];
       systemd.services.jaunder.preStart = lib.mkForce ''
         ${if mode == "baseline" then diagnosticBaselineJaunderBin else diagnosticJaunderBin}/bin/jaunder init --db "$JAUNDER_DB" --skip-if-exists
@@ -1777,13 +1793,13 @@ mkWasmCoverageMeasurementProducer =
       machine.start()
       machine.succeed("systemctl start jaunder.service")
       machine.wait_for_unit("jaunder.service", timeout=60)
-      machine.wait_for_open_port(3000, timeout=30)
+      machine.wait_for_open_port(${toString wasmCoverageServer.port}, timeout=30)
       machine.succeed("cp -r ${e2ePackage} /tmp/e2e && chmod -R u+w /tmp/e2e && mkdir -p /var/lib/jaunder/wasm-coverage")
       status, output = machine.execute(
         "cd /tmp/e2e"
         + " && PLAYWRIGHT_BROWSERS_PATH=${pkgs.playwright-driver.browsers}"
         + " PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1"
-        + ${e2eInstancesEnv [ { baseUrl = "http://localhost:3000"; db = "sqlite:/var/lib/jaunder/data/jaunder.db"; } ]}
+        + ${wasmCoverageServer.instancesEnv}
         + " FONTCONFIG_FILE=${visualFontConfig}"
         + " JAUNDER_WASM_COVERAGE_OUT=/var/lib/jaunder/wasm-coverage"
         + " JAUNDER_WASM_COVERAGE_CSR=${if mode == "baseline" then diagnosticBaselineCsrWasmBundle else diagnosticCsrWasmBundle}"

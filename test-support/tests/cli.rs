@@ -142,6 +142,30 @@ fn capture_path_prints_the_derived_absolute_path() {
     }
 }
 
+/// A worker's capture directory is its server instance's subdirectory; the
+/// collector-written trace resolves to the shared capture root above it.
+#[test]
+fn capture_path_resolves_an_instance_directory_trace_to_the_capture_root() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let capture_root = dir.path().join("capture");
+    let instance = capture_root.join(host::capture::instance_directory(1));
+
+    for (key, expected) in [
+        ("mail", instance.join(Stream::Mail.filename())),
+        ("otel", capture_root.join(Stream::Otel.filename())),
+    ] {
+        let out = Command::new(env!("CARGO_BIN_EXE_test-support"))
+            .args(["capture-path", key])
+            .env("JAUNDER_CAPTURE_DIR", &instance)
+            .output()
+            .expect("spawn test-support binary");
+
+        assert!(out.status.success(), "capture-path should exit 0");
+        let printed = String::from_utf8(out.stdout).expect("utf8 stdout");
+        assert_eq!(printed.trim(), expected.to_string_lossy());
+    }
+}
+
 #[test]
 fn capture_path_initializes_telemetry_without_writing_diag_log() {
     let dir = tempfile::tempdir().expect("tempdir");

@@ -9,14 +9,15 @@
 //! `data/jaunder.db` is never touched). Loads the same `playwright.config.ts`
 //! the CI VM loads, so "passes locally" == "passes in CI". Host only.
 //!
-//! Canonical e2e-server env-var set the host driver and the flake both provide
-//! (names shared, values per-environment; see also `nix/nixos.nix` `captureEnv`):
-//! `JAUNDER_BIND`, `JAUNDER_DB`, `JAUNDER_CAPTURE_DIR` (the single capture-dir
-//! contract, #227) — plus `JAUNDER_STORAGE_PATH` host-side only (the VM instead
-//! relies on systemd `WorkingDirectory=/var/lib/jaunder` + the `./data` default).
-//! Values differ per environment (host: a temp dir + ephemeral port; VM:
-//! `/var/lib/jaunder` + `:3000`). Each server writes its capture streams to its
-//! own `instance-<i>/` subdirectory of the shared collector capture. Playwright
+//! Canonical per-instance e2e-server env-var set the host driver and the flake
+//! both provide (names shared, values per-environment; see also
+//! `nix/checks.nix` `e2eInstances`): `JAUNDER_BIND`, `JAUNDER_DB`,
+//! `JAUNDER_STORAGE_PATH` and `JAUNDER_CAPTURE_DIR` (the single capture-dir
+//! contract, #227). Values differ per environment (host: a temp storage dir +
+//! ephemeral port per instance; VM instance `i`: storage
+//! `/var/lib/jaunder/data-<i>` + port `3000+i`). Each server writes its capture
+//! streams to its own instance subdirectory of the shared collector capture
+//! (`host::capture::instance_directory`). Playwright
 //! receives the instances as `JAUNDER_E2E_INSTANCES` (with the retained
 //! bundle's bin directory on PATH); each worker binds its own entry's DB,
 //! storage and capture dir, so `mail.ts`/`websub.ts` resolve the capture paths
@@ -61,7 +62,7 @@ impl E2eLocalBrowser {
 use crate::steps::host_server::{
     HostArtifacts, HostServerSession, ServerSessionConfig, ServerStartPhase,
 };
-use crate::steps::host_signals::{ServerExit, ServerSignals};
+use crate::steps::host_signals::ServerSignals;
 use crate::steps::process::Process;
 
 const COLLECTOR_PORT_ATTEMPTS: usize = 8;
@@ -329,7 +330,7 @@ fn instance_step_name(browser: &str, index: usize, suffix: &str) -> String {
 /// Each instance's server-written capture streams live in their own
 /// subdirectory of the shared collector capture.
 fn instance_capture(capture: &Path, index: usize) -> PathBuf {
-    capture.join(format!("instance-{index}"))
+    capture.join(host::capture::instance_directory(index))
 }
 
 fn record_step(
@@ -654,8 +655,9 @@ struct InstanceEntry<'a> {
     capture_dir: &'a Path,
 }
 
-fn instance_map(entries: &[InstanceEntry<'_>]) -> String {
-    serde_json::to_string(entries).expect("instance entries serialize to JSON")
+/// Serialization fails only for a path that is not UTF-8.
+fn instance_map(entries: &[InstanceEntry<'_>]) -> serde_json::Result<String> {
+    serde_json::to_string(entries)
 }
 
 /// Start and seed the next instance. Any instance whose server process exists
@@ -899,7 +901,25 @@ fn run_lifecycle(
             capture_dir: &instance.capture,
         })
         .collect();
-    let instance_map = instance_map(&entries);
+    let instance_map = match instance_map(&entries) {
+        Ok(instance_map) => instance_map,
+        Err(error) => {
+            result.push(
+                StepResult::fail(&step_name(browser, "instance-map"))
+                    .detail(format!("cannot describe instances to Playwright: {error}")),
+            );
+            finish_lifecycle(
+                result,
+                &mut instances,
+                &mut collector,
+                &retained,
+                &verification,
+                None,
+                signals,
+            );
+            return;
+        }
+    };
 
     // Each worker binds its own instance's DB, storage root and capture
     // directory from the map; the selected immutable seed executable is on PATH.
@@ -1056,8 +1076,10 @@ pub(super) fn run_consumer(
     let mut owned = processkit::Command::new(command.get_program())
         .args(command.get_args())
         .inherit_stdin()
-        // stdout carries only the JSON report; forward child stdout to stderr.
+        // stdout carries only the JSON report; forward child stdout to stderr
+        // as it arrives, retaining none of it.
         .on_stdout_line(|line| eprintln!("{line}"))
+        .output_buffer(processkit::OutputBufferPolicy::bounded(0))
         .stderr(processkit::StdioMode::Inherit);
     if let Some(cwd) = command.get_current_dir() {
         owned = owned.current_dir(cwd);
@@ -1069,13 +1091,15 @@ pub(super) fn run_consumer(
         };
     }
     let mut process = Process::start(owned)?;
-    match signals.wait_until_stopped(|| process.is_stopped()) {
-        ServerExit::Unexpected => match process.wait()? {
-            processkit::Outcome::Exited(0) => Ok(()),
-            outcome => anyhow::bail!("E2E consumer failed: {outcome:?}"),
-        },
-        ServerExit::Signal(code) => {
-            result.exit_override = Some(code);
+    let mut signal = None;
+    let outcome = process.wait_interruptible(async {
+        signal = Some(signals.next_signal_code().await);
+    })?;
+    match (outcome, signal) {
+        (Some(processkit::Outcome::Exited(0)), _) => Ok(()),
+        (Some(outcome), _) => anyhow::bail!("E2E consumer failed: {outcome:?}"),
+        (None, signal) => {
+            result.exit_override = signal;
             signals.shutdown_process(&mut process)?;
             anyhow::bail!("E2E invocation interrupted");
         }
@@ -1195,6 +1219,27 @@ while :; do :; done"#;
             !retained_path.exists(),
             "root released after both consumers"
         );
+    }
+
+    #[test]
+    fn consumer_with_more_stdout_than_a_pipe_holds_runs_to_exit() {
+        // A full Playwright suite prints far more than the ~64 KiB pipe
+        // buffer; its stdout must be forwarded while it runs, not only after
+        // it exits, or the child blocks writing and never exits.
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let shell = Shell::new().unwrap();
+            let mut signals = ServerSignals::install().unwrap();
+            let mut result = CommandResult::new("e2e-local");
+            let script = "head -c 1048576 /dev/zero | tr '\\0' 'x' | fold -w 100";
+            let outcome = run_consumer(cmd!(shell, "sh -c {script}"), &mut result, &mut signals);
+            done.send(outcome.map_err(|error| error.to_string()))
+                .unwrap();
+        });
+        let outcome = finished
+            .recv_timeout(Duration::from_secs(30))
+            .expect("consumer exits instead of blocking on a full stdout pipe");
+        assert_eq!(outcome, Ok(()));
     }
 
     #[test]
@@ -1513,7 +1558,7 @@ while :; do :; done"#;
             },
         ];
         assert_eq!(
-            instance_map(&entries),
+            instance_map(&entries).unwrap(),
             concat!(
                 r#"[{"baseUrl":"http://localhost:4100","db":"sqlite:/tmp/a/jaunder.db","#,
                 r#""storagePath":"/tmp/a","captureDir":"/tmp/capture/instance-0"},"#,
@@ -1521,6 +1566,20 @@ while :; do :; done"#;
                 r#""storagePath":"/tmp/b","captureDir":"/tmp/capture/instance-1"}]"#,
             )
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn instance_map_refuses_a_path_json_cannot_carry() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let entries = [InstanceEntry {
+            base_url: "http://localhost:4100".to_owned(),
+            db: "sqlite:/tmp/a/jaunder.db",
+            storage_path: Path::new(OsStr::from_bytes(b"/tmp/\xff")),
+            capture_dir: Path::new("/tmp/capture/instance-0"),
+        }];
+        assert!(instance_map(&entries).is_err());
     }
 
     #[test]

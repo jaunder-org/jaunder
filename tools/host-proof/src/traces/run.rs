@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 use flate2::read::GzDecoder;
+use host::capture::Stream;
 use tempfile::TempDir;
 
 use crate::e2e::{E2eBackend, E2eBrowser};
@@ -128,12 +129,30 @@ pub fn playwright_report_path(out: &str, backend: E2eBackend) -> PathBuf {
     PathBuf::from(out).join(format!("playwright-report-{}.json", backend.as_str()))
 }
 
+/// The capture bundle's root directory (`tar … -C /var/lib/jaunder capture`).
+const CAPTURE_ROOT: &str = "capture";
+
 /// One server instance's WARN-and-above diagnostic log inside a capture bundle:
-/// each Playwright worker's server writes its own `capture/instance-<i>/`
-/// subdirectory (#2076). It may legitimately be empty: a clean run warns about
+/// each Playwright worker's server writes its own instance subdirectory of the
+/// capture (#2076). It may legitimately be empty: a clean run warns about
 /// nothing.
 pub fn instance_diag_member(index: usize) -> String {
-    format!("capture/instance-{index}/diag.log")
+    format!(
+        "{CAPTURE_ROOT}/{}/{}",
+        host::capture::instance_directory(index),
+        Stream::Diag.filename()
+    )
+}
+
+/// The instance whose diagnostic log `member` is, the inverse of
+/// [`instance_diag_member`].
+fn instance_diag_index(member: &str) -> Option<usize> {
+    let (root, rest) = member.split_once('/')?;
+    let (directory, file) = rest.split_once('/')?;
+    if root != CAPTURE_ROOT || file != Stream::Diag.filename() {
+        return None;
+    }
+    host::capture::instance_index(directory)
 }
 
 /// Read the single required `member` from a capture archive.
@@ -152,11 +171,7 @@ pub fn read_capture_member(tarball: &Path, member: &str) -> Result<String> {
 /// must be numbered contiguously from 0, so a lost instance's log cannot pass
 /// unnoticed, and at least one must exist.
 pub fn read_instance_diag_logs(tarball: &Path) -> Result<Vec<String>> {
-    let mut logs = read_capture_members(tarball, |path| {
-        path.strip_prefix("capture/instance-")
-            .and_then(|rest| rest.strip_suffix("/diag.log"))
-            .is_some_and(|index| !index.is_empty() && index.bytes().all(|b| b.is_ascii_digit()))
-    })?;
+    let mut logs = read_capture_members(tarball, |path| instance_diag_index(path).is_some())?;
     ensure!(
         !logs.is_empty(),
         "capture has no `{}` member: {}",
