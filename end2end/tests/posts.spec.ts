@@ -2125,6 +2125,41 @@ test("draft lifecycle: create, view, edit, and publish", async ({
   expect(publishNoReload).toBe(true);
 });
 
+test("a confirmed draft save keeps the editor painted (#2113)", async ({
+  registeredPage,
+}) => {
+  // The Media control shows only when uploads are enabled; it is the first rail
+  // control, so its presence is what keeps the rest of the rail from moving.
+  await seedConfigViaTool("media.uploads_enabled", "true");
+  const page = await registeredPage("/posts/new");
+  await page.fill(SEL.postBody, "# Painted Draft\n\ninitial body");
+  await click(page, SEL.publishButton("false"));
+  await waitForSelector(page, SEL.saveSummary);
+  await openPostFromDrafts(page, "Painted Draft");
+  const media = page.locator(".j-composer-control-summary").filter({
+    has: page.getByText("Media", { exact: true }),
+  });
+  await expect(media).toBeVisible();
+
+  // Hold any uploads-enabled lookup the save might trigger. If the confirmed
+  // save made the editor wait on it again, the whole editor would be replaced
+  // by its loading fallback and the save summary would jump under the pointer.
+  const release = await stallServerFn(page, "media/get_uploads_enabled");
+  await page.fill(SEL.postBody, "# Painted Draft\n\nedited body");
+  await click(page, SEL.publishButton("false"));
+  const summary = page.locator(SEL.saveSummary);
+  await expect(summary).toContainText("Draft saved.");
+  await expect(page.locator(SEL.postBody)).toBeVisible();
+  await expect(media).toBeVisible();
+  release();
+
+  const permalink = summary.locator(SEL.permalinkLink);
+  await navigateInApp(page, () => permalink.click(), {
+    url: (await permalink.getAttribute("href"))!,
+    ready: "article.j-post",
+  });
+});
+
 test("per-user timeline presents and operates its continuation control", async ({
   page,
   firstNav,

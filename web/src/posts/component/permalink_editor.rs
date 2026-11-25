@@ -2,7 +2,7 @@ use leptos::prelude::*;
 use leptos_router::NavigateOptions;
 use leptos_router::hooks::{self, use_navigate, use_params_map};
 
-use crate::error::WebError;
+use crate::error::{WebError, WebResult};
 use crate::forms::Field;
 use crate::posts;
 use crate::posts::{
@@ -21,7 +21,9 @@ use common::{
 };
 
 use super::audience;
-use super::composers::{ComposerActions, ComposerControlRail, ComposerCore, CreationSchedule};
+use super::composers::{
+    self, ComposerActions, ComposerControlRail, ComposerCore, CreationSchedule,
+};
 use super::display::PostCard;
 use super::support;
 
@@ -234,6 +236,8 @@ pub fn EditPostPage() -> impl IntoView {
     let state = ComposeState::new();
     let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
+    // Page-level so the form rebuild after a confirmed save reuses the resolved flag.
+    let uploads_enabled = composers::load_uploads_enabled();
     let lifecycle = posts::EditLifecycleState::new();
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
@@ -316,6 +320,7 @@ pub fn EditPostPage() -> impl IntoView {
                                         action=update_post_action
                                         delete_action=delete_post_action
                                         named=named
+                                        uploads_enabled=uploads_enabled
                                     />
                                 }
                             }}
@@ -346,6 +351,8 @@ fn EditPostForm(
     delete_publication: posts::LoadedPublication,
     /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
+    /// The page-level flag load, so this form's rebuilds never refetch it (#2113).
+    uploads_enabled: Resource<WebResult<bool>>,
     action: ServerAction<posts::Update>,
     delete_action: ServerAction<posts::Delete>,
 ) -> impl IntoView {
@@ -412,6 +419,7 @@ fn EditPostForm(
                     schedule_error=schedule_error
                     creation_schedule=Some(creation_schedule)
                     named=named
+                    uploads_enabled=uploads_enabled
                 />
                 <EditDeleteControl
                     post_id

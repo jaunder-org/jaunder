@@ -248,10 +248,21 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
     }
 }
 
+/// The uploads-enabled flag that decides whether [`ComposerControlRail`] shows Media.
+///
+/// Create it once per page, outside any closure that rebuilds the rail. A rail
+/// rebuilt with a fresh, unresolved resource suspends the enclosing `<Suspense>`,
+/// which blanks the whole editor and moves its save summary under the pointer (#2113).
+pub(super) fn load_uploads_enabled() -> Resource<WebResult<bool>> {
+    Resource::new(|| (), |()| crate::media::get_uploads_enabled())
+}
+
 /// The Media disclosure and its temporary rows for one composer session.
 #[component]
-fn ComposerMediaDisclosure(disclosures: posts::ComposerDisclosureState) -> impl IntoView {
-    let uploads_enabled = Resource::new(|| (), |()| crate::media::get_uploads_enabled());
+fn ComposerMediaDisclosure(
+    disclosures: posts::ComposerDisclosureState,
+    uploads_enabled: Resource<WebResult<bool>>,
+) -> impl IntoView {
     let state = ComposerMediaState::new();
     let summary = Signal::derive(move || state.summary());
     view! {
@@ -543,6 +554,7 @@ fn CreationComposer(
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     let named = audience::load_named_audiences();
+    let uploads_enabled = load_uploads_enabled();
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
@@ -598,6 +610,7 @@ fn CreationComposer(
                     schedule_error=Signal::derive(|| None::<InvalidSchedule>)
                     creation_schedule=Some(schedule)
                     named=named
+                    uploads_enabled=uploads_enabled
                     format_ready=Signal::derive(move || {
                         initial_format.with(posts::initial_format_ready)
                     })
@@ -1032,6 +1045,8 @@ pub(super) fn ComposerControlRail(
     schedule_error: Signal<Option<InvalidSchedule>>,
     creation_schedule: Option<CreationSchedule>,
     named: RwSignal<NamedAudienceState>,
+    /// From [`load_uploads_enabled`], created where it outlives rebuilds of this rail.
+    uploads_enabled: Resource<WebResult<bool>>,
     #[prop(optional)] on_audience_edit: Option<Callback<()>>,
     #[prop(default = Signal::derive(|| true))] format_ready: Signal<bool>,
 ) -> impl IntoView {
@@ -1041,7 +1056,7 @@ pub(super) fn ComposerControlRail(
     view! {
         <ComposerDetails state />
         <div class="j-composer-controls">
-            <ComposerMediaDisclosure disclosures />
+            <ComposerMediaDisclosure disclosures uploads_enabled />
             <ComposerDisclosure
                 control=posts::ComposerControl::Format
                 label="Format"
