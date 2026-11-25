@@ -84,11 +84,10 @@ fn install_load_effects(signals: ManagePageState, session: auth::SessionContext)
         let request_search = signals.search.get();
         let request_cursor = signals.cursor.get();
         signals.reload.track();
-        signals.loading.set(true);
-        signals.error.set(None);
+        let claim = signals.begin_list_load();
         spawn_local(async move {
-            match session.reconcile.await {
-                Ok(Some(_)) => match super::list_managed_posts(
+            let outcome = match session.reconcile.await {
+                Ok(Some(_)) => super::list_managed_posts(
                     request_state,
                     request_audience,
                     request_search,
@@ -96,16 +95,11 @@ fn install_load_effects(signals: ManagePageState, session: auth::SessionContext)
                     Some(PageSize::default()),
                 )
                 .await
-                {
-                    Ok(result) => signals.page.set(Some(result)),
-                    Err(error) => signals.error.set(Some(error.to_string())),
-                },
-                Ok(None) => signals
-                    .error
-                    .set(Some("Sign in to manage Posts.".to_owned())),
-                Err(error) => signals.error.set(Some(error.to_string())),
-            }
-            signals.loading.set(false);
+                .map_err(|error| error.to_string()),
+                Ok(None) => Err("Sign in to manage Posts.".to_owned()),
+                Err(error) => Err(error.to_string()),
+            };
+            signals.finish_list_load(claim, outcome);
         });
     });
 }

@@ -63,9 +63,10 @@ immediately and drops A whenever it arrives.
   2. Apply a second search that matches nothing; wait for "No Posts match these
      filters.".
   3. Release the held request and wait for its `requestfinished` event.
-  4. Change the State filter to one that also matches nothing and wait for that
-     later request's response. This ordered later load is the barrier proving
-     the browser has processed the released response.
+  4. Click "Select all matching" and wait for its response and for the button to
+     re-enable. That round trip was sent after the held response reached the
+     browser, so the browser has processed the held response by then. It is not
+     a list request, so it cannot repaint rows and hide a stale write.
   5. Assert the search box reads the second term, zero rows are shown, and "No
      Posts match these filters." is visible.
 
@@ -84,5 +85,5 @@ immediately and drops A whenever it arrives.
 - No server, storage or API change; no request cancellation.
 - While B is in flight the previous rows stay on screen and "Next page" stays
   enabled. Clicking it pairs B's filters with the old page's cursor. That is
-  existing behaviour, excluded here and filed as a follow-up issue.
+  existing behaviour, excluded here and filed as #2093.
 - No change to the existing browser test's steps.

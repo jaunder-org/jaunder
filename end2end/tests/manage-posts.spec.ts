@@ -119,6 +119,66 @@ test("Manage Posts selects across pages and applies atomic bulk operations", asy
   await expectAccessible(page);
 });
 
+test("Manage Posts discards a superseded filter's late list results", async ({
+  page,
+}) => {
+  const username = await signInAsNewUser(page);
+  await seedPostsViaTool(username, 3, "Managed Post", { published: false });
+
+  await goto(page, "/posts/manage");
+  await expect(page.locator(ROW)).toHaveCount(3);
+
+  let heldRequest: import("@playwright/test").Request | undefined;
+  let releaseHeld = () => {};
+  const heldGate = new Promise<void>((resolve) => {
+    releaseHeld = resolve;
+  });
+  const holdSupersededSearch = async (
+    route: import("@playwright/test").Route,
+  ) => {
+    if (route.request().postDataJSON().search !== "Managed") {
+      await route.continue();
+      return;
+    }
+    heldRequest = route.request();
+    await heldGate;
+    await route.continue();
+  };
+  await page.route("**/api/posts/list_managed_posts", holdSupersededSearch);
+
+  const search = page.getByLabel("Search title or slug");
+  const apply = page.getByRole("button", { name: "Apply filters" });
+  await search.fill("Managed");
+  await apply.click();
+  await expect.poll(() => heldRequest).toBeDefined();
+  await search.fill("does-not-exist");
+  await apply.click();
+  await expect(page.getByText("No Posts match these filters.")).toBeVisible();
+
+  const heldFinished = page.waitForEvent(
+    "requestfinished",
+    (request) => request === heldRequest,
+  );
+  releaseHeld();
+  await heldFinished;
+
+  // The superseded response reached the browser before this later round trip
+  // was sent, so once the page has settled it, the stale response has been
+  // processed too. A non-list request keeps the barrier from repainting rows.
+  const selectAll = page.getByRole("button", { name: "Select all matching" });
+  const barrier = page.waitForResponse(
+    "**/api/posts/resolve_management_selection",
+  );
+  await selectAll.click();
+  await barrier;
+  await expect(selectAll).toBeEnabled();
+
+  await expect(search).toHaveValue("does-not-exist");
+  await expect(page.locator(ROW)).toHaveCount(0);
+  await expect(page.getByText("No Posts match these filters.")).toBeVisible();
+  await page.unroute("**/api/posts/list_managed_posts", holdSupersededSearch);
+});
+
 test("Manage Posts keeps a stale conflict actionable and reports no success", async ({
   registeredPage,
 }) => {

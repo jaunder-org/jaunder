@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 
 use common::ids::PostId;
 use common::visibility::AudienceSelection;
-use leptos::prelude::RwSignal;
+use leptos::prelude::{GetUntracked, RwSignal, Set, Update};
 
 use super::{
     BulkManageResult, BulkSelectionTarget, ManageAudienceFilter, ManagePostsCursor,
@@ -37,6 +37,41 @@ pub struct ManagePageState {
     pub delete_count: RwSignal<String>,
     pub named_audiences: RwSignal<Vec<crate::audiences::Summary>>,
     pub replacement: RwSignal<AudienceSelection>,
+    list_generation: RwSignal<u64>,
+}
+
+/// Binds one list load's completion to the request that started it.
+///
+/// Each new load advances the generation, so a superseded load's late
+/// completion can no longer settle the page (#1988).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ManageListClaim(u64);
+
+impl ManagePageState {
+    /// Start a list load, superseding any load still in flight.
+    #[must_use]
+    pub fn begin_list_load(self) -> ManageListClaim {
+        self.list_generation.update(|generation| *generation += 1);
+        self.loading.set(true);
+        self.error.set(None);
+        ManageListClaim(self.list_generation.get_untracked())
+    }
+
+    /// Settle a list load unless a later load has superseded it.
+    pub fn finish_list_load(
+        self,
+        claim: ManageListClaim,
+        outcome: Result<ManagePostsPage, String>,
+    ) {
+        if claim.0 != self.list_generation.get_untracked() {
+            return;
+        }
+        match outcome {
+            Ok(page) => self.page.set(Some(page)),
+            Err(error) => self.error.set(Some(error)),
+        }
+        self.loading.set(false);
+    }
 }
 
 impl Default for ManagePageState {
@@ -58,6 +93,7 @@ impl Default for ManagePageState {
             delete_count: RwSignal::new(String::new()),
             named_audiences: RwSignal::new(Vec::new()),
             replacement: RwSignal::new(AudienceSelection::default()),
+            list_generation: RwSignal::new(0),
         }
     }
 }
@@ -170,6 +206,45 @@ mod tests {
             assert_eq!(state.audience.get(), ManageAudienceFilter::All);
             assert!(state.cursor.get().is_none());
             assert!(state.loading.get());
+        });
+    }
+
+    fn list_page(id: i64) -> ManagePostsPage {
+        ManagePostsPage {
+            posts: vec![post(id, 1)],
+            next_cursor: None,
+            has_more: false,
+        }
+    }
+
+    #[test]
+    fn only_the_latest_list_load_settles_the_page() {
+        Owner::new().with(|| {
+            let state = ManagePageState::default();
+            let superseded = state.begin_list_load();
+            let current = state.begin_list_load();
+
+            state.finish_list_load(superseded, Ok(list_page(1)));
+            state.finish_list_load(superseded, Err("stale failure".to_owned()));
+            assert!(state.page.get().is_none());
+            assert!(state.error.get().is_none());
+            assert!(state.loading.get());
+
+            state.finish_list_load(current, Ok(list_page(2)));
+            assert_eq!(state.page.get(), Some(list_page(2)));
+            assert!(!state.loading.get());
+
+            state.finish_list_load(superseded, Ok(list_page(1)));
+            assert_eq!(state.page.get(), Some(list_page(2)));
+
+            let failing = state.begin_list_load();
+            assert!(state.loading.get());
+            state.finish_list_load(failing, Err("Sign in to manage Posts.".to_owned()));
+            assert_eq!(
+                state.error.get().as_deref(),
+                Some("Sign in to manage Posts.")
+            );
+            assert!(!state.loading.get());
         });
     }
 
