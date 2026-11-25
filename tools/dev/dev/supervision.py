@@ -9,6 +9,7 @@ holds can never block.
 
 import contextlib
 import os
+import shlex
 import signal
 import socket
 import subprocess
@@ -193,16 +194,19 @@ def run(
 ) -> tuple[int | None, bytes]:
     """Runs a child to exit: its status and, with `capture`, its stdout.
 
-    With `signals`, a termination request, pending or arriving, stops it
-    instead and its status is None. A child that cannot start has a shell's
-    127. A failure is the caller's to judge; nothing here raises.
+    With `signals`, a pending termination request means it never starts, and
+    one arriving while it runs stops it; either way its status is None. A child
+    that cannot start has a shell's 127. A failure is the caller's to judge;
+    nothing here raises.
     """
+    if signals is not None and signals.code is not None:
+        return None, b""
+    print(f"$ {shlex.join(argv)}", file=sys.stderr, flush=True)
     try:
         child = Child(argv, changes, cwd=cwd, capture=capture)
     except OSError as error:
         print(f"dev: {argv[0]}: {error.strerror}", file=sys.stderr, flush=True)
         return 127, b""
-    # A request already pending stops the child before its first tick.
     while signals is not None:
         if signals.code is not None:
             child.stop(GRACE, signals)

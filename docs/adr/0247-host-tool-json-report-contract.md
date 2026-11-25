@@ -33,8 +33,10 @@ failed step with status 2.
 _Amended by #2066._ `e2e-local` has left this list and the host-proof list
 below. It now runs inside `dev` (`tools/dev/dev/e2e_local.py`), which keeps the
 same step list but prints only its rendered summary on stdout, records each step
-as a span, and uses its exit status (0, 1, or 128+n on a signal) as the verdict.
-No JSON report is written.
+as a span, and uses its exit status as the verdict. That status is 1 for a
+failed lifecycle step and 128+n on a signal. Its admission and Nix build are
+ordinary `dev` steps, which end the run with their own status and no summary. No
+JSON report is written.
 
 The shared argument parser sends help and usage text to stderr and then points
 the process's stdout descriptor at stderr, reserving the real stdout for the

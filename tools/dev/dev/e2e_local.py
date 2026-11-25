@@ -181,6 +181,8 @@ def instance_map(instances: list[Instance]) -> str:
         for instance in instances
     ]
     text = json.dumps(entries, separators=(",", ":"), ensure_ascii=False)
+    # Refuse here, not in Popen: a lone surrogate from a non-UTF-8 path
+    # survives json.dumps but cannot become an environment value.
     text.encode()
     return text
 
@@ -525,7 +527,7 @@ def ready(instance: Instance, signals: Signals) -> str | None:
         pause = time.monotonic() + HTTP_INTERVAL
         while time.monotonic() < pause and signals.code is None:
             time.sleep(supervision.TICK)
-    return "server not reachable via runtime.json within 15s"
+    return f"server not reachable via runtime.json after {HTTP_ATTEMPTS} attempts"
 
 
 def _step(browser: str, suffix: str) -> str:
@@ -533,7 +535,7 @@ def _step(browser: str, suffix: str) -> str:
 
 
 @dataclass
-class _Lifecycle:
+class _BrowserRun:
     """One browser's lifecycle while it runs, and its teardown."""
 
     run: _Run
@@ -649,6 +651,9 @@ class _Lifecycle:
                 "JAUNDER_E2E_PRODUCER_INPUT": str(run.root / PRODUCER_INPUT),
                 "JAUNDER_TEST_EXECUTABLE": str(run.jaunder),
                 "JAUNDER_E2E_OTLP_HTTP_ENDPOINT": self.collector.browser_traces,
+                # One fresh id joins this lifecycle's browser and server spans.
+                # Unlike Rust's /dev/urandom read it cannot fail in practice,
+                # so there is no `-trace-context` failure step.
                 "JAUNDER_E2E_TRACE_ID": f"{secrets.randbits(128) or 1:032x}",
                 "JAUNDER_E2E_WORKERS": str(run.workers),
                 "PLAYWRIGHT_HTML_OPEN": "never",
@@ -758,7 +763,7 @@ def finish_capture(
     return retained.capture
 
 
-def _lifecycle(run: _Run, lifecycle: Lifecycle) -> None:
+def _run_lifecycle(run: _Run, lifecycle: Lifecycle) -> None:
     browser = lifecycle.browser
     started = time.time_ns()
     try:
@@ -772,6 +777,8 @@ def _lifecycle(run: _Run, lifecycle: Lifecycle) -> None:
         )
         return
     started = time.time_ns()
+    # Unguarded: tempfile falls back from an unusable TMPDIR to /tmp and
+    # beyond, so this fails only when no temporary directory is usable.
     source = Path(tempfile.mkdtemp(prefix="e2e-local-capture-"))
     try:
         collector = _start_collector(source)
@@ -785,7 +792,7 @@ def _lifecycle(run: _Run, lifecycle: Lifecycle) -> None:
         finish_capture(run, browser, retained, source, failure.stopped)
         return
     run.report.record(_step(browser, "collector"), started, True)
-    state = _Lifecycle(run, browser, retained, source, collector)
+    state = _BrowserRun(run, browser, retained, source, collector)
     try:
         if all(state.start_instance(index) for index in range(run.workers)):
             state.playwright_run(lifecycle)
@@ -819,6 +826,8 @@ def run(browser: str | None, test_filter: str | None, update: bool) -> None:
     with contextlib.ExitStack() as stack:
         provenance = Provenance()
         succeeded = False
+        # Reads `succeeded` when the stack closes, so it records the outcome
+        # assigned below, not this initial False.
         stack.callback(lambda: provenance.close(succeeded))
         attribute = "sandboxArtifactsReleaseCsr" if update else "sandboxArtifacts"
         admit = steps.tool(host_proof("admit-inputs"))
@@ -852,7 +861,7 @@ def run(browser: str | None, test_filter: str | None, update: bool) -> None:
         for lifecycle in lifecycles:
             if signals.code is not None:
                 break
-            _lifecycle(shared, lifecycle)
+            _run_lifecycle(shared, lifecycle)
         succeeded = summary.ok and signals.code is None
     summary.print()
     if signals.code is not None:

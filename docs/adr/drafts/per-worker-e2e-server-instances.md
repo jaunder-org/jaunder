@@ -54,8 +54,8 @@ concurrently.
   PostgreSQL server. The production module `nix/nixos.nix` is unchanged.
 - **`dev e2e-local`.** The host driver starts one `jaunder serve` per worker
   (`JAUNDER_E2E_WORKERS`, default 1). Each session has its own temporary
-  storage, SQLite database and ephemeral port, and is seeded, identity-checked
-  on shutdown and panic-gated on its own.
+  storage, SQLite database and ephemeral port, and is identity-checked at
+  readiness, seeded, stopped and panic-gated on its own.
 - **The OTel collector stays shared.** Traces correlate by trace id, so one
   collector per lane or local run serves every instance.
 

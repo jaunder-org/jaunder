@@ -4403,11 +4403,10 @@ existing `server/build.rs` build staging remains in use. Profile seeding stays
 an out-of-process `test-support seed-sandbox-profile` operation under ADR-0046;
 its stdout is captured and withheld from operational command output while stderr
 and exact child status are retained. The helper owns its narrow runtime-info
-identity/address parser and HTTP readiness probe rather than exposing the e2e
-host driver's private session adapters. Once ready, it prints the URL and, for a
-nonempty profile (including a named resume's recorded profile), the seeded
-`user` and `operator` development credentials. Empty profiles do not print
-credential hints.
+identity/address parser and HTTP readiness probe rather than sharing
+`dev e2e-local`'s. Once ready, it prints the URL and, for a nonempty profile
+(including a named resume's recorded profile), the seeded `user` and `operator`
+development credentials. Empty profiles do not print credential hints.
 
 First SIGINT/SIGTERM initiates graceful drain; ProcessKit owns the ten-second
 automatic group-stop escalation. A subsequent SIGINT may force earlier; repeated

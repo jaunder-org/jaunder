@@ -23,7 +23,7 @@ import psutil
 import pytest
 from conftest import Checkout
 
-from dev import e2e_local
+from dev import e2e_local, supervision
 from dev.e2e_local import Instance, Provenance
 from dev.supervision import Child, Signals
 
@@ -658,8 +658,17 @@ def test_a_server_that_never_answers_is_not_ready(
     runtime = {"ip": "127.0.0.1", "port": port, "pid": sleeper.child.popen.pid}
     (sleeper.storage / "runtime.json").write_text(json.dumps(runtime))
     assert e2e_local.ready(sleeper, Signals()) == (
-        "server not reachable via runtime.json within 15s"
+        "server not reachable via runtime.json after 2 attempts"
     )
+
+
+def test_a_pending_request_never_starts_the_child(tmp_path: Path) -> None:
+    signals = Signals()
+    signals.handle(signal.SIGTERM, None)
+    started = tmp_path / "started"
+    code, output = supervision.run(["touch", str(started)], signals=signals)
+    assert (code, output) == (None, b"")
+    assert not started.exists()
 
 
 # The command line.
