@@ -149,8 +149,8 @@ export default defineConfig({
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
   // Each gated browser's one project, then WebKit, which runs only host-local
-  // investigation. WebKit never covered visual, admin-site, invite or the
-  // production baseline.
+  // investigation and excludes visual, admin-site, invite and the production
+  // baseline.
   projects: [
     ...gatedBrowsers.map(gatedProject),
     ...(upgradeMode

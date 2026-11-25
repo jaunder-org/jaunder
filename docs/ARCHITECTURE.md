@@ -4180,10 +4180,15 @@ three isolated lanes (`--shard=1/3` to `--shard=3/3`) and Firefox five
 project. The project has no dependency, so plain sharding runs every test
 exactly once per pair. Shards are sized by one per-browser duration weight
 string (`shardWeights`, exported as Playwright's `PWTEST_SHARD_WEIGHTS`) rather
-than by test count; its part count is the browser's shard count. A measured
-shard-count comparison over per-test CI durations chose the layout. Unsplit
-catalog lanes are disabled; unsplit Firefox workers=2 and workers=4 remain
-package-only measurement controls
+than by test count; its part count is the browser's shard count. The weights are
+integer percentages. Playwright gives each shard a contiguous slice of the
+ordered test-group list in proportion to its weight, so the weights are derived
+by replaying that assignment over per-test durations from CI lane reports, plus
+each lane's fixed VM boot and seed cost, and choosing the integers that minimise
+the slowest predicted lane. Chromium takes three shards and Firefox five because
+that predicts the same slowest lane as five shards for both browsers, with fewer
+Chromium runner-minutes. Unsplit catalog lanes are disabled; unsplit Firefox
+workers=2 and workers=4 remain package-only measurement controls
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md),
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
 [weighted shards](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md); their
@@ -4249,10 +4254,9 @@ dependency projects in full in every shard. Lanes, host E2E and wasm coverage
 all select `<browser>`; the upgrade test selects its own `chromium-upgrade`
 project. Chromium and Firefox each own one Linux baseline per state under the
 owning spec's adjacent `*.spec.ts-snapshots/` directory; the project's
-`snapshotPathTemplate` keeps the `<name>-<browser>-visual-<platform>.png` names
-of the retired visual project. The filename carries browser identity but not
-backend, so SQLite and PostgreSQL compare the same expected image. WebKit runs
-no visual test and has no baseline.
+`snapshotPathTemplate` names them `<name>-<browser>-visual-<platform>.png`. The
+filename carries browser identity but not backend, so SQLite and PostgreSQL
+compare the same expected image. WebKit runs no visual test and has no baseline.
 
 Every Playwright worker owns its own Jaunder server instance and database
 ([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
@@ -4265,16 +4269,20 @@ instance variables at load. A worker selects the entry at its parallel index,
 sets `BASE_URL`, and overwrites `JAUNDER_DB`, `JAUNDER_STORAGE_PATH` and
 `JAUNDER_CAPTURE_DIR`, so the `test-support` children it spawns reach its
 instance. The runner process (spec loading, `--list`, census, reporters) binds
-nothing, and its `BASE_URL` throws when used. `playwright.config.ts` fails at
-load when the map's length differs from `workers`; single-server callers pass a
-one-entry map with one worker. In lane VMs `nix/checks.nix` (`e2eInstances`)
-generates `jaunder-<i>` units on port `3000+i` that inherit the module's
-evaluated `jaunder` service config and environment, overriding only the
-per-instance values; the module's own unit is masked. PostgreSQL lanes create
-database `jaunder_<i>` per instance with `jaunder create-pg-db`. The OTel
-collector stays shared, because traces correlate by trace id. Every Firefox lane
-runs the ordinary workload and so uses the ordinary Firefox guest sizing (4 GiB
-RAM, 2 GiB disk); worker and vCPU counts are unchanged.
+nothing, and its `BASE_URL` throws when used, so nothing the runner forks
+inherits an instance's environment. `playwright.config.ts` fails at load when
+the map's length differs from `workers`; single-server callers pass a one-entry
+map with one worker. The performance check runs one generated instance. The
+wasm-coverage checks have no collector, capture or gates, so they keep the
+module's own `jaunder.service` and share one single-server instance map. The
+upgrade check runs on its lane's single instance, `jaunder-0`. In lane VMs
+`nix/checks.nix` (`e2eInstances`) generates `jaunder-<i>` units on port `3000+i`
+that inherit the module's evaluated `jaunder` service config and environment,
+overriding only the per-instance values; the module's own unit is masked.
+PostgreSQL lanes create database `jaunder_<i>` per instance with
+`jaunder create-pg-db`. The OTel collector stays shared, because traces
+correlate by trace id. Every lane runs two workers on two vCPUs; every Firefox
+lane has a 4 GiB guest with a 2 GiB disk, and every Chromium lane a 3 GiB guest.
 
 Because a worker runs one test at a time, no two tests share a server
 concurrently, and the suite follows one state rule instead of quarantine: a test
@@ -4325,10 +4333,10 @@ packages and an explicit input for `test-local` and manual Cargo/Vite workflows.
 Each e2e invocation creates a unique output link under
 `.xtask/gcroots/e2e-local-*` and retains it through browser lifecycles and
 server/collector teardown. Nix owns immutable artifact identity, store
-concurrency and reuse. E2E no longer selects mutable checkout application
-outputs or takes `.xtask/host-artifacts.lock`; handled foreground SIGINT/SIGTERM
-still stops consumers before capture finalization and root release. The Nix
-daemon and shared store workers are not owned child processes.
+concurrency and reuse. E2E selects no mutable checkout application outputs and
+takes no `.xtask/host-artifacts.lock`; handled foreground SIGINT/SIGTERM still
+stops consumers before capture finalization and root release. The Nix daemon and
+shared store workers are not owned child processes.
 
 #### Standalone UX sandbox owner
 
@@ -4454,14 +4462,13 @@ once per backend/browser pair
 ([distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 The config also carries a `webkit` project, but the gate never runs it: the
-retained catalog enumerates Chromium and Firefox only. WebKit excludes
-`admin-site`, `invite`, `production-baseline-flow` and the visual tests:
-coverage parity with what it ran before, not a serial project. Each browser's
-visual coverage runs exactly once per backend, in whichever shard Playwright
-assigns it. Visual coverage adds no backend-specific baseline. Timeout budgets
-are stated for Chromium and scaled per browser
-([ADR-0012](adr/0012-environment-aware-timeouts.md)) — `slowBrowserTimeoutMs`
-for an individual wait and the ambient whole-test budget,
+retained catalog enumerates Chromium and Firefox only. It is for host-local
+investigation and excludes `admin-site`, `invite`, `production-baseline-flow`
+and the visual tests. Each browser's visual coverage runs exactly once per
+backend, in whichever shard Playwright assigns it. Visual coverage adds no
+backend-specific baseline. Timeout budgets are stated for Chromium and scaled
+per browser ([ADR-0012](adr/0012-environment-aware-timeouts.md)) —
+`slowBrowserTimeoutMs` for an individual wait and the ambient whole-test budget,
 `slowBrowserFirstNavigationTimeoutMs` for the coldest navigation. The `chromium`
 project keeps the unscaled Chromium budget; every other project, `firefox` among
 them, takes the slow-browser scale.

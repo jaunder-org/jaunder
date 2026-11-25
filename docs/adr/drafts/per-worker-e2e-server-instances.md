@@ -61,17 +61,21 @@ concurrently.
 
 **Workers bind by parallel index; the runner never binds.** Every Playwright
 invocation sets `JAUNDER_E2E_INSTANCES`, a JSON array with one
-`{ baseUrl, db, storagePath, captureDir }` entry per instance. It replaces the
-former single base-URL variable. Single-server callers pass a one-entry map with
-one worker. `end2end/tests/instance.ts` is the only module that reads instance
-variables at load:
+`{ baseUrl, db, storagePath, captureDir }` entry per instance. It replaces
+`JAUNDER_E2E_BASE_URL`. Single-server callers pass a one-entry map with one
+worker: the performance check runs one generated instance, the wasm-coverage
+checks keep the module's own `jaunder.service` and share one single-server map,
+because they have no collector, capture or gates, and the upgrade check runs on
+its lane's single instance, `jaunder-0`. `end2end/tests/instance.ts` is the only
+module that reads instance variables at load:
 
 - In a worker process (`TEST_PARALLEL_INDEX` set), it selects the entry at the
   worker's parallel index, sets `BASE_URL`, and overwrites `JAUNDER_DB`,
   `JAUNDER_STORAGE_PATH` and `JAUNDER_CAPTURE_DIR`. Child tools (seeding,
   capture paths, mail) inherit them unchanged.
 - In the runner process (spec loading, `--list`, census, reporters), it binds
-  nothing and writes no environment. Any use of `BASE_URL` there throws.
+  nothing and writes no environment. Any use of `BASE_URL` there throws, and
+  nothing the runner forks inherits an instance's environment.
 - `playwright.config.ts` fails at load when the map's length differs from
   `workers`.
 
@@ -106,15 +110,17 @@ Firefox five, `--shard=1/5` to `--shard=5/5`, each selecting that browser's
 project, so plain sharding runs every test exactly once per pair. The shards
 keep ADR-0262's weighting: the catalog's per-browser `shardWeights`, exported as
 Playwright's `PWTEST_SHARD_WEIGHTS`, size the contiguous slices by measured
-duration, and a browser's weight count is its shard count. A shoot-out chose the
-layout: per-test durations from a four-shard CI run, replayed through
-Playwright's shard assignment for three, four and five shards per browser.
-Chromium at three and Firefox at five predict the same slowest lane (a Firefox
-one) as five shards everywhere, with fewer runner-minutes on Chromium.
-`end2end/e2e-lanes.json` and `scripts/e2e-matrix.jq` enforce that shape. The
-census's exactly-once check, run under the lanes' weights, catches any
-dependency edge added later, because an edge would rerun its dependency in every
-shard.
+duration, and a browser's weight count is its shard count. The weights are
+integer percentages chosen to minimise the slowest predicted lane: Playwright's
+weighted assignment, contiguous slices of the ordered test-group list in
+proportion to the weights, is replayed over per-test durations from CI lane
+reports, plus each lane's fixed VM boot and seed cost. The shard counts come
+from the same replay for three, four and five shards per browser: Chromium at
+three and Firefox at five predict the same slowest lane (a Firefox one) as five
+shards for both, with fewer runner-minutes on Chromium. `end2end/e2e-lanes.json`
+and `scripts/e2e-matrix.jq` enforce that shape. The census's exactly-once check,
+run under the lanes' weights, catches any dependency edge added later, because
+an edge would rerun its dependency in every shard.
 
 **Gates cover every instance.** The zero-panic gate dumps each instance unit's
 journal and verifies it together with that instance's capture subdirectory. Any
@@ -145,8 +151,8 @@ each stays current.
   census, `always()` reconciliation, shared cap and trace seeds remain.
 - It supersedes the serial Theme role and lane of
   [ADR-0262](../0262-serial-theme-e2e-lane-and-weighted-shards.md): the Theme
-  specs are ordinary tests under the state rule. Its duration-weighted shards
-  remain and now size every lane.
+  specs are tests like any other under the state rule. Its duration-weighted
+  shards remain and size every lane.
 - It amends [ADR-0032](../0032-e2e-zero-panic-gate.md): the gate reads every
   instance unit's journal, not one `jaunder.service` journal.
 - It amends [ADR-0057](../0057-e2e-capture-dir-contract.md): one capture
@@ -176,23 +182,21 @@ each stays current.
   carries a concurrency-1 tail.
 - Good: each pair's lanes are identical apart from the shard index, so the
   catalog, census and reconciliation need no special lane or project.
-- Good: global-state races are removed by construction. They no longer depend on
+- Good: global-state races are removed by construction rather than by
   quarantining the right specs.
 - Cost: each VM runs one more Jaunder process and one more database. Every
-  Firefox lane now runs the ordinary workload, so every Firefox lane uses the
-  ordinary Firefox sizing, a 4 GiB guest with a 2 GiB disk. Chromium guests,
-  worker and vCPU counts are unchanged, and the browser count per VM stays at
-  two.
+  Firefox lane has a 4 GiB guest with a 2 GiB disk and every Chromium lane a 3
+  GiB guest. Every lane runs two workers on two vCPUs and two browsers per VM.
 - Cost: two harnesses run N instances instead of one.
 - Constraint: VM seeding runs as the service user (`runuser -u jaunder`), so the
   service account owns each instance's publisher gate. Created by root, the gate
   would lock the server out of publishing.
-- Constraint: tests that formerly ran in the Chromium site-settings or visual
-  projects lost those projects' implicit 2.2× slow-browser timeout scale. Only
-  the `chromium` project keeps the unscaled Chromium budget.
-- Constraint: WebKit, which no gate runs, keeps its existing exclusions
-  (`admin-site`, `invite`, `production-baseline-flow` and the visual tests).
-  That is coverage parity with what it ran before, not a serial project.
+- Constraint: every Chromium test, site-settings and visual tests included, runs
+  in the `chromium` project under the unscaled Chromium budget. Only that
+  project keeps it; every other project takes the slow-browser timeout scale.
+- Constraint: WebKit, which no gate runs, is for host-local investigation and
+  excludes `admin-site`, `invite`, `production-baseline-flow` and the visual
+  tests.
 - Constraint: a visual test's fixed-name user is seeded once per instance and
   reused by a retry there. `--repeat-each` on a visual test is unsupported.
 - Constraint: the shard weights describe the suite's current order and

@@ -669,8 +669,9 @@ e2eRunAndCapture =
     shardCount ? null,
     projectArgs,
     shardArg,
-    expectedCensusProjectArgs ? "",
-    expectedCensusTopology ? "${backend}-${browser}-experimental",
+    # Empty when the lane takes no preflight census.
+    expectedCensusProjectArgs,
+    expectedCensusTopology,
     traceId,
     traceParent,
     # The lane's server instances, one per worker (e2eInstances). Each worker
@@ -1179,7 +1180,8 @@ mkE2eCombo =
     project ? browser,
     shardIndex ? null,
     shardCount ? null,
-    expectedCensusProjectArgs ? "",
+    # Whether the lane takes the unsharded preflight census of its project.
+    census ? true,
     expectedCensusTopology ? "${backend}-${browser}-experimental",
     nameSuffix ? "",
     extraEnv ? "",
@@ -1220,10 +1222,10 @@ mkE2eCombo =
         shardCount
         projectArgs
         shardArg
-        expectedCensusProjectArgs
         expectedCensusTopology
         workers
         ;
+      expectedCensusProjectArgs = pkgs.lib.optionalString census projectArgs;
     };
   };
 
@@ -1243,6 +1245,7 @@ mkUpgradeCheck =
     identity = "upgrade-${backend}";
     traceSeed = if backend == "sqlite" then "a1" else "a2";
     project = "chromium-upgrade";
+    census = false;
     # Both phases verify the records of the one server the earlier build wrote.
     workers = 1;
     enabled = true;
@@ -1276,7 +1279,6 @@ e2eGateChecks = pkgs.lib.listToAttrs (
       # Playwright weights each `--shard` slice by this per-browser string.
       extraEnv = " JAUNDER_E2E_RETRIES=1"
         + " PWTEST_SHARD_WEIGHTS=${e2eLaneCatalogFile.shardWeights.${c.browser}}";
-      expectedCensusProjectArgs = "--project ${c.browser}";
       expectedCensusTopology = "${c.backend}-${c.browser}-split";
       vmMemory = 3072;
       vmCores = 2;
@@ -1298,7 +1300,6 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
       name = "e2e-${lane.backend}-firefox-workers-${toString workers}-control";
       value = mkE2eCombo (lane // {
         extraEnv = " JAUNDER_E2E_RETRIES=1";
-        expectedCensusProjectArgs = "--project ${lane.browser}";
         expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
         inherit workers vmMemory vmCores;
       });
@@ -1329,6 +1330,7 @@ e2eSingleWorkerPackages = pkgs.lib.listToAttrs (
       c
       // {
         nameSuffix = "-single-worker";
+        census = false;
         workers = 1;
       }
     );

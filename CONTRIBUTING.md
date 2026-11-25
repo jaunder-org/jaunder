@@ -665,11 +665,11 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
   The selected output is rooted under `.xtask/gcroots/e2e-local-*` through all
   browser lifecycles and server/collector teardown. Nix owns artifact identity,
-  store concurrency and reuse; `e2e-local` no longer uses
-  `.xtask/host-artifacts.lock` to protect mutable checkout application builds.
-  Cargo's dev profile and pinned toolchain still determine the embedded browser
-  assertions and package inputs; a first Nix miss may be slower and retains an
-  additional debug artifact.
+  store concurrency and reuse; `e2e-local` takes no `.xtask/host-artifacts.lock`
+  and selects no mutable checkout application outputs. Cargo's dev profile and
+  pinned toolchain still determine the embedded browser assertions and package
+  inputs; a first Nix miss may be slower and retains an additional debug
+  artifact.
 
   `e2e-local` refuses a set `JAUNDER_CSR_BUNDLE_DIR` before artifact production,
   server startup or seeding, with guidance to unset it; it does not silently
@@ -723,17 +723,21 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   shard, so a pair's lanes run each test exactly once. The catalog's per-browser
   `shardWeights` (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the
   shards by measured duration, and each string's part count is that browser's
-  shard count. Re-derive the weights from lane reports' per-test durations when
-  the shards drift apart; change a browser's count by changing its weights and
-  lanes together. Every lane VM runs one server instance and database per
-  Playwright worker. Producers lift available lane-qualified diagnostics before
-  propagating their original Nix failure; missing diagnostics cannot turn a
-  failure green. Reconciliation fail-closed checks the independent census,
-  report union, retries, duration manifests, phase sidecars and trace captures.
-  The retired Rust producer/control aliases are not parallel workflow
-  entrypoints. Existing unsplit Firefox workers=2/workers=4 measurement
-  installables remain available through ordinary `nix build`; workers=4 remains
-  rejected for production.
+  shard count. When a browser's shards drift apart, re-derive its weights: take
+  per-test durations from recent CI lane reports
+  (`playwright-report-<lane>.json`), replay Playwright's weighted assignment
+  (contiguous slices of the ordered test-group list in proportion to the
+  weights) plus each lane's fixed VM boot and seed cost, and choose the integer
+  percentages that minimise the slowest predicted lane. Change a browser's count
+  by changing its weights and catalog lanes together. Every lane VM runs one
+  server instance and database per Playwright worker. Producers lift available
+  lane-qualified diagnostics before propagating their original Nix failure;
+  missing diagnostics cannot turn a failure green. Reconciliation fail-closed
+  checks the independent census, report union, retries, duration manifests,
+  phase sidecars and trace captures. The retired Rust producer/control aliases
+  are not parallel workflow entrypoints. Existing unsplit Firefox
+  workers=2/workers=4 measurement installables remain available through ordinary
+  `nix build`; workers=4 remains rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -757,8 +761,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 #### Bounding full local E2E fan-out
 
 `dev e2e <N>` bounds producer admission with ordinary `xargs -P`. Omission runs
-at most three producers, and so three NixOS VMs, at once: the local peak before
-#1890, when each backend's three Firefox lanes ran together. Raise it only from
+at most three producers, and so three NixOS VMs, at once. Raise it only from
 actual admitted CPU/RAM capacity; larger bounds cannot start more work than
 there are enabled lanes. Invalid bounds fail before producers start. Full
 `dev validate` uses the ordinary default; `dev validate-no-e2e` omits E2E.
