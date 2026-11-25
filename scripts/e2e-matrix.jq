@@ -1,52 +1,36 @@
-# Runtime ownership/partition checks replace the retired embedded Rust catalog.
-# Every {backend, browser} pair has the same four-lane split: ordinary 1-of-2,
-# ordinary 2-of-2, one serial-special lane and one serial-theme lane. Unsplit
-# lanes are disabled controls. Ordinary shards are sized by one per-browser
-# Playwright shard-weight string (`PWTEST_SHARD_WEIGHTS`, e.g. "56:44").
+# Runtime ownership checks replace the retired embedded Rust catalog.
+# Each browser's shard count N is the number of weights in its Playwright
+# shard-weight string (`PWTEST_SHARD_WEIGHTS`, e.g. "48:24:28" for N=3), so a
+# browser's lanes and weights cannot disagree. Every {backend, browser} pair has
+# N lanes, shards 1..N of N, each selecting the browser's one `<browser>`
+# project; plain `--shard` then runs each test exactly once per pair. The
+# project has no dependencies (Playwright's `--shard` would rerun a dependency
+# in every shard). Unsharded lanes are disabled measurement controls selecting
+# the same project.
 def identity:
   "\(.backend)-\(.browser)-" +
-  (if .partition == "ordinary" then "ordinary-\(.shardIndex)-of-\(.shardCount)" else .partition end);
+  (if .shardIndex == null then "unsplit" else "\(.shardIndex)-of-\(.shardCount)" end);
 # The seed repeats to fill the 32-hex-digit trace id (and 16-digit span id).
 def trace_id: .traceSeed * (32 / (.traceSeed | length));
-. as $catalog | .lanes as $lanes
+.lanes as $lanes
+| .shardWeights as $weights
 | [$lanes[] | select(.enabled)] as $enabled
-| [.experimentalProjectDependencies | keys[]] as $projects
 | ([$enabled[] | {backend, browser}] | unique) as $pairs
-| if .schemaVersion == 1 and ($enabled | length) == 16 and ($pairs | length) == 4
-    and (.ordinaryShardWeights | keys) == ([$pairs[].browser] | unique)
-    and all(.ordinaryShardWeights[]; test("^[1-9][0-9]*:[1-9][0-9]*$"))
+| if .schemaVersion == 1 and ($pairs | length) == 4
+    and ($weights | keys) == ([$pairs[].browser] | unique)
+    and all($weights[]; test("^[1-9][0-9]*(:[1-9][0-9]*)+$"))
     and ([$lanes[].identity] | length == (unique | length))
     and ([$lanes[] | trace_id] | length == (unique | length))
     and all($lanes[]; .identity == identity
       and (.backend == "sqlite" or .backend == "postgres")
       and (.browser == "chromium" or .browser == "firefox")
       and (.traceSeed | test("^[0-9a-f]{1,2}$") and (test("^0+$") | not))
-      and (.projects | length > 0 and length == (unique | length))
-      and (if .partition == "ordinary" then .enabled
-        and .shardCount == 2 and (.shardIndex == 1 or .shardIndex == 2)
-        else .shardIndex == null and .shardCount == null
-        and ((.partition == "unsplit" and (.enabled | not))
-          or ((.partition == "serial-special" or .partition == "serial-theme") and .enabled)) end))
+      and (if .enabled then .shardCount == ($weights[.browser] | split(":") | length)
+        else .shardIndex == null and .shardCount == null end))
     and all($pairs[]; . as $pair
-      | [$enabled[] | select(.backend == $pair.backend and .browser == $pair.browser)] as $split
-      | [$split[] | select(.partition == "ordinary")] as $ordinary
-      | [$split[] | select(.partition != "ordinary")] as $serial
-      | ($split | length) == 4
-        and ([$ordinary[].shardIndex] | sort) == [1, 2]
-        and ([$serial[].partition] | sort) == ["serial-special", "serial-theme"]
-        and $ordinary[0].projects == $ordinary[1].projects
-        and ([$ordinary[0], $serial[] | .projects[]] | length == (unique | length))
-        and ([$split[].projects[]] | unique | sort)
-          == ($projects | map(select(startswith("\($pair.browser)-"))) | sort))
-    and ([$enabled[].projects[]] | unique | sort) == ($projects | sort)
-    and all($catalog.experimentalProjectDependencies | to_entries[]; . as $entry
-      | (.value | length == (unique | length))
-      and all($entry.value[]; . as $dependency
-        | $dependency != $entry.key
-        and all($enabled[] | select(.projects | index($entry.key) != null);
-          (.projects | index($dependency)) != null
-          and (.projects | index($dependency)) < (.projects | index($entry.key)))))
+      | [$enabled[] | select(.backend == $pair.backend and .browser == $pair.browser) | .shardIndex]
+      | sort == [range(1; ($weights[$pair.browser] | split(":") | length) + 1)])
   then
     "lanes=\($enabled | map({backend, browser, lane: .identity}) | tojson)",
     "reconciles=\($pairs | tojson)"
-  else error("invalid retained E2E ownership/partition catalog") end
+  else error("invalid retained E2E ownership catalog") end

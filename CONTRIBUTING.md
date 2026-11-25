@@ -637,16 +637,18 @@ browser-flow definitions shared. A focused host pass does not establish the
 hermetic backend/browser matrix verdict; CI remains authoritative.
 
 - **Fast local loop** — `dev e2e-local` owns the whole loop: it resolves the CSR
-  bundle and builds the host server, starts its own `jaunder serve` and OTLP
-  collector on ephemeral ports with a fresh per-run SQLite temp DB, seeds
-  fixtures, and runs the local Chromium lifecycle, tearing both processes down
-  after. The collector captures correlated browser and server spans, then the
-  command retains the complete capture under
-  `.xtask/e2e-local/<run-id>/<browser>/capture/` and prints the exact
-  `otel-traces.jsonl` path. No pre-existing server or collector is needed. Use
-  this while iterating on the web UI; it uses the HTML reporter for interactive
-  debugging. For browser-specific investigation on macOS, select WebKit after
-  provisioning browsers, for example
+  bundle and builds the host server, starts an OTLP collector and one
+  `jaunder serve` per Playwright worker (`JAUNDER_E2E_WORKERS`, default 1), each
+  on its own ephemeral port with a fresh SQLite temp DB, seeds each instance,
+  and runs the local Chromium lifecycle, tearing every process down after. The
+  collector captures correlated browser and server spans, then the command
+  retains the complete capture under
+  `.xtask/e2e-local/<run-id>/<browser>/capture/` (each server's streams in its
+  `instance-<i>/` subdirectory) and prints the exact `otel-traces.jsonl` path.
+  Playwright's output is drained while it runs. No pre-existing server or
+  collector is needed. Use this while iterating on the web UI; it uses the HTML
+  reporter for interactive debugging. For browser-specific investigation on
+  macOS, select WebKit after provisioning browsers, for example
   `dev e2e-local post-image-fit.spec.ts --browser webkit`; this proves
   Playwright WebKit only, not actual Safari.
 
@@ -663,11 +665,11 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
   The selected output is rooted under `.xtask/gcroots/e2e-local-*` through all
   browser lifecycles and server/collector teardown. Nix owns artifact identity,
-  store concurrency and reuse; `e2e-local` no longer uses
-  `.xtask/host-artifacts.lock` to protect mutable checkout application builds.
-  Cargo's dev profile and pinned toolchain still determine the embedded browser
-  assertions and package inputs; a first Nix miss may be slower and retains an
-  additional debug artifact.
+  store concurrency and reuse; `e2e-local` takes no `.xtask/host-artifacts.lock`
+  and selects no mutable checkout application outputs. Cargo's dev profile and
+  pinned toolchain still determine the embedded browser assertions and package
+  inputs; a first Nix miss may be slower and retains an additional debug
+  artifact.
 
   `e2e-local` refuses a set `JAUNDER_CSR_BUNDLE_DIR` before artifact production,
   server startup or seeding, with guidance to unset it; it does not silently
@@ -681,7 +683,8 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 
 - **Focused browser-flow proof** — `dev e2e-local <spec-or-file:line>` scopes
   the local loop to one Playwright positional filter when that spec or line
-  covers the changed behavior:
+  covers the changed behavior. The filter applies to the browser's one
+  `<browser>` project, visual tests included, with no prerequisite ordering:
 
   ```bash
   dev e2e-local auth.spec.ts
@@ -713,19 +716,28 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   hermetic proof when backend/browser parity, release behavior or the branch
   boundary matters; this is not required before every push. The push hook
   remains `prepush`.
-- **Reconciliation and controls** — Every browser uses the same split per
-  backend: ordinary shards 1 and 2 of 2, one serial-special lane owning the
-  visual, global-configuration and invite projects, and one serial-theme lane
-  owning the Theme specs. The catalog's per-browser `ordinaryShardWeights`
-  (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the ordinary shards by
-  measured duration; re-derive them from lane reports when the shards drift
-  apart. Producers lift available lane-qualified diagnostics before propagating
-  their original Nix failure; missing diagnostics cannot turn a failure green.
-  Reconciliation fail-closed checks the independent census, report union,
-  retries, duration manifests, phase sidecars and trace captures. The retired
-  Rust producer/control aliases are not parallel workflow entrypoints. Existing
-  unsplit Firefox workers=2/workers=4 measurement installables remain available
-  through ordinary `nix build`; workers=4 remains rejected for production.
+- **Reconciliation and controls** — Per backend, Chromium runs three lanes,
+  `--shard=1/3` to `--shard=3/3`, and Firefox five, `--shard=1/5` to
+  `--shard=5/5`, each selecting the browser's one `<browser>` project. The
+  project has no dependency, because `--shard` would rerun a dependency in every
+  shard, so a pair's lanes run each test exactly once. The catalog's per-browser
+  `shardWeights` (exported as Playwright's `PWTEST_SHARD_WEIGHTS`) size the
+  shards by measured duration, and each string's part count is that browser's
+  shard count. When a browser's shards drift apart, re-derive its weights: take
+  per-test durations from recent CI lane reports
+  (`playwright-report-<lane>.json`), replay Playwright's weighted assignment
+  (contiguous slices of the ordered test-group list in proportion to the
+  weights) plus each lane's fixed VM boot and seed cost, and choose the integer
+  percentages that minimise the slowest predicted lane. Change a browser's count
+  by changing its weights and catalog lanes together. Every lane VM runs one
+  server instance and database per Playwright worker. Producers lift available
+  lane-qualified diagnostics before propagating their original Nix failure;
+  missing diagnostics cannot turn a failure green. Reconciliation fail-closed
+  checks the independent census, report union, retries, duration manifests,
+  phase sidecars and trace captures. The retired Rust producer/control aliases
+  are not parallel workflow entrypoints. Existing unsplit Firefox
+  workers=2/workers=4 measurement installables remain available through ordinary
+  `nix build`; workers=4 remains rejected for production.
 - **Duration-pressure gate** — After an otherwise-successful VM lane has
   captured diagnostics, it reconciles `playwright-report-<lane>.json` and
   `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
@@ -749,8 +761,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
 #### Bounding full local E2E fan-out
 
 `dev e2e <N>` bounds producer admission with ordinary `xargs -P`. Omission runs
-at most three producers, and so three NixOS VMs, at once: the local peak before
-#1890, when each backend's three Firefox lanes ran together. Raise it only from
+at most three producers, and so three NixOS VMs, at once. Raise it only from
 actual admitted CPU/RAM capacity; larger bounds cannot start more work than
 there are enabled lanes. Invalid bounds fail before producers start. Full
 `dev validate` uses the ordinary default; `dev validate-no-e2e` omits E2E.
@@ -768,11 +779,14 @@ synthesized.
 This is a host dispatch bound, not Nix's `max-jobs`/core scheduler or a limit on
 all host processes, guest workers, dependency builds, substitutions or builders.
 Nix settings and other invocations can further affect actual overlap. Current
-production lanes request two vCPUs, with 4 GiB for ordinary Firefox guests and 3
-GiB for other guests; these are configured guest sizes, not measured host use or
-proof that any particular cap is safe. Cross-checkout heavy-path admission is
-separate work in #1753, not a prerequisite. No global queue, automatic host
-threshold or resource-pressure cancellation is introduced.
+production lanes request two vCPUs, with 4 GiB for Firefox guests and 3 GiB for
+Chromium guests; these are configured guest sizes, not measured host use or
+proof that any particular cap is safe. Each guest also runs one Jaunder instance
+and database per worker, so a guest's size must cover its browsers and every
+instance together; resize from measured guest memory, not from these figures.
+Cross-checkout heavy-path admission is separate work in #1753, not a
+prerequisite. No global queue, automatic host threshold or resource-pressure
+cancellation is introduced.
 
 #### Visual snapshot workflow
 
@@ -780,11 +794,11 @@ Visual coverage is deliberately five existing behavioral tests tagged `@visual`:
 the public timeline, login form, authenticated `/app` cockpit, empty
 `/posts/new` composer, and compact `/drafts` row actions. Keep the assertions
 that prove each state ready; the screenshot comparison supplements them.
-Expected PNGs live beside their owning specs under `*.spec.ts-snapshots/`, with
-Playwright's browser project and Linux identity in the generated filename. There
-is one Chromium and one Firefox baseline per state, shared by the SQLite and
-PostgreSQL gates. Do not add backend, WebKit, mobile, or alternate-theme
-variants without changing this policy.
+Expected PNGs live beside their owning specs under `*.spec.ts-snapshots/`, named
+`<name>-<browser>-visual-linux.png` by the browser project's
+`snapshotPathTemplate`. There is one Chromium and one Firefox baseline per
+state, shared by the SQLite and PostgreSQL gates. Do not add backend, WebKit,
+mobile, or alternate-theme variants without changing this policy.
 
 Comparisons are exact: zero differing pixels, pinned DejaVu/fontconfig, and
 screenshot-only animation/caret/font CSS. The public timeline masks only
@@ -820,10 +834,21 @@ against an ambient server or database. Review every changed PNG, then run
 `dev e2e-local` without update mode before committing intentional baselines
 together with the rendering or test change.
 
-`dev e2e-local <spec-or-file:line>` remains the targeted loop. It scopes both
-the visual prerequisite and the ordinary/admin invocation to that positional
-filter; an unrelated spec does not schedule all visual tests. Update mode
-intentionally rejects a positional filter.
+Visual tests follow the [E2E state rule](#e2e-tests-set-their-own-global-state)
+and need no ordering. Each seeds its own fixed-name user, because usernames
+render in the pixels, and calls `setSeededSiteAppearance`
+(`end2end/tests/visual.ts`) to set the seeded title, tagline, Registration
+Policy, Site Default Audience, Media Upload Capability and Site Theme it
+renders. A visual test therefore passes wherever it runs on an instance other
+tests have used. Visual tests take the run's retry policy like any other test. A
+retry that lands on the instance where its earlier attempt seeded the fixed-name
+user signs in to it with `signInAsVisualUser` instead of seeding it, or its
+Posts, again; `--repeat-each` on a visual test is unsupported.
+
+`dev e2e-local <spec-or-file:line>` remains the targeted loop. It selects the
+browser's one project with that positional filter; an unrelated spec does not
+schedule all visual tests. Update mode selects `@visual` tests and intentionally
+rejects a positional filter.
 
 #### Accessibility workflow
 
@@ -844,6 +869,26 @@ readiness assertions. Add the `@accessibility` tag and call
 Automated axe checks cover only machine-checkable findings; they do not replace
 keyboard navigation, screen-reader testing, manual assessment, or inclusive-user
 assessment.
+
+### E2E tests set their own global state
+
+Every Playwright worker has its own server instance and database, but the tests
+a worker runs share that instance in an order you do not control. Site settings
+such as the title, tagline, `base_url`, Registration Policy, Site Default
+Audience, Media Upload Capability and Site Theme are global to the instance. So:
+
+- A test **sets the global state it depends on**, usually with
+  `seedConfigViaTool` or the owning UI flow, before it relies on it.
+- A test **asserts nothing about global state it did not set**.
+- **Nobody cleans up.** Do not restore settings in `finally`, `afterEach` or
+  `afterAll`, and do not add reset, restore or snapshot infrastructure.
+- Fix an order-dependent failure with one of two moves: the test sets its own
+  precondition, or the incidental assertion goes.
+- Per-user state needs no rule: use the per-test identity fixtures (`user`,
+  `mailbox`, `verifiedUser`) or `seedUserViaTool`.
+
+The decision is recorded in
+[per-worker E2E server instances](docs/adr/drafts/per-worker-e2e-server-instances.md).
 
 ### One boot per page
 
@@ -1536,13 +1581,14 @@ baseline.
 - **Failure logs — look here first (#144)**: on a red E2E lane, read the scoped
   server-diagnostic log before the journal. It is a small JSONL file of only the
   server's **WARN+ events and panics** (no kernel/INFO noise), copied to
-  `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz` (which contains
-  `diag.log`; in the VM: `/var/lib/jaunder/capture/diag.log`). Panic records
-  carry `"kind": "panic"`. The zero-panic gate
+  `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz` (which contains one
+  `instance-<i>/diag.log` per server instance; in the VM:
+  `/var/lib/jaunder/capture/instance-<i>/diag.log`). Panic records carry
+  `"kind": "panic"`. The zero-panic gate
   ([ADR-0032](docs/adr/0032-e2e-zero-panic-gate.md)) sources `panicked at` from
-  this file unioned with the journal; `jaunder-journal-<lane>.log` stays
-  captured as the last-resort fallback. See `docs/observability.md` for the
-  JSONL shape.
+  each instance's file unioned with that instance's journal;
+  `jaunder-journal-instance-<i>-<lane>.log` stays captured as the last-resort
+  fallback. See `docs/observability.md` for the JSONL shape.
 
 - **Failed Nix checks**: direct `dev` requests report through command output;
   inspect the `traced-run` parked stderr/stdout or owning CI job log. Retained
@@ -2400,12 +2446,10 @@ server-function coverage verification to `dev validate-no-e2e`.
   tools workspace, without fence reconciliation, over its own source
   (`toolsDocTestSrc` in `nix/packages.nix`) in which every tools member is real,
   reusing the shared tools dependency build
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-ordinary-{1,2}-of-2`
-  — two ordinary shards per backend and browser
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-serial-special`
-  — one visual/global-configuration/invite lane per backend and browser
-- `checks.x86_64-linux.e2e-{sqlite,postgres}-{chromium,firefox}-serial-theme` —
-  one Theme lane per backend and browser
+- `checks.x86_64-linux.e2e-{sqlite,postgres}-chromium-{1,2,3}-of-3` and
+  `checks.x86_64-linux.e2e-{sqlite,postgres}-firefox-{1,2,3,4,5}-of-5` — three
+  Chromium and five Firefox shards per backend, each over the browser's one
+  project
 - `checks.x86_64-linux.e2e` — the existing browser-only Nix aggregate. Direct
   realization does not perform the host artifact verdicts. `dev e2e` (also
   called by full `validate`) realizes the individual lane outputs above and then
@@ -2462,9 +2506,8 @@ For matched arms, interleaving and interpretation, see
 If you only need one of the VM-backed checks, you can run it directly:
 
 ```bash
-nix build .#checks.x86_64-linux.e2e-sqlite-chromium-ordinary-1-of-2
-nix build .#checks.x86_64-linux.e2e-postgres-firefox-ordinary-1-of-2
-nix build .#checks.x86_64-linux.e2e-postgres-firefox-serial-special
+nix build .#checks.x86_64-linux.e2e-sqlite-chromium-1-of-3
+nix build .#checks.x86_64-linux.e2e-postgres-firefox-2-of-5
 nix build .#packages.x86_64-linux.e2e-sqlite-firefox-single-worker
 nix build .#packages.x86_64-linux.e2e-postgres-firefox-single-worker
 nix build .#checks.x86_64-linux.elisp-coverage-producer

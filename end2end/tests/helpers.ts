@@ -64,6 +64,7 @@
  *   flow (spec D6).
  */
 
+import { BASE_URL } from "./instance";
 import { expect, type Page } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { allowSecondBoot, throwIfViolated } from "./bootBudget";
@@ -72,6 +73,7 @@ import { waitForMount } from "./mount";
 import {
   applySeededSession,
   createSessionViaTool,
+  seedConfigViaTool,
   seedUserViaTool,
   type SeedRecord,
 } from "./seed";
@@ -89,11 +91,8 @@ export function confirmedMutation<T>(
   throw new Error(`${context} commit acknowledgement was indeterminate`);
 }
 
-// The server's base URL. `JAUNDER_E2E_BASE_URL` lets the harness point the suite
-// at an ephemeral-port server (the host e2e loop feeds its discovered
-// `http://ip:port`, #249); the Nix VM feeds nothing and keeps the fixed :3000.
-export const BASE_URL =
-  process.env.JAUNDER_E2E_BASE_URL ?? "http://localhost:3000";
+// This worker's server origin, bound from the harness's instance map (#2076).
+export { BASE_URL };
 
 // ---------------------------------------------------------------------------
 // Low-level action wrappers
@@ -307,13 +306,15 @@ export async function signInAs(
  *
  * **Boots the page** (#867), on the same terms as {@link login}: an ADR-0098
  * holdout whose document load of `/register` is the subject. A caller whose page
- * has already booted declares it with `allowSecondBoot`.
+ * has already booted declares it with `allowSecondBoot`. It sets the Open
+ * registration policy that direct registration depends on.
  */
 export async function registerViaUi(
   page: Page,
   firstNavigationTimeoutMs: number,
 ): Promise<string> {
   const username = generateUsername();
+  await seedConfigViaTool("site.registration_policy", "open");
 
   await withTimedAction(page, "flow.register", async () => {
     await goto(page, "/register", { timeout: firstNavigationTimeoutMs });

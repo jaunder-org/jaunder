@@ -17,11 +17,7 @@ import {
   expectFlash,
 } from "./helpers";
 import { createPerfProbe } from "./perf";
-import {
-  applySeededSession,
-  createSessionViaTool,
-  seedPostsViaTool,
-} from "./seed";
+import { seedConfigViaTool, seedPostsViaTool } from "./seed";
 import { SEL } from "./selectors";
 import {
   composePost,
@@ -40,7 +36,12 @@ import { openAreaDestination } from "./settings-areas";
 import { navigateInApp } from "./navigate";
 import { mintAppPassword } from "./sessions";
 import { allowSecondBoot } from "./bootBudget";
-import { expectVisual, expectVisualRegion } from "./visual";
+import {
+  setSeededSiteAppearance,
+  signInAsVisualUser,
+  expectVisual,
+  expectVisualRegion,
+} from "./visual";
 import { expectAccessible } from "./accessibility";
 import {
   conformanceThemePackage,
@@ -142,6 +143,7 @@ test("published Org source blocks are distinct and readable on narrow screens", 
   registeredPage,
   tracedContext,
 }, testInfo) => {
+  await seedConfigViaTool("site.title", "Jaunder");
   // Rendering is the subject; arrange the Post before its cold permalink entry.
   const { post_id, permalink } = await createPostViaApi(page, {
     body: "#+TITLE: Code sample\n\nIntro paragraph.\n\n#+begin_src emacs-lisp\n;; source line\n(use-package consult\n  :after (project)\n  :bind (([remap switch-to-buffer] . consult-buffer)))\n#+end_src\n\nOutro paragraph.",
@@ -254,6 +256,7 @@ for (const fixture of [
     registeredPage,
     tracedContext,
   }, testInfo) => {
+    await seedConfigViaTool("site.title", "Jaunder");
     setTestBudget(90_000);
     // Token rendering needs a saved Post, not a composer interaction.
     const { permalink } = await createPostViaApi(page, {
@@ -313,6 +316,7 @@ test("code roles stay scoped and themeable on permalink, Home and Local", async 
   registeredPage,
   tracedContext,
 }, testInfo) => {
+  await seedConfigViaTool("site.title", "Jaunder");
   setTestBudget(90_000);
   const page = await registeredPage("/posts/new");
   const summary = await composePost(page, {
@@ -506,6 +510,7 @@ test("post create surfaces use textual draft and disclosed Media actions", async
 test("composer keeps filled body actions before a container-responsive controls rail", async ({
   registeredPage,
 }) => {
+  await seedConfigViaTool("posts.default_audience", "private");
   const page = await registeredPage("/posts/new");
 
   const expectApprovedMarkup = async (grid: Locator): Promise<void> => {
@@ -994,6 +999,7 @@ test("editing an AtomPub-titled Markdown Post preserves its separate title and b
   page,
   request,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const username = await signInAsNewUser(page);
   const token = await mintAppPassword(page, "Separate Markdown title");
   const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
@@ -1040,6 +1046,7 @@ test("editing an AtomPub-titled HTML Post preserves its separate title and body"
   page,
   request,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const username = await signInAsNewUser(page);
   const token = await mintAppPassword(page, "Separate HTML title");
   const created = await request.post(`${BASE_URL}/atompub/${username}/posts`, {
@@ -1352,6 +1359,7 @@ test("failed named-audience load shows an error and gates compose actions", asyn
 test("failed Named-audience load cannot overwrite an existing Named-only Post", async ({
   registeredPage,
 }) => {
+  await seedConfigViaTool("posts.default_audience", "private");
   const page = await registeredPage("/audiences");
   await page.fill('input[name="name"]', "Confidants");
   await click(page, 'button:has-text("Create")');
@@ -1545,9 +1553,10 @@ test("clearing a post summary on edit persists as empty", async ({
 test(
   "an empty body disables the compose page's submit controls",
   { tag: ["@visual", "@accessibility"] },
-  async ({ page, firstNav }) => {
-    const session = await createSessionViaTool("testlogin");
-    await applySeededSession(page.context(), session);
+  async ({ page, tracedContext, firstNav }) => {
+    await setSeededSiteAppearance(tracedContext);
+    // The name is fixed because the avatar renders it.
+    await signInAsVisualUser(page, "visualcomposer");
     await goto(page, "/posts/new", { timeout: firstNav });
 
     await expect(page.locator(SEL.publishButton("true"))).toBeDisabled();
@@ -1810,6 +1819,7 @@ test("edit page: format control prefills accessibly and round-trips a change", a
 test("Post audience picker preserves union targets and Private across save and reopen", async ({
   registeredPage,
 }) => {
+  await seedConfigViaTool("posts.default_audience", "private");
   test.slow();
   const page = await registeredPage("/audiences");
   for (const name of ["Confidants", "Family"]) {
@@ -2222,6 +2232,7 @@ test("Local shows published posts for unauthenticated visitors", async ({
   firstNav,
 }, testInfo) => {
   const perf = createPerfProbe(testInfo, "local_timeline");
+  await seedConfigViaTool("site.title", "Jaunder");
 
   const u1 = await signInAsNewUser(page);
   await seedPostsViaTool(u1, LOCAL_TIMELINE_AUTHOR_COUNT, "Local Author One");
@@ -2235,8 +2246,6 @@ test("Local shows published posts for unauthenticated visitors", async ({
   const guestPage = await guestContext.newPage();
   await goto(guestPage, "/", { timeout: firstNav });
 
-  // No title is configured in the ordinary fixture, so Local uses the required
-  // identity default. Configuration-mutating specs run later in serial projects.
   await expect(guestPage.locator(SEL.topbarHeading)).toHaveText("Jaunder");
 
   // Own-scoped: with workers>1 other tests publish into the same global local
@@ -3369,12 +3378,13 @@ test("drafts list paginates unpublished posts", async ({ page, firstNav }) => {
 test(
   "draft Post actions stay compact at desktop and narrow widths",
   { tag: "@visual" },
-  async ({ page, firstNav }) => {
-    const session = await createSessionViaTool("testlogin");
-    await seedPostsViaTool(session.username, 1, "Compact Draft Actions", {
+  async ({ page, tracedContext, firstNav }) => {
+    await setSeededSiteAppearance(tracedContext);
+    // The region screenshot shows no username, so any fresh account matches.
+    const username = await signInAsNewUser(page);
+    await seedPostsViaTool(username, 1, "Compact Draft Actions", {
       published: false,
     });
-    await applySeededSession(page.context(), session);
     await goto(page, "/drafts", { timeout: firstNav });
 
     const row = page.locator(".j-draft-row", {
@@ -3459,6 +3469,7 @@ test.describe("new post publication time", () => {
     registeredPage,
     tracedContext,
   }, testInfo) => {
+    await seedConfigViaTool("site.base_url", "https://example.com");
     const firstNavigationTimeoutMs = slowBrowserFirstNavigationTimeoutMs(
       testInfo,
       12_000,

@@ -15,7 +15,6 @@ type LaneManifest = {
   lane: string;
   backend: string;
   browser: string;
-  partition: string;
   shard_index: number | null;
   shard_count: number | null;
   tests: Selected[];
@@ -102,7 +101,6 @@ export default class E2eLaneManifestReporter implements Reporter {
       lane: required("JAUNDER_E2E_LANE"),
       backend: required("JAUNDER_E2E_BACKEND"),
       browser: required("JAUNDER_E2E_BROWSER"),
-      partition: required("JAUNDER_E2E_PARTITION"),
       shard_index,
       shard_count,
       tests,

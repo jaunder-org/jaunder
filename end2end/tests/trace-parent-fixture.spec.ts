@@ -3,6 +3,7 @@ import { test as tracedTest } from "./fixtures";
 import { goto } from "./helpers";
 import { navigateInApp } from "./navigate";
 import { traceContextFromEnvironment } from "./otel";
+import { seedConfigViaTool } from "./seed";
 
 type RequestObservation = {
   phase: "page-fixture-setup" | "test-body" | "helper-context";
@@ -59,6 +60,8 @@ const setupNavigatesBeforeTest = tracedTest.extend({
     const pageId = contextId;
     observeGetSessionRequests(context, contextId, pageId, testSpanId);
 
+    // The test body follows Local's Register action, offered only under Open.
+    await seedConfigViaTool("site.registration_policy", "open");
     // This is a supported page-fixture setup navigation, before the base fixture
     // yields page to the composed page-dependent auto fixtures.
     const page = await context.newPage();

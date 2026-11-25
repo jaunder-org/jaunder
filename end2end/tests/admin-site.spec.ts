@@ -123,6 +123,7 @@ test("Site Settings clears a persisted Local tagline", async ({ page }) => {
 });
 
 test("Site Default Audience round-trips independently", async ({ page }) => {
+  await seedConfigViaTool("posts.default_audience", "private");
   await signInAs(page, "testoperator");
   await Promise.all([
     page.waitForResponse((response) =>
@@ -136,30 +137,20 @@ test("Site Default Audience round-trips independently", async ({ page }) => {
   await expect(audience).toHaveValue("private");
 
   await audience.selectOption("public");
-  let saved = page.waitForResponse((response) =>
+  const saved = page.waitForResponse((response) =>
     response.url().includes("/api/site/update_default_audience"),
   );
   await save.click();
   expect((await saved).ok()).toBe(true);
   await reenterAdminSettings(page, "site");
   await expect(audience).toHaveValue("public");
-
-  await audience.selectOption("private");
-  saved = page.waitForResponse((response) =>
-    response.url().includes("/api/site/update_default_audience"),
-  );
-  await save.click();
-  expect((await saved).ok()).toBe(true);
 });
 
 // #552: media uploads are a separately saved site capability. Toggling it must
 // not submit or overwrite the independently persisted site identity.
 test.describe("Media upload capability", () => {
-  test.afterEach(async () => {
-    await seedConfigViaTool("media.uploads_enabled", "true");
-  });
-
   test("toggles independently of site identity", async ({ page }) => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
     await signInAs(page, "testoperator");
     await Promise.all([
       page.waitForResponse(
@@ -302,8 +293,6 @@ test("site base URL warning banner revalidates in place after relevant settings 
   const baseUrl = page.locator('input[name="base_url"]');
   const banner = page.getByText("Site base URL is not configured");
   const saveButton = page.locator('button:has-text("Save Site Settings")');
-  const initialTitle = await title.inputValue();
-  const initialBaseUrl = await baseUrl.inputValue();
   let siteWarningRequests = 0;
   let backupWarningRequests = 0;
   page.on("request", (request) => {
@@ -315,103 +304,88 @@ test("site base URL warning banner revalidates in place after relevant settings 
     }
   });
 
-  try {
-    // Establish the unresolved predicate through the UI before the first assertion.
-    await baseUrl.fill("");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/update_identity"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/is_base_url_warning_visible"),
-      ),
-      baseUrl.press("Enter"),
-    ]);
-    await expect(banner).toBeVisible();
+  // Establish the unresolved predicate through the UI before the first assertion.
+  await baseUrl.fill("");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/update_identity"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/is_base_url_warning_visible"),
+    ),
+    baseUrl.press("Enter"),
+  ]);
+  await expect(banner).toBeVisible();
 
-    // Home's document-owned scroll must not stack its sticky publishing chrome
-    // underneath an operational warning. The warning stays visible and the Home
-    // chrome yields to normal flow until the warning is resolved.
-    await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
-      url: "/app",
-      ready: ".j-home-chrome",
-    });
-    await expect(banner).toBeVisible();
-    expect(
-      await page
-        .locator(".j-home-chrome")
-        .evaluate((element) => getComputedStyle(element).position),
-    ).toBe("static");
-    const warningBox = (await banner.locator("..").boundingBox())!;
-    const homeChromeBox = (await page.locator(".j-home-chrome").boundingBox())!;
-    expect(homeChromeBox.y).toBeGreaterThanOrEqual(
-      warningBox.y + warningBox.height,
-    );
-    await openAreaDestination(page, "/settings", {
-      url: "/admin/site",
-      ready: 'input[name="base_url"]',
-    });
+  // Home's document-owned scroll must not stack its sticky publishing chrome
+  // underneath an operational warning. The warning stays visible and the Home
+  // chrome yields to normal flow until the warning is resolved.
+  await navigateInApp(page, () => click(page, '.j-nav a[href="/app"]'), {
+    url: "/app",
+    ready: ".j-home-chrome",
+  });
+  await expect(banner).toBeVisible();
+  expect(
+    await page
+      .locator(".j-home-chrome")
+      .evaluate((element) => getComputedStyle(element).position),
+  ).toBe("static");
+  const warningBox = (await banner.locator("..").boundingBox())!;
+  const homeChromeBox = (await page.locator(".j-home-chrome").boundingBox())!;
+  expect(homeChromeBox.y).toBeGreaterThanOrEqual(
+    warningBox.y + warningBox.height,
+  );
+  await openAreaDestination(page, "/settings", {
+    url: "/admin/site",
+    ready: 'input[name="base_url"]',
+  });
 
-    let expectedSiteWarnings = siteWarningRequests;
-    const expectedBackupWarnings = backupWarningRequests;
-    await title.fill("Banner Site");
-    await baseUrl.fill("https://example.com");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/update_identity"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/is_base_url_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedSiteWarnings += 1;
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    await expect(banner).toBeHidden();
+  let expectedSiteWarnings = siteWarningRequests;
+  const expectedBackupWarnings = backupWarningRequests;
+  await title.fill("Banner Site");
+  await baseUrl.fill("https://example.com");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/update_identity"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/is_base_url_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedSiteWarnings += 1;
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  await expect(banner).toBeHidden();
 
-    await baseUrl.fill("");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/update_identity"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/is_base_url_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedSiteWarnings += 1;
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    await expect(banner).toBeVisible();
+  await baseUrl.fill("");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/update_identity"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/is_base_url_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedSiteWarnings += 1;
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  await expect(banner).toBeVisible();
 
-    // A title-only save completes a fresh warning read but preserves the unresolved predicate.
-    await title.fill("Banner Site Renamed");
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/update_identity"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/is_base_url_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-    expectedSiteWarnings += 1;
-    expect(siteWarningRequests).toBe(expectedSiteWarnings);
-    expect(backupWarningRequests).toBe(expectedBackupWarnings);
-    await expect(banner).toBeVisible();
-  } finally {
-    // Restore this test's initial global configuration through the same persisted path.
-    await title.fill(initialTitle);
-    await baseUrl.fill(initialBaseUrl);
-    await Promise.all([
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/update_identity"),
-      ),
-      page.waitForResponse((response) =>
-        response.url().includes("/api/site/is_base_url_warning_visible"),
-      ),
-      saveButton.click(),
-    ]);
-  }
+  // A title-only save completes a fresh warning read but preserves the unresolved predicate.
+  await title.fill("Banner Site Renamed");
+  await Promise.all([
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/update_identity"),
+    ),
+    page.waitForResponse((response) =>
+      response.url().includes("/api/site/is_base_url_warning_visible"),
+    ),
+    saveButton.click(),
+  ]);
+  expectedSiteWarnings += 1;
+  expect(siteWarningRequests).toBe(expectedSiteWarnings);
+  expect(backupWarningRequests).toBe(expectedBackupWarnings);
+  await expect(banner).toBeVisible();
 });

@@ -1,36 +1,10 @@
 import { devices, defineConfig } from "@playwright/test";
 import type { PlaywrightTestConfig } from "@playwright/test";
 import { performanceEnabled } from "./tests/browser-performance";
-import {
-  type GatedBrowser,
-  type Role,
-  gatedBrowsers,
-  inviteSpecs,
-  projectName,
-  roles,
-  siteSettingsSpecs,
-  specPattern,
-  themeSpecs,
-  visualIgnoredSpecs,
-} from "./e2eProjects";
+import { parseInstances } from "./tests/instance";
+import { type GatedBrowser, gatedBrowsers, specPattern } from "./e2eProjects";
 
-type E2eLaneCatalog = {
-  experimentalProjectDependencies: Record<string, string[]>;
-};
-const e2eLaneCatalog = require("./e2e-lanes.json") as E2eLaneCatalog;
-const experimentalDependencies = e2eLaneCatalog.experimentalProjectDependencies;
 type Project = NonNullable<PlaywrightTestConfig["projects"]>[number];
-function experimentalProject(project: Project): Project {
-  const name = project.name;
-  if (name === undefined) {
-    throw new Error("Experimental Playwright projects require a name");
-  }
-  const dependencies = experimentalDependencies[name];
-  if (dependencies === undefined) {
-    throw new Error(`No experimental lane dependency contract for ${name}`);
-  }
-  return dependencies.length === 0 ? project : { ...project, dependencies };
-}
 
 const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // Worker count is env-driven (#155), default 2: two browser instances per combo
@@ -39,6 +13,16 @@ const traceParent = process.env.JAUNDER_E2E_TRACEPARENT;
 // overrides this to 1 for its debug wasm build.
 // Rationale: docs/adr/0039-e2e-parallelism-via-per-test-identity-fixtures.md.
 const workers = parseInt(process.env.JAUNDER_E2E_WORKERS || "2", 10);
+// Each worker binds to its own server instance by parallel index (#2076), so
+// the harness's instance map must describe exactly one instance per worker.
+const instanceMap = process.env.JAUNDER_E2E_INSTANCES;
+const instanceCount =
+  instanceMap === undefined ? workers : parseInstances(instanceMap).length;
+if (instanceCount !== workers) {
+  throw new Error(
+    `JAUNDER_E2E_INSTANCES has ${instanceCount} entries but workers is ${workers}`,
+  );
+}
 
 // Automatic retry of a failed test, env-driven, default 0 (fail-fast — right for
 // local debugging). The hermetic e2e checks set
@@ -86,15 +70,13 @@ const upgradeSpec = /upgrade\.spec\.ts/;
 const diagnosticSpec = measurementMode
   ? measurementSpec
   : diagnosticCoverageSpec;
-const ignoreUnavailableSpecializedSpecs = (pattern: RegExp) => {
-  const sources = [pattern.source];
-  if (!diagnosticCoverage) {
-    sources.push(diagnosticCoverageSpec.source, measurementSpec.source);
-  }
-  if (!performanceMode) sources.push(performanceMeasurementSpec.source);
-  if (!upgradeMode) sources.push(upgradeSpec.source);
-  return new RegExp(sources.join("|"));
-};
+// Specs that only a specialized run selects: wasm coverage and its
+// measurement, the browser performance measurement, and the upgrade check.
+const unavailableSpecializedSpecs: RegExp[] = [
+  ...(diagnosticCoverage ? [] : [diagnosticCoverageSpec, measurementSpec]),
+  ...(performanceMode ? [] : [performanceMeasurementSpec]),
+  ...(upgradeMode ? [] : [upgradeSpec]),
+];
 
 const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
   chromium: {
@@ -108,78 +90,21 @@ const gatedBrowserUse: Record<GatedBrowser, Project["use"]> = {
 };
 
 /**
- * One gated browser's unsplit graph and split lane projects, built from the
- * same role filters so the two topologies cannot diverge (the census contract
- * proves they select the same tests). Split projects deliberately have no
- * dependencies outside their lane: Playwright otherwise expands a selected
- * project with another lane's prerequisites.
+ * One gated browser's project (see `e2eProjects.ts`). Every worker owns its own
+ * server instance and every test sets the global state it depends on (#2076),
+ * so no test needs ordering, serialization or a dependency.
  */
-function gatedProjects(browser: GatedBrowser): Project[] {
+function gatedProject(browser: GatedBrowser): Project {
   const use = gatedBrowserUse[browser];
-  const site = siteSettingsSpecs(browser);
-  // The exclusive site-configuration roles run one test at a time.
-  const serialConfiguration: Project = {
-    grepInvert: visualTag,
-    fullyParallel: false,
-    workers: 1,
+  return {
+    name: browser,
+    testIgnore: unavailableSpecializedSpecs,
+    ...(diagnosticCoverage ? { testMatch: diagnosticSpec } : {}),
+    // The reviewed baselines keep the names of the retired `<browser>-visual`
+    // project.
+    snapshotPathTemplate: `{snapshotDir}/{testFilePath}-snapshots/{arg}-${browser}-visual-{platform}{ext}`,
     use,
   };
-  const role: Record<Role, Project> = {
-    visual: {
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        specPattern(visualIgnoredSpecs),
-      ),
-      grep: visualTag,
-      retries: 0,
-      use,
-    },
-    ordinary: {
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        specPattern([...site, ...themeSpecs, ...inviteSpecs]),
-      ),
-      grepInvert: visualTag,
-      use,
-    },
-    siteSettings: { ...serialConfiguration, testMatch: specPattern(site) },
-    theme: { ...serialConfiguration, testMatch: specPattern(themeSpecs) },
-    invite: {
-      testMatch: specPattern(inviteSpecs),
-      grepInvert: visualTag,
-      fullyParallel: false,
-      use,
-    },
-  };
-  const unsplit = (name: Role) => projectName(browser, "unsplit", name);
-  const unsplitDependencies: Record<Role, Partial<Project>> = {
-    visual: {},
-    ordinary: diagnosticCoverage
-      ? { testMatch: diagnosticSpec, dependencies: [] }
-      : { dependencies: [unsplit("visual")] },
-    siteSettings: { dependencies: [unsplit("ordinary")] },
-    theme: { dependencies: [unsplit("siteSettings")] },
-    invite: { dependencies: [unsplit("theme")] },
-  };
-  return [
-    ...roles.map((name) => ({
-      ...role[name],
-      name: unsplit(name),
-      ...unsplitDependencies[name],
-    })),
-    ...roles.map((name) =>
-      experimentalProject({
-        ...role[name],
-        name: projectName(browser, "split", name),
-        // The split visual project owns the same assertions as the unsplit
-        // one; reuse those reviewed baselines rather than minting
-        // topology-qualified snapshots that could silently diverge.
-        ...(name === "visual"
-          ? {
-              snapshotPathTemplate: `{snapshotDir}/{testFilePath}-snapshots/{arg}-${unsplit("visual")}-{platform}{ext}`,
-            }
-          : {}),
-      }),
-    ),
-  ];
 }
 
 export default defineConfig({
@@ -223,20 +148,11 @@ export default defineConfig({
     screenshot: "only-on-failure",
     ...(traceParent ? { extraHTTPHeaders: { traceparent: traceParent } } : {}),
   },
-  // Site Theme Package mutators and Studio-dependent observers live in serial
-  // configuration projects; per-author contexts cannot isolate Local.
-  // admin-site, backup, SMTP, the Theme specs, media, timeline-cls, invite, and
-  // production-baseline mutate global site configuration or must restore it before
-  // dependent projects. Playwright's
-  // `fullyParallel: false` is only intra-file, so these files live in dependent
-  // projects to prevent cross-file overlap under workers=2. Each gated browser
-  // runs visual contracts first, parallel ordinary tests second, then the serial
-  // site-settings and Theme groups, then invite. Reciprocal filters run every
-  // spec exactly once.
-  // WebKit's dependent configuration project owns backup alongside its existing
-  // theme, SMTP, and media coverage; production baseline remains excluded there.
+  // Each gated browser's one project, then WebKit, which runs only host-local
+  // investigation and excludes visual, admin-site, invite and the production
+  // baseline.
   projects: [
-    ...gatedBrowsers.flatMap(gatedProjects),
+    ...gatedBrowsers.map(gatedProject),
     ...(upgradeMode
       ? [
           {
@@ -250,24 +166,11 @@ export default defineConfig({
       : []),
     {
       name: "webkit",
-      testIgnore: ignoreUnavailableSpecializedSpecs(
-        specPattern([
-          ...siteSettingsSpecs("firefox"),
-          ...themeSpecs,
-          ...inviteSpecs,
-        ]),
-      ),
+      testIgnore: [
+        ...unavailableSpecializedSpecs,
+        specPattern(["admin-site", "invite", "production-baseline-flow"]),
+      ],
       grepInvert: visualTag,
-      use: { ...devices["Desktop Safari"] },
-    },
-    {
-      name: "webkit-theme",
-      testMatch:
-        /(backup|smtp|theme|theme-management|theme-presentation|responsive-shell|post-image-fit|media|timeline-cls)\.spec\.ts/,
-      grepInvert: visualTag,
-      fullyParallel: false,
-      workers: 1,
-      dependencies: ["webkit"],
       use: { ...devices["Desktop Safari"] },
     },
   ],

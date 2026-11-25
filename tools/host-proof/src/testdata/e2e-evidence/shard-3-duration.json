@@ -4,8 +4,8 @@
   "tests": [
     {
       "test_id": "visual",
-      "project_id": "firefox-special-visual",
-      "project_name": "firefox-special-visual",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "title": "visual contract",
       "file": "tests/visual.spec.ts",
       "line": 3,

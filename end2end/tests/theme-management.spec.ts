@@ -13,6 +13,7 @@ import {
   type MutationOutcome,
 } from "./helpers";
 import { imageFixtureDirectory, uploadMedia } from "./media-helpers";
+import { seedConfigViaTool } from "./seed";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { createHash } from "node:crypto";
@@ -24,7 +25,6 @@ import {
   packageMemberDigests,
   publishTheme,
   publishAndSelectTheme,
-  withSiteThemeSelection,
 } from "./theme-helpers";
 
 const THEME_ENDPOINTS = {
@@ -1121,82 +1121,73 @@ test("saved User and Site settings retain separate IDs and selection after owner
   page,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    await goto(page, "/themes");
-    const suffix = Date.now(),
-      ids: number[] = [],
-      writes: URLSearchParams[] = [];
-    page.on("request", (r) => {
-      if (new URL(r.url()).pathname === THEME_ENDPOINTS.select)
-        writes.push(new URLSearchParams(r.postData() ?? ""));
-    });
-    for (const [tab, name] of [
-      ["User", `Personal ${suffix}`],
-      ["Site", `Site ${suffix}`],
-    ] as const) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
-      await createLocal(page, name);
-      const saved = await save(page);
-      ids.push(saved.id);
-      await mutate(async () => {
-        const published = response(page, "publish"),
-          selected = response(page, "select");
-        await page
-          .getByRole("button", { name: `Use ${name}`, exact: true })
-          .click();
-        for (const pending of [published, selected]) {
-          const r = await pending;
-          expect(r.status()).toBe(200);
-          confirmedMutation(
-            (await r.json()) as MutationOutcome<null>,
-            "independent setting Use",
-          );
-        }
-      });
-      await expect(current(page)).toHaveAttribute(
-        "data-theme-selection",
-        String(saved.id),
-      );
-    }
-    expect(ids[0]).not.toBe(ids[1]);
-    expect(writes.map((w) => w.get("scope"))).toEqual(["author", "site"]);
-    expect(writes.map((w) => w.get("selection[value]"))).toEqual(
-      ids.map(String),
-    );
-    for (const [i, tab] of ["User", "Site"].entries()) {
-      await page.getByRole("tab", { name: tab, exact: true }).click();
-      await expect(current(page)).toHaveAttribute(
-        "data-theme-selection",
-        String(ids[i]),
-      );
-      await expect(
-        page.locator(`[data-theme-card="${ids[i]}"]`),
-      ).toHaveAttribute("data-current", "true");
-      await expect(
-        page.locator(`[data-theme-card="${ids[1 - i]}"]`),
-      ).toHaveCount(0);
-      await page
-        .locator(`[data-theme-card="${ids[i]}"] .j-theme-catalog-item`)
-        .click();
-      await openThemeAdvanced(page);
-      await mutate(async () => {
-        const pending = response(page, "remove");
-        await page
-          .getByRole("button", { name: "Delete theme", exact: true })
-          .click();
-        const r = await pending;
-        expect(r.status()).toBe(200);
-        confirmedMutation(
-          (await r.json()) as MutationOutcome<null>,
-          "independent setting cleanup",
-        );
-      });
-      await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveCount(
-        0,
-      );
-    }
+  await signInAs(page, "testoperator");
+  await goto(page, "/themes");
+  const suffix = Date.now(),
+    ids: number[] = [],
+    writes: URLSearchParams[] = [];
+  page.on("request", (r) => {
+    if (new URL(r.url()).pathname === THEME_ENDPOINTS.select)
+      writes.push(new URLSearchParams(r.postData() ?? ""));
   });
+  for (const [tab, name] of [
+    ["User", `Personal ${suffix}`],
+    ["Site", `Site ${suffix}`],
+  ] as const) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await createLocal(page, name);
+    const saved = await save(page);
+    ids.push(saved.id);
+    const published = response(page, "publish"),
+      selected = response(page, "select");
+    await page
+      .getByRole("button", { name: `Use ${name}`, exact: true })
+      .click();
+    for (const pending of [published, selected]) {
+      const r = await pending;
+      expect(r.status()).toBe(200);
+      confirmedMutation(
+        (await r.json()) as MutationOutcome<null>,
+        "independent setting Use",
+      );
+    }
+    await expect(current(page)).toHaveAttribute(
+      "data-theme-selection",
+      String(saved.id),
+    );
+  }
+  expect(ids[0]).not.toBe(ids[1]);
+  expect(writes.map((w) => w.get("scope"))).toEqual(["author", "site"]);
+  expect(writes.map((w) => w.get("selection[value]"))).toEqual(ids.map(String));
+  for (const [i, tab] of ["User", "Site"].entries()) {
+    await page.getByRole("tab", { name: tab, exact: true }).click();
+    await expect(current(page)).toHaveAttribute(
+      "data-theme-selection",
+      String(ids[i]),
+    );
+    await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveAttribute(
+      "data-current",
+      "true",
+    );
+    await expect(page.locator(`[data-theme-card="${ids[1 - i]}"]`)).toHaveCount(
+      0,
+    );
+    await page
+      .locator(`[data-theme-card="${ids[i]}"] .j-theme-catalog-item`)
+      .click();
+    await openThemeAdvanced(page);
+    const pending = response(page, "remove");
+    await page
+      .getByRole("button", { name: "Delete theme", exact: true })
+      .click();
+    const r = await pending;
+    expect(r.status()).toBe(200);
+    confirmedMutation(
+      (await r.json()) as MutationOutcome<null>,
+      "independent setting cleanup",
+    );
+    await expect(page.locator(`[data-theme-card="${ids[i]}"]`)).toHaveCount(0);
+  }
 });
 
 for (const stage of ["publish", "select"] as const) {
@@ -2274,12 +2265,23 @@ test("staged Media survives pagination, a pending read, unavailable page and rec
   }
 });
 
-// ORIGINAL inputs pass through the real image preparation worker. Public bindings
-// are compared against its returned prepared identities, never original hashes.
-test("author completes package, Media rotation, preview, export and private reimport lifecycle", async ({
-  page,
-  tracedContext,
-}) => {
+const NIGHT_ASSET = "assets/pixel.png";
+const NIGHT_MANIFEST = {
+  assets: { [NIGHT_ASSET]: "image/png" },
+  defaults: { header: [NIGHT_ASSET], logo: NIGHT_ASSET },
+  name: "Night round trip",
+  schema: 1,
+  style_contract: 1,
+};
+const NIGHT_STYLESHEET =
+  "[data-jaunder-theme-surface] { color: rgb(1, 2, 3); }";
+
+// The Theme package lifecycle tests share one authoring setup. ORIGINAL inputs
+// pass through the real image preparation worker; 50 newer Media push the bound
+// logo onto the picker's second page. The author saves a complete package, binds
+// the logo from page 2 and the two-image header pool, and leaves the editor open.
+async function authorNightPackage(page: Page) {
+  await seedConfigViaTool("media.uploads_enabled", "true");
   const username = await signInAsNewUser(page);
   const original = readFileSync(
       resolve(imageFixtureDirectory, "png-original.png"),
@@ -2295,19 +2297,6 @@ test("author completes package, Media rotation, preview, export and private reim
       "image/png",
     ),
     headerTwo = await uploadMedia(page, "header-two.png", color, "image/png");
-  const bytes = async (url: string) => {
-    const r = await page.request.get(BASE_URL + url);
-    expect(r.status()).toBe(200);
-    const b = await r.body();
-    expect(url).toContain(createHash("sha256").update(b).digest("hex"));
-    return b;
-  };
-  const logoBytes = await bytes(logo.url),
-    oneBytes = await bytes(headerOne.url),
-    twoBytes = await bytes(headerTwo.url);
-  expect(createHash("sha256").update(oneBytes).digest("hex")).not.toBe(
-    createHash("sha256").update(twoBytes).digest("hex"),
-  );
   for (let i = 0; i < 50; i += 1)
     await uploadMedia(
       page,
@@ -2321,29 +2310,15 @@ test("author completes package, Media rotation, preview, export and private reim
   await page.getByLabel("Name", { exact: true }).fill("Night round trip");
   await save(page);
   await openThemeAdvanced(page);
-  await page.getByLabel("Package assets JSON").fill("{");
-  await page
-    .getByRole("button", { name: "Save complete draft package", exact: true })
-    .click();
-  await expect(status(page)).toContainText("Package assets must be valid JSON");
-  const assetPath = "assets/pixel.png",
-    manifest = {
-      assets: { [assetPath]: "image/png" },
-      defaults: { header: [assetPath], logo: assetPath },
-      name: "Night round trip",
-      schema: 1,
-      style_contract: 1,
-    },
-    stylesheet = "[data-jaunder-theme-surface] { color: rgb(1, 2, 3); }";
   await page
     .getByLabel("theme.json", { exact: true })
-    .fill(JSON.stringify(manifest));
-  await page.getByLabel("style.css", { exact: true }).fill(stylesheet);
+    .fill(JSON.stringify(NIGHT_MANIFEST));
+  await page.getByLabel("style.css", { exact: true }).fill(NIGHT_STYLESHEET);
   await page
     .getByLabel("Package assets JSON")
     .fill(
       JSON.stringify([
-        { path: assetPath, mime: "image/png", bytes: Array.from(original) },
+        { path: NIGHT_ASSET, mime: "image/png", bytes: Array.from(original) },
       ]),
     );
   const packageSaved = response(page, "import_package");
@@ -2366,7 +2341,7 @@ test("author completes package, Media rotation, preview, export and private reim
     .selectOption({ label: "Media: blog-logo.png" });
   await save(page);
   await openThemeAdvanced(page);
-  await page.getByLabel("Header pool package asset paths").fill(assetPath);
+  await page.getByLabel("Header pool package asset paths").fill(NIGHT_ASSET);
   for (const filename of ["header-one.png", "header-two.png"]) {
     await page
       .getByLabel("Media to add", { exact: true })
@@ -2382,6 +2357,44 @@ test("author completes package, Media rotation, preview, export and private reim
     .click();
   expect((await poolSaved).status()).toBe(200);
   await expect(status(page)).toContainText("Saved");
+  return { username, saved, original, logo, headerOne, headerTwo };
+}
+// Theme operations are admitted per author: a burst of four, then one more per
+// elapsed second (host/src/theme_operations.rs). The package setup spends the
+// burst, so each later operation first waits out one refill second. This paces
+// admission; it is not a readiness wait.
+async function awaitThemeAdmission(page: Page) {
+  await page.waitForTimeout(1_000);
+}
+async function useNightRoundTrip(page: Page) {
+  await awaitThemeAdmission(page);
+  await page
+    .getByRole("button", { name: "Use Night round trip", exact: true })
+    .click();
+  await expect(status(page)).toContainText("Your theme is now in use");
+}
+
+// Public bindings are compared against the preparation worker's returned
+// prepared identities, never original hashes.
+test("author rotates bound header Media and the public page renders prepared identities", async ({
+  page,
+  tracedContext,
+}) => {
+  const { username, original, logo, headerOne, headerTwo } =
+    await authorNightPackage(page);
+  const bytes = async (url: string) => {
+    const r = await page.request.get(BASE_URL + url);
+    expect(r.status()).toBe(200);
+    const b = await r.body();
+    expect(url).toContain(createHash("sha256").update(b).digest("hex"));
+    return b;
+  };
+  const logoBytes = await bytes(logo.url),
+    oneBytes = await bytes(headerOne.url),
+    twoBytes = await bytes(headerTwo.url);
+  expect(createHash("sha256").update(oneBytes).digest("hex")).not.toBe(
+    createHash("sha256").update(twoBytes).digest("hex"),
+  );
   await page.getByLabel("Header image", { exact: true }).selectOption("none");
   await expect(
     page.getByText("This replaces the rotating header images.", {
@@ -2396,21 +2409,7 @@ test("author completes package, Media rotation, preview, export and private reim
     .click();
   expect((await shuffled).status()).toBe(200);
   await expect(status(page)).toContainText("Saved");
-  const frame = await preview(page);
-  await expectPreviewStructure(page, frame);
-  await expect(frame.contentFrame().locator("body")).toContainText("Jaunder");
-  const viewport = page.viewportSize()!;
-  await page.setViewportSize({ width: 375, height: 800 });
-  await expect(frame).toBeVisible();
-  await page.setViewportSize(viewport);
-  await page
-    .getByRole("button", { name: "Use Night round trip", exact: true })
-    .click();
-  await expect(status(page)).toContainText("Your theme is now in use");
-  await expect(current(page)).toHaveAttribute(
-    "data-theme-selection",
-    String(saved.id),
-  );
+  await useNightRoundTrip(page);
   const context = await tracedContext();
   try {
     const p = await context.newPage();
@@ -2436,6 +2435,26 @@ test("author completes package, Media rotation, preview, export and private reim
   } finally {
     await context.close();
   }
+});
+
+test("author previews and uses the package theme, and a cold Studio return keeps its Media bindings", async ({
+  page,
+  tracedContext,
+}) => {
+  const { username, saved } = await authorNightPackage(page);
+  await awaitThemeAdmission(page);
+  const frame = await preview(page);
+  await expectPreviewStructure(page, frame);
+  await expect(frame.contentFrame().locator("body")).toContainText("Jaunder");
+  const viewport = page.viewportSize()!;
+  await page.setViewportSize({ width: 375, height: 800 });
+  await expect(frame).toBeVisible();
+  await page.setViewportSize(viewport);
+  await useNightRoundTrip(page);
+  await expect(current(page)).toHaveAttribute(
+    "data-theme-selection",
+    String(saved.id),
+  );
   const fresh = await tracedContext();
   try {
     const p = await fresh.newPage();
@@ -2469,6 +2488,13 @@ test("author completes package, Media rotation, preview, export and private reim
   } finally {
     await fresh.close();
   }
+});
+
+test("package export omits Media bindings and survives deletion of the used theme as a private reimport", async ({
+  page,
+}) => {
+  const { original } = await authorNightPackage(page);
+  await useNightRoundTrip(page);
   await openThemeAdvanced(page);
   const download = page.waitForEvent("download");
   await page.getByRole("button", { name: "Export ZIP", exact: true }).click();
@@ -2476,15 +2502,17 @@ test("author completes package, Media rotation, preview, export and private reim
   await expect(status(page)).toContainText("download started");
   const path = (await exported.path())!;
   expect([...packageMemberDigests(path).keys()]).toEqual([
-    assetPath,
+    NIGHT_ASSET,
     "style.css",
     "theme.json",
   ]);
   expect(packageMember(path, "theme.json")).toEqual(
-    Buffer.from(JSON.stringify(manifest)),
+    Buffer.from(JSON.stringify(NIGHT_MANIFEST)),
   );
-  expect(packageMember(path, "style.css")).toEqual(Buffer.from(stylesheet));
-  expect(packageMember(path, assetPath)).toEqual(original);
+  expect(packageMember(path, "style.css")).toEqual(
+    Buffer.from(NIGHT_STYLESHEET),
+  );
+  expect(packageMember(path, NIGHT_ASSET)).toEqual(original);
   const removed = response(page, "remove");
   await page.getByRole("button", { name: "Delete theme", exact: true }).click();
   expect((await removed).status()).toBe(200);
@@ -2495,6 +2523,7 @@ test("author completes package, Media rotation, preview, export and private reim
     "data-theme-selection",
     "inherit",
   );
+  await awaitThemeAdmission(page);
   const imported = response(page, "import_zip");
   await page.getByLabel("Theme ZIP file").setInputFiles(path);
   expect((await imported).status()).toBe(200);
@@ -2511,6 +2540,11 @@ test("author completes package, Media rotation, preview, export and private reim
       .getByRole("list", { name: "Selected header Media" })
       .getByRole("listitem"),
   ).toHaveCount(0);
+  await page.getByLabel("Package assets JSON").fill("{");
+  await page
+    .getByRole("button", { name: "Save complete draft package", exact: true })
+    .click();
+  await expect(status(page)).toContainText("Package assets must be valid JSON");
 });
 
 test("published version choices stay truthful across inheritance and bundled recovery", async ({
@@ -2635,142 +2669,128 @@ test("operator manages Site catalog with confirmed writes and guarded selection 
   page,
   tracedContext,
 }) => {
-  await withSiteThemeSelection(tracedContext, async (mutate) => {
-    await signInAs(page, "testoperator");
-    await goto(page, "/themes");
-    const site = page.getByRole("tab", { name: "Site", exact: true }),
-      user = page.getByRole("tab", { name: "User", exact: true });
-    await site.click();
+  await signInAs(page, "testoperator");
+  await goto(page, "/themes");
+  const site = page.getByRole("tab", { name: "Site", exact: true }),
+    user = page.getByRole("tab", { name: "User", exact: true });
+  await site.click();
+  await expect(site).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.getByRole("button", { name: "Use site theme", exact: true }),
+  ).toHaveCount(0);
+  await createLocal(
+    page,
+    "Operator site published",
+    ":root { outline: 2px solid rgb(4, 5, 6); }",
+  );
+  const saved = await save(page);
+  expect(saved.applied).toBe(false);
+  const frame = await preview(page);
+  await expectPreviewStructure(page, frame);
+  const writes: { path: string; body: string }[] = [];
+  page.on("request", (r) => {
+    const p = new URL(r.url()).pathname;
+    if ([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select].includes(p))
+      writes.push({ path: p, body: r.postData() ?? "" });
+  });
+  const releasePublication = await stallServerFn(page, "themes/publish"),
+    releaseSelection = await stallServerFn(page, "themes/select"),
+    use = page.getByRole("button", {
+      name: "Use Operator site published",
+      exact: true,
+    });
+  const published = response(page, "publish"),
+    selected = response(page, "select");
+  try {
+    await use.click();
+    await expect(status(page)).toContainText("Getting your theme ready");
+    for (const c of [user, site, use]) await expect(c).toBeDisabled();
+    for (const c of [use, user])
+      await c.evaluate((n) =>
+        n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
+      );
+    expect(writes.map((w) => w.path)).toEqual([THEME_ENDPOINTS.publish]);
     await expect(site).toHaveAttribute("aria-selected", "true");
-    await expect(
-      page.getByRole("button", { name: "Use site theme", exact: true }),
-    ).toHaveCount(0);
-    await createLocal(
-      page,
-      "Operator site published",
-      ":root { outline: 2px solid rgb(4, 5, 6); }",
+    releasePublication();
+    await expect(status(page)).toContainText("Applying your theme");
+    await expect(use).toBeDisabled();
+    await use.evaluate((n) =>
+      n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
     );
-    const saved = await save(page);
-    expect(saved.applied).toBe(false);
-    const frame = await preview(page);
-    await expectPreviewStructure(page, frame);
-    const writes: { path: string; body: string }[] = [];
-    page.on("request", (r) => {
-      const p = new URL(r.url()).pathname;
-      if ([THEME_ENDPOINTS.publish, THEME_ENDPOINTS.select].includes(p))
-        writes.push({ path: p, body: r.postData() ?? "" });
-    });
-    const releasePublication = await stallServerFn(page, "themes/publish"),
-      releaseSelection = await stallServerFn(page, "themes/select"),
-      use = page.getByRole("button", {
-        name: "Use Operator site published",
-        exact: true,
-      });
-    await mutate(async () => {
-      const published = response(page, "publish"),
-        selected = response(page, "select");
-      try {
-        await use.click();
-        await expect(status(page)).toContainText("Getting your theme ready");
-        for (const c of [user, site, use]) await expect(c).toBeDisabled();
-        for (const c of [use, user])
-          await c.evaluate((n) =>
-            n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-          );
-        expect(writes.map((w) => w.path)).toEqual([THEME_ENDPOINTS.publish]);
-        await expect(site).toHaveAttribute("aria-selected", "true");
-        releasePublication();
-        await expect(status(page)).toContainText("Applying your theme");
-        await expect(use).toBeDisabled();
-        await use.evaluate((n) =>
-          n.dispatchEvent(new MouseEvent("click", { bubbles: true })),
-        );
-      } finally {
-        releasePublication();
-        releaseSelection();
-      }
-      const pr = await published,
-        sr = await selected;
-      expect(pr.status()).toBe(200);
-      expect(sr.status()).toBe(200);
-      confirmedMutation(
-        (await pr.json()) as MutationOutcome<null>,
-        "themes::publish",
-      );
-      confirmedMutation(
-        (await sr.json()) as MutationOutcome<null>,
-        "themes::select",
-      );
-      await expect(status(page)).toContainText("Your theme is now in use");
-    });
-    expect(writes.map((w) => w.path)).toEqual([
-      THEME_ENDPOINTS.publish,
-      THEME_ENDPOINTS.select,
-    ]);
-    expect(new URLSearchParams(writes[0].body).get("scope")).toBe("site");
-    expect(new URLSearchParams(writes[1].body).get("selection[value]")).toBe(
-      String(saved.id),
-    );
-    await expect(current(page)).toHaveAttribute(
-      "data-theme-selection",
-      String(saved.id),
-    );
-    const context = await tracedContext();
-    try {
-      for (const url of ["/", "/~testlogin"]) {
-        const p = await context.newPage();
-        await goto(p, url);
-        await expect(p.locator(".j-root")).toHaveAttribute(
-          "data-theme",
-          "custom",
-        );
-        await expect(p.locator("[data-jaunder-theme-surface]")).toHaveCSS(
-          "outline-color",
-          "rgb(4, 5, 6)",
-        );
-        await expect(
-          p.getByRole("tablist", { name: "Theme setting" }),
-        ).toHaveCount(0);
-      }
-    } finally {
-      await context.close();
-    }
-    await openThemeAdvanced(page);
-    await mutate(async () => {
-      const pending = response(page, "remove");
-      await page
-        .getByRole("button", { name: "Delete theme", exact: true })
-        .click();
-      const r = await pending;
-      expect(r.status()).toBe(200);
-      confirmedMutation(
-        (await r.json()) as MutationOutcome<null>,
-        "themes::remove",
-      );
-    });
-    await expect(
-      page.getByRole("button", {
-        name: "Edit Operator site published",
-        exact: true,
-      }),
-    ).toHaveCount(0);
-    await expect(current(page)).toHaveAttribute(
-      "data-theme-selection",
-      "studio",
-    );
-    const fallback = await tracedContext();
-    try {
-      const p = await fallback.newPage();
-      await goto(p, "/");
+  } finally {
+    releasePublication();
+    releaseSelection();
+  }
+  const pr = await published,
+    sr = await selected;
+  expect(pr.status()).toBe(200);
+  expect(sr.status()).toBe(200);
+  confirmedMutation(
+    (await pr.json()) as MutationOutcome<null>,
+    "themes::publish",
+  );
+  confirmedMutation(
+    (await sr.json()) as MutationOutcome<null>,
+    "themes::select",
+  );
+  await expect(status(page)).toContainText("Your theme is now in use");
+  expect(writes.map((w) => w.path)).toEqual([
+    THEME_ENDPOINTS.publish,
+    THEME_ENDPOINTS.select,
+  ]);
+  expect(new URLSearchParams(writes[0].body).get("scope")).toBe("site");
+  expect(new URLSearchParams(writes[1].body).get("selection[value]")).toBe(
+    String(saved.id),
+  );
+  await expect(current(page)).toHaveAttribute(
+    "data-theme-selection",
+    String(saved.id),
+  );
+  const context = await tracedContext();
+  try {
+    for (const url of ["/", "/~testlogin"]) {
+      const p = await context.newPage();
+      await goto(p, url);
       await expect(p.locator(".j-root")).toHaveAttribute(
         "data-theme",
-        "studio",
+        "custom",
+      );
+      await expect(p.locator("[data-jaunder-theme-surface]")).toHaveCSS(
+        "outline-color",
+        "rgb(4, 5, 6)",
       );
       await expect(
-        p.locator("link[data-jaunder-theme-stylesheet]"),
-      ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
-    } finally {
-      await fallback.close();
+        p.getByRole("tablist", { name: "Theme setting" }),
+      ).toHaveCount(0);
     }
-  });
+  } finally {
+    await context.close();
+  }
+  await openThemeAdvanced(page);
+  const pending = response(page, "remove");
+  await page.getByRole("button", { name: "Delete theme", exact: true }).click();
+  const r = await pending;
+  expect(r.status()).toBe(200);
+  confirmedMutation(
+    (await r.json()) as MutationOutcome<null>,
+    "themes::remove",
+  );
+  await expect(
+    page.getByRole("button", {
+      name: "Edit Operator site published",
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await expect(current(page)).toHaveAttribute("data-theme-selection", "studio");
+  const fallback = await tracedContext();
+  try {
+    const p = await fallback.newPage();
+    await goto(p, "/");
+    await expect(p.locator(".j-root")).toHaveAttribute("data-theme", "studio");
+    await expect(
+      p.locator("link[data-jaunder-theme-stylesheet]"),
+    ).toHaveAttribute("href", /^\/theme\/[0-9a-f]{64}$/);
+  } finally {
+    await fallback.close();
+  }
 });

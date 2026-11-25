@@ -14,7 +14,10 @@ export function cleanImage(): Buffer {
 
 export type UploadedMedia = { url: string; filename: string };
 
-/** Uploads `name` and returns the upload response (`url`, canonical `filename`). */
+/**
+ * Uploads `name` and returns the upload response (`url`, canonical
+ * `filename`). The calling test enables the Media Upload Capability first.
+ */
 export async function uploadMedia(
   page: Page,
   name: string,

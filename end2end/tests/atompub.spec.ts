@@ -4,6 +4,7 @@ import { goto, signInAsNewUser, click, BASE_URL } from "./helpers";
 // publishing over HTTP) is attributable to a named test (#681).
 import { test, expect } from "./fixtures";
 import { mintAppPassword } from "./sessions";
+import { seedConfigViaTool } from "./seed";
 
 /// A tiny valid 1x1 PNG.
 const PNG = Buffer.from([
@@ -30,6 +31,7 @@ function onServer(url: string): string {
 test("RSD autodiscovery link is present on the user page and resolves", async ({
   page,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
   const username = await signInAsNewUser(page);
 
   // The canonical user URL is ~-prefixed.
@@ -192,6 +194,8 @@ test("AtomPub media deletion refuses a retained Post reference and preserves the
   page,
   request,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  await seedConfigViaTool("media.uploads_enabled", "true");
   const username = await signInAsNewUser(page);
   const token = await mintAppPassword(page, "AtomPub media delete guard");
   const auth =
@@ -254,6 +258,8 @@ test("full AtomPub Org publishing flow over HTTP with an app password", async ({
   page,
   request,
 }) => {
+  await seedConfigViaTool("site.base_url", "https://example.com");
+  await seedConfigViaTool("media.uploads_enabled", "true");
   const username = await signInAsNewUser(page);
 
   const token = await mintAppPassword(page, "AtomPub e2e");

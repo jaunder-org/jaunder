@@ -2,14 +2,12 @@ import { join } from "node:path";
 
 import { test, expect } from "./fixtures";
 import { BASE_URL, goto, signInAsNewUser } from "./helpers";
+import { seedPostsViaTool, seedThemeViaTool } from "./seed";
 import {
-  applySeededSession,
-  resetThemeViaTool,
-  seedPostsViaTool,
-  seedThemeViaTool,
-  seedUserViaTool,
-} from "./seed";
-import { expectVisual } from "./visual";
+  expectVisual,
+  setSeededSiteAppearance,
+  signInAsVisualUser,
+} from "./visual";
 import { expectAccessible } from "./accessibility";
 
 // Regression for #22: the reactive data-theme binding on the plain `.j-root`
@@ -19,10 +17,13 @@ import { expectAccessible } from "./accessibility";
 test(
   "issue #22: .j-root keeps a real data-theme after CSR mount",
   { tag: ["@visual", "@accessibility"] },
-  async ({ page }) => {
-    const session = await seedUserViaTool("visualauthor", "visualpassword123");
-    await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
-    await applySeededSession(page.context(), session);
+  async ({ page, tracedContext }) => {
+    await setSeededSiteAppearance(tracedContext);
+    // The timeline renders exactly this user's two Posts, so a retry that
+    // reuses the user must not seed them again.
+    if (await signInAsVisualUser(page, "visualauthor")) {
+      await seedPostsViaTool("visualauthor", 2, "Visual *Timeline* Post");
+    }
     await goto(page, "/app");
 
     const probe = await page.evaluate(() => {
@@ -178,63 +179,55 @@ test("a theme-hidden Post anchor recovers through Studio", async ({
     ).toBeVisible();
   };
 
-  try {
-    await seedThemeViaTool(username);
-    await goto(page, `/~${username}`);
-    await expectCustomPresentation();
+  await seedThemeViaTool(username);
+  await goto(page, `/~${username}`);
+  await expectCustomPresentation();
 
-    // The fixture deliberately moves every Post outside the viewport. Its CSS is
-    // scoped to the theme surface, so it cannot directly restyle the trusted
-    // sibling; it can only make the Post slot's visual anchor unavailable.
-    const trustedActions = page
+  // The fixture deliberately moves every Post outside the viewport. Its CSS is
+  // scoped to the theme surface, so it cannot directly restyle the trusted
+  // sibling; it can only make the Post slot's visual anchor unavailable.
+  const trustedActions = page.getByRole("button", { name: "Actions" }).first();
+  await expect(trustedActions).not.toBeInViewport();
+
+  const anonymousContext = await tracedContext();
+  try {
+    const anonymousPage = await anonymousContext.newPage();
+    await goto(anonymousPage, `/~${username}`);
+    await expectCustomPresentation(anonymousPage);
+    await expect(anonymousPage.locator(".j-trusted-post-actions")).toBeEmpty();
+  } finally {
+    await anonymousContext.close();
+  }
+
+  // The destructive theme covers its own public sidebar, so recovery starts
+  // from a fresh `/themes` entry in the same authenticated browser context.
+  // `/themes` is always Studio and remains reachable by URL.
+  const recoveryPage = await page.context().newPage();
+  try {
+    await goto(recoveryPage, "/themes", { timeout: firstNav });
+    await recoveryPage
+      .getByRole("button", { name: "Use studio", exact: true })
+      .click();
+    await expect(
+      recoveryPage.getByLabel("Current theme", { exact: true }),
+    ).toHaveAttribute("data-theme-selection", "studio");
+  } finally {
+    await recoveryPage.close();
+  }
+
+  const recoveredPage = await page.context().newPage();
+  try {
+    await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
+    await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
+      "data-theme",
+      "studio",
+    );
+    const recoveredActions = recoveredPage
       .getByRole("button", { name: "Actions" })
       .first();
-    await expect(trustedActions).not.toBeInViewport();
-
-    const anonymousContext = await tracedContext();
-    try {
-      const anonymousPage = await anonymousContext.newPage();
-      await goto(anonymousPage, `/~${username}`);
-      await expectCustomPresentation(anonymousPage);
-      await expect(
-        anonymousPage.locator(".j-trusted-post-actions"),
-      ).toBeEmpty();
-    } finally {
-      await anonymousContext.close();
-    }
-
-    // The destructive theme covers its own public sidebar, so recovery starts
-    // from a fresh `/themes` entry in the same authenticated browser context.
-    // `/themes` is always Studio and remains reachable by URL.
-    const recoveryPage = await page.context().newPage();
-    try {
-      await goto(recoveryPage, "/themes", { timeout: firstNav });
-      await recoveryPage
-        .getByRole("button", { name: "Use studio", exact: true })
-        .click();
-      await expect(
-        recoveryPage.getByLabel("Current theme", { exact: true }),
-      ).toHaveAttribute("data-theme-selection", "studio");
-    } finally {
-      await recoveryPage.close();
-    }
-
-    const recoveredPage = await page.context().newPage();
-    try {
-      await goto(recoveredPage, `/~${username}`, { timeout: firstNav });
-      await expect(recoveredPage.locator(".j-root")).toHaveAttribute(
-        "data-theme",
-        "studio",
-      );
-      const recoveredActions = recoveredPage
-        .getByRole("button", { name: "Actions" })
-        .first();
-      await expect(recoveredActions).toBeVisible();
-      await recoveredActions.click({ trial: true });
-    } finally {
-      await recoveredPage.close();
-    }
+    await expect(recoveredActions).toBeVisible();
+    await recoveredActions.click({ trial: true });
   } finally {
-    await resetThemeViaTool(username);
+    await recoveredPage.close();
   }
 });

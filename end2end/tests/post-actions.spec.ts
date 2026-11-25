@@ -1,3 +1,4 @@
+import { seedConfigViaTool } from "./seed";
 import type { Locator, Page } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { expectAccessible } from "./accessibility";
@@ -424,6 +425,7 @@ test("owned Post Actions stay per-Post across supported routes", async ({
   page,
   firstNav,
 }) => {
+  await seedConfigViaTool("site.title", "Jaunder");
   const username = await signInAsNewUser(page);
   const tag = `actions-${username}`;
   const firstPost = await createPostViaApi(page, {

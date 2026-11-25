@@ -30,7 +30,7 @@ test("duration budget fixture records an explicit derived timeout", ({}, testInf
   );
 });
 
-test("manifest collector retains dependency-project retries", () => {
+test("manifest collector retains each project's retries", () => {
   const collector = new DurationBudgetManifestCollector([
     {
       test_id: "ordinary",
@@ -41,10 +41,10 @@ test("manifest collector retains dependency-project retries", () => {
       line: 10,
     },
     {
-      test_id: "dependent",
-      project_id: "chromium-admin",
-      project_name: "chromium-admin",
-      title: "dependent project test",
+      test_id: "retried",
+      project_id: "firefox",
+      project_name: "firefox",
+      title: "retried test",
       file: "duration-budget-manifest.spec.ts",
       line: 20,
     },
@@ -55,15 +55,15 @@ test("manifest collector retains dependency-project retries", () => {
     retry: 0,
     effective_timeout_ms: 30_000,
   });
-  collector.observeAttempt("dependent", 0);
+  collector.observeAttempt("retried", 0);
   collector.recordBudget({
-    test_id: "dependent",
+    test_id: "retried",
     retry: 0,
     effective_timeout_ms: 45_000,
   });
-  collector.observeAttempt("dependent", 1);
+  collector.observeAttempt("retried", 1);
   collector.recordBudget({
-    test_id: "dependent",
+    test_id: "retried",
     retry: 1,
     effective_timeout_ms: 45_000,
   });
@@ -82,10 +82,10 @@ test("manifest collector retains dependency-project retries", () => {
         attempts: [{ retry: 0, effective_timeout_ms: 30_000 }],
       },
       {
-        test_id: "dependent",
-        project_id: "chromium-admin",
-        project_name: "chromium-admin",
-        title: "dependent project test",
+        test_id: "retried",
+        project_id: "firefox",
+        project_name: "firefox",
+        title: "retried test",
         file: "duration-budget-manifest.spec.ts",
         line: 20,
         attempts: [

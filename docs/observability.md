@@ -315,8 +315,8 @@ CSR assets and exercises a real server/Collector/browser lifecycle; it is not
 PostgreSQL parity, complete CSR lint, authoritative source coverage or a full
 matrix. A backend/browser pair's full hermetic proof requires all four of its
 `dev e2e-producer` lanes and `dev e2e-reconcile <backend> <browser>`, not one
-shard or one serial lane's result alone; `dev e2e` owns the complete workflow.
-The complete commands and final validation ladder remain in
+shard alone; `dev e2e` owns the complete workflow. The complete commands and
+final validation ladder remain in
 [CONTRIBUTING](../CONTRIBUTING.md#running-e2e-tests-locally).
 
 Inspect actual records and complete captures, not only acknowledgments. A live
@@ -783,7 +783,7 @@ lane; fast feedback only in the static one.
   without an e2e run.
 - **E2e** (`dev e2e`, or `dev e2e-reconcile sqlite chromium <root>`): after the
   SQLite/Chromium pair reconciles, derives the snapshot from the union of its
-  four lanes' lifted captures and fails on any difference; it never regenerates
+  three lanes' lifted captures and fails on any difference; it never regenerates
   automatically.
 
 **Regeneration is explicit.** Every output is lane-qualified. The reconciled
@@ -875,27 +875,29 @@ load does not overflow it.
 
 When an e2e combo fails, **read the scoped diagnostic log before the journal.**
 The server writes a small, low-noise JSONL file of only its own **WARN+ events
-and panics** — no kernel boot spam, no INFO request lines. It lands per combo
-at:
+and panics** — no kernel boot spam, no INFO request lines. Each server instance
+(one per Playwright worker, #2076) writes its own, at:
 
-- `/var/lib/jaunder/capture/diag.log` (inside the VM)
+- `/var/lib/jaunder/capture/instance-<i>/diag.log` (inside the VM)
 - `.xtask/diagnostics/e2e-<lane>/capture-<lane>.tar.gz` (the capture dir tarred
-  out per lane — it contains `diag.log`; uploaded in that producer's
-  lane-qualified CI artifact)
+  out per lane — it contains every `instance-<i>/diag.log`; uploaded in that
+  producer's lane-qualified CI artifact)
 
 Each line is one JSON object. Tracing events use the `fmt().json()` shape;
 **panic** records are distinguished by `"kind": "panic"` and carry the literal
 `panicked at <location>` message plus a verbatim `location`. Enabled only when
-`JAUNDER_CAPTURE_DIR` is set (the e2e VMs set it via `captureEnv` in
-`nix/nixos.nix`, and the server writes `diag.log` within it — issue #227);
-production leaves it unset, so the feature is inert there.
+`JAUNDER_CAPTURE_DIR` is set (each e2e VM instance unit sets it to its own
+`instance-<i>/` subdirectory in `nix/checks.nix`, and the server writes
+`diag.log` within it — issues #227, #2076); production leaves it unset, so the
+feature is inert there.
 
 This is the artifact the **zero-panic gate** (ADR-0032) now reads for
-`panicked at`, unioned with the journal and de-duped by panic location. The full
-systemd journal (`jaunder-journal-<lane>.log`, `system-journal-<lane>.log`)
-remains captured as the **last-resort fallback** — reach for it only when the
-scoped log doesn't have what you need (e.g. a panic that fired before the app
-installed its hook). See `docs/adr/` for the app-driven scoped-capture decision.
+`panicked at`, per instance, unioned with that instance's journal and de-duped
+by panic location. The full systemd journals
+(`jaunder-journal-instance-<i>-<lane>.log`, `system-journal-<lane>.log`) remains
+captured as the **last-resort fallback** — reach for it only when the scoped log
+doesn't have what you need (e.g. a panic that fired before the app installed its
+hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 

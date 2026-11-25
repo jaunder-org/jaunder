@@ -6,15 +6,13 @@ mod seed_e2e;
 use anyhow::Context as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use common::display_name::DisplayName;
-use host::{capture, config_key::SiteConfigKey, feed::FeedEventPhase};
-use serde::{Deserialize, Serialize};
-use storage::{DbConnectOptions, SiteIdentityMutationError};
+use host::{capture, feed::FeedEventPhase};
+use storage::DbConnectOptions;
 use test_support::{
     SandboxMediaOwnershipResolver, SandboxProfile, create_session_for_user, create_user,
     performance::{PerformanceSeedReceipt, PerformanceSeedStorage, seed_performance_fixture},
-    reset_author_theme_fixture, reset_mail, sandbox_profile_anchor, seed_dead_letters,
-    seed_demo_sandbox_profile, seed_posts_for_user, seed_published_author_theme,
-    seed_standard_sandbox_profile, seed_user,
+    reset_mail, sandbox_profile_anchor, seed_dead_letters, seed_demo_sandbox_profile,
+    seed_posts_for_user, seed_published_author_theme, seed_standard_sandbox_profile, seed_user,
 };
 
 #[derive(Parser)]
@@ -114,9 +112,6 @@ enum Commands {
         /// Existing author whose public route uses the navigation fixture theme.
         #[arg(long)]
         author_username: String,
-        /// Restore the built-in site and inherited author selections instead of seeding.
-        #[arg(long)]
-        reset: bool,
     },
     /// Seed terminal `WebSub` feed events through the real storage lifecycle.
     SeedDeadLetters {
@@ -177,32 +172,12 @@ enum Commands {
         #[arg(long)]
         label: Option<String>,
     },
-    /// Snapshot one raw closed site-config row for failure-safe e2e cleanup.
-    SiteConfigSnapshot {
-        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
-        #[arg(long, env = "JAUNDER_DB")]
-        db: DbConnectOptions,
-        /// Local identity key to snapshot.
-        #[arg(long)]
-        key: RestorableIdentityConfigKey,
-    },
-    /// Restore one raw closed site-config row from a prior e2e snapshot.
-    SiteConfigRestore {
-        /// Database URL (`sqlite:...` or `postgres://...`) — the server's `--db`.
-        #[arg(long, env = "JAUNDER_DB")]
-        db: DbConnectOptions,
-        /// Local identity key to restore.
-        #[arg(long)]
-        key: RestorableIdentityConfigKey,
-        /// JSON emitted by `site-config-snapshot`.
-        #[arg(long)]
-        snapshot: String,
-    },
     /// Reset the mail-capture file (delete it; missing is fine). Derives
     /// `<JAUNDER_CAPTURE_DIR>/mail.jsonl`; errors if the capture dir is unset.
     ResetMail,
-    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`),
-    /// derived from `JAUNDER_CAPTURE_DIR`. Errors on an unset dir or unknown stream.
+    /// Print the resolved capture-file path for a stream (`mail`/`websub`/`diag`/`otel`),
+    /// derived from `JAUNDER_CAPTURE_DIR`; collector streams resolve to an instance
+    /// directory's capture root. Errors on an unset dir or unknown stream.
     CapturePath {
         /// The capture stream key.
         stream: String,
@@ -241,30 +216,6 @@ impl From<SandboxProfileArg> for SandboxProfile {
         }
     }
 }
-/// Identity rows whose exact raw state may be restored after an isolated e2e probe.
-#[derive(Clone, Copy, ValueEnum)]
-enum RestorableIdentityConfigKey {
-    #[value(name = "site.title")]
-    SiteTitle,
-    #[value(name = "site.tagline")]
-    SiteTagline,
-}
-
-impl From<RestorableIdentityConfigKey> for SiteConfigKey {
-    fn from(key: RestorableIdentityConfigKey) -> Self {
-        match key {
-            RestorableIdentityConfigKey::SiteTitle => Self::SiteTitle,
-            RestorableIdentityConfigKey::SiteTagline => Self::SiteTagline,
-        }
-    }
-}
-
-/// A byte-preserving raw site-config row snapshot for e2e cleanup.
-#[derive(Debug, Deserialize, Serialize)]
-struct RawSiteConfigSnapshot {
-    value: Option<String>,
-}
-
 /// CLI spelling for canonical performance dataset profiles.
 #[derive(Clone, Copy, ValueEnum)]
 enum PerformanceProfileArg {
@@ -395,8 +346,7 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
             db,
             storage_path,
             author_username,
-            reset,
-        } => cmd_seed_theme(&db, &storage_path, &author_username, reset).await,
+        } => cmd_seed_theme(&db, &storage_path, &author_username).await,
         Commands::SeedDeadLetters { db, phase, count } => {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_seed_dead_letters(&db, &storage_runtime, phase, count).await
@@ -435,11 +385,6 @@ async fn run(cli: Cli) -> anyhow::Result<()> {
         } => {
             let storage_runtime = storage_runtime_config(&db)?;
             cmd_create_session(&db, &storage_runtime, &username, label.as_deref()).await
-        }
-        Commands::SiteConfigSnapshot { db, key } => cmd_site_config_snapshot(&db, key).await,
-        Commands::SiteConfigRestore { db, key, snapshot } => {
-            let snapshot = serde_json::from_str(&snapshot)?;
-            cmd_site_config_restore(&db, key, snapshot).await
         }
         Commands::CapturePath { stream } => cmd_capture_path_for_stream(&stream),
         Commands::VerifyNoPanics {
@@ -500,66 +445,6 @@ async fn run_create_user(
         operator,
     )
     .await
-}
-
-async fn cmd_site_config_snapshot(
-    db: &DbConnectOptions,
-    key: RestorableIdentityConfigKey,
-) -> anyhow::Result<()> {
-    let key = key.into();
-    let runtime = storage_runtime_config(db)?;
-    let factory = storage::open_existing_database_with_observer(db, &runtime)
-        .await?
-        .factory;
-    let value = factory.site_config().get_raw(key).await?;
-    println!("{}", serde_json::json!({ "value": value }));
-    Ok(())
-}
-
-async fn cmd_site_config_restore(
-    db: &DbConnectOptions,
-    key: RestorableIdentityConfigKey,
-    snapshot: RawSiteConfigSnapshot,
-) -> anyhow::Result<()> {
-    let key = SiteConfigKey::from(key);
-    let runtime = storage_runtime_config(db)?;
-    let factory = storage::open_existing_database_with_observer(db, &runtime)
-        .await?
-        .factory;
-    let site_config = factory.site_config();
-    let publisher = factory.publisher();
-    let outcome = factory
-        .write_scope()
-        .run(move |transaction| {
-            Box::pin(async move {
-                match snapshot.value {
-                    Some(value) => site_config
-                        .set(transaction, key, &value)
-                        .await
-                        .map_err(SiteIdentityMutationError::from)?,
-                    None => {
-                        site_config
-                            .delete(transaction, key)
-                            .await
-                            .map_err(SiteIdentityMutationError::from)?;
-                    }
-                }
-                publisher
-                    .invalidate_identity(transaction)
-                    .await
-                    .map_err(SiteIdentityMutationError::from)?;
-                Ok::<(), SiteIdentityMutationError>(())
-            })
-        })
-        .await?;
-    acknowledge_site_config_restore(&outcome)
-}
-
-fn acknowledge_site_config_restore(outcome: &common::MutationOutcome<()>) -> anyhow::Result<()> {
-    if matches!(outcome, common::MutationOutcome::CommitIndeterminate(())) {
-        anyhow::bail!("site-config restore commit acknowledgement was indeterminate");
-    }
-    Ok(())
 }
 
 /// Resolves the capture directory only for commands that consume capture paths.
@@ -704,28 +589,17 @@ async fn cmd_seed_theme(
     db: &DbConnectOptions,
     storage_path: &std::path::Path,
     author_username: &str,
-    reset: bool,
 ) -> anyhow::Result<()> {
     let runtime = storage_runtime_config(db)?;
     let factory = storage::open_existing_database(db, &runtime).await?;
-    if reset {
-        reset_author_theme_fixture(
-            factory.users(),
-            factory.themes(),
-            factory.write_scope(),
-            author_username,
-        )
-        .await
-    } else {
-        seed_published_author_theme(
-            factory.users(),
-            factory.themes(),
-            factory.write_scope(),
-            storage_path,
-            author_username,
-        )
-        .await
-    }
+    seed_published_author_theme(
+        factory.users(),
+        factory.themes(),
+        factory.write_scope(),
+        storage_path,
+        author_username,
+    )
+    .await
 }
 
 /// Seed terminal `WebSub` dead letters through the storage lifecycle.
@@ -822,10 +696,7 @@ mod tests {
     use super::*;
     #[cfg(unix)]
     use std::os::unix::ffi::OsStringExt as _;
-    use storage::{
-        PublishedPageRequest,
-        test_support::{SeedFeedCache, fp, sqlite_url},
-    };
+    use storage::{PublishedPageRequest, test_support::sqlite_url};
     use tempfile::TempDir;
 
     fn cli(command: Commands) -> Cli {
@@ -885,20 +756,6 @@ mod tests {
     }
 
     #[test]
-    fn site_config_restore_requires_a_confirmed_commit_acknowledgement() {
-        acknowledge_site_config_restore(&common::MutationOutcome::Confirmed(()))
-            .expect("confirmed restore commit is accepted");
-
-        let error =
-            acknowledge_site_config_restore(&common::MutationOutcome::CommitIndeterminate(()))
-                .expect_err("indeterminate restore commit must fail");
-        assert_eq!(
-            error.to_string(),
-            "site-config restore commit acknowledgement was indeterminate"
-        );
-    }
-
-    #[test]
     fn performance_profiles_map_to_contract_profiles() {
         for (argument, expected) in [
             (
@@ -949,90 +806,6 @@ mod tests {
             .await
             .unwrap();
         (dir, db)
-    }
-
-    #[tokio::test]
-    async fn raw_site_config_commands_dispatch_identity_snapshot_and_restore() {
-        let (_dir, db) = temp_db().await;
-        let raw = "  legacy title with trailing whitespace  \n";
-        let factory =
-            storage::open_existing_database(&db, &storage::StorageRuntimeConfig::default())
-                .await
-                .unwrap();
-        let feed_path = fp("/feed.rss");
-        SeedFeedCache::new(feed_path.clone())
-            .seed(factory.feed_cache(), factory.write_scope())
-            .await;
-        let generation_before = factory.publisher().snapshot().await.unwrap().generation;
-
-        for key in [
-            RestorableIdentityConfigKey::SiteTitle,
-            RestorableIdentityConfigKey::SiteTagline,
-        ] {
-            run(cli(Commands::SiteConfigSnapshot {
-                db: db.clone(),
-                key,
-            }))
-            .await
-            .expect("snapshot dispatches each restorable identity key");
-        }
-
-        run(cli(Commands::SiteConfigRestore {
-            db: db.clone(),
-            key: RestorableIdentityConfigKey::SiteTitle,
-            snapshot: serde_json::to_string(&RawSiteConfigSnapshot {
-                value: Some(raw.to_owned()),
-            })
-            .unwrap(),
-        }))
-        .await
-        .expect("exact JSON title snapshot restores through dispatch");
-
-        assert_eq!(
-            factory
-                .site_config()
-                .get_raw(SiteConfigKey::SiteTitle)
-                .await
-                .unwrap()
-                .as_deref(),
-            Some(raw)
-        );
-        assert!(
-            factory.publisher().snapshot().await.unwrap().generation > generation_before,
-            "raw identity restoration advances publisher generation"
-        );
-        assert!(
-            factory
-                .feed_cache()
-                .get(&feed_path)
-                .await
-                .unwrap()
-                .is_none(),
-            "raw identity restoration deletes cached feeds"
-        );
-
-        let generation_before_tagline_restore =
-            factory.publisher().snapshot().await.unwrap().generation;
-        run(cli(Commands::SiteConfigRestore {
-            db: db.clone(),
-            key: RestorableIdentityConfigKey::SiteTagline,
-            snapshot: r#"{"value":null}"#.to_owned(),
-        }))
-        .await
-        .expect("exact JSON absence restores through tagline dispatch");
-        assert_eq!(
-            factory
-                .site_config()
-                .get_raw(SiteConfigKey::SiteTagline)
-                .await
-                .unwrap(),
-            None
-        );
-        assert!(
-            factory.publisher().snapshot().await.unwrap().generation
-                > generation_before_tagline_restore,
-            "tagline restoration advances publisher generation"
-        );
     }
 
     async fn assert_dispatched_command_readback(db: &DbConnectOptions) {
@@ -1321,18 +1094,9 @@ mod tests {
             db: db.clone(),
             storage_path: theme_storage.path().to_owned(),
             author_username: "alice".to_owned(),
-            reset: false,
         }))
         .await
         .expect("seed-theme should dispatch and select the fixture");
-        run(cli(Commands::SeedTheme {
-            db: db.clone(),
-            storage_path: theme_storage.path().to_owned(),
-            author_username: "alice".to_owned(),
-            reset: true,
-        }))
-        .await
-        .expect("seed-theme reset should dispatch and clear the fixture");
 
         run(cli(Commands::SeedPosts {
             db: db.clone(),
@@ -1422,7 +1186,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_theme_seed_and_reset_contract() {
+    fn parses_theme_seed_contract() {
         Cli::try_parse_from([
             "test-support",
             "seed-theme",
@@ -1432,7 +1196,6 @@ mod tests {
             "/tmp/theme-assets",
             "--author-username",
             "alice",
-            "--reset",
         ])
         .expect("theme seed command parses");
     }

@@ -20,6 +20,7 @@ import {
   readAlternateLinks,
 } from "./feeds";
 import { createPostViaApi } from "./posts";
+import { seedConfigViaTool } from "./seed";
 
 const FORMATS: { ext: string; mime: string }[] = [
   { ext: "rss", mime: "application/rss+xml" },
@@ -36,14 +37,19 @@ const FEED_SETUP_ALLOWANCE_MS = 30_000;
 /** How long the WebSub ping test waits for each hub ping to land. */
 const PING_WAIT_MS = 40_000;
 
-/** Canonical origin seeded into `site.base_url` by the e2e harness. WebSub
- *  topics use configured public URLs, not the ephemeral server listener. */
+/** The configured public origin. Feed regeneration requires `site.base_url`,
+ *  and WebSub topics use configured public URLs, not the ephemeral server
+ *  listener. */
 const SITE_BASE_URL = "https://example.com";
 
 /** Room for registration and the two API writes in the ping test. Deliberately
  *  thinner than `FEED_SETUP_ALLOWANCE_MS`: comfortable once the `workers>=2`
  *  scaler applies (132s total against an 80s worst path), tight at `workers=1`. */
 const PING_SETUP_ALLOWANCE_MS = 8_000;
+
+test.beforeEach(async () => {
+  await seedConfigViaTool("site.base_url", SITE_BASE_URL);
+});
 
 test("auto-discovery links are present on site home and user timeline, and resolve", async ({
   page,
@@ -229,6 +235,7 @@ test("publishing and editing a post each trigger a WebSub hub ping", async ({
   // API writes.
   setTestBudget(2 * PING_WAIT_MS + PING_SETUP_ALLOWANCE_MS);
 
+  await seedConfigViaTool("feeds.websub_hub_url", "https://hub.test.local/");
   const username = await signInAsNewUser(page);
   const userFeedUrls = ["rss", "atom", "json"].map(
     (format) => `${SITE_BASE_URL}/~${username}/feed.${format}`,

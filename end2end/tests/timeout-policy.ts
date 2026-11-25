@@ -9,7 +9,7 @@
 
 import type { TestInfo } from "@playwright/test";
 import { attachEffectiveTimeout } from "../durationBudgetManifest";
-import { projectsInRole } from "../e2eProjects";
+import type { GatedBrowser } from "../e2eProjects";
 
 type Use<T> = (value: T) => Promise<void>;
 
@@ -18,8 +18,8 @@ type Use<T> = (value: T) => Promise<void>;
 // wins because Firefox's browser scale already absorbs measured contention.
 const slowBrowserTimeoutScale = 2.2;
 const slowBrowserFirstNavigationScale = 2.6;
-// Chromium's parallel ordinary projects keep the unscaled Chromium budget.
-const unscaledChromiumProjects = projectsInRole("ordinary", ["chromium"]);
+// Chromium's project keeps the unscaled Chromium budget.
+const unscaledChromiumProject: GatedBrowser = "chromium";
 
 function workerContentionScale(testInfo: TestInfo): number {
   const resolved = testInfo.config.workers;
@@ -34,9 +34,10 @@ export function slowBrowserTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
-  const browserScale = unscaledChromiumProjects.includes(testInfo.project.name)
-    ? 1.0
-    : slowBrowserTimeoutScale;
+  const browserScale =
+    testInfo.project.name === unscaledChromiumProject
+      ? 1.0
+      : slowBrowserTimeoutScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );
@@ -46,9 +47,10 @@ export function slowBrowserFirstNavigationTimeoutMs(
   testInfo: TestInfo,
   chromiumBudgetMs: number,
 ): number {
-  const browserScale = unscaledChromiumProjects.includes(testInfo.project.name)
-    ? 1.0
-    : slowBrowserFirstNavigationScale;
+  const browserScale =
+    testInfo.project.name === unscaledChromiumProject
+      ? 1.0
+      : slowBrowserFirstNavigationScale;
   return Math.ceil(
     chromiumBudgetMs * Math.max(browserScale, workerContentionScale(testInfo)),
   );

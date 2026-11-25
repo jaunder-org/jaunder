@@ -82,6 +82,10 @@ async function openMediaLibrary(page: Page): Promise<void> {
 }
 
 test.describe("Media upload and serving", () => {
+  test.beforeEach(async () => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+  });
+
   test("authenticated user can upload and access media", async ({ page }) => {
     await signInAsNewUser(page);
 
@@ -475,10 +479,6 @@ test.describe("Media upload and serving", () => {
 });
 
 test.describe("Media upload capability", () => {
-  test.afterEach(async () => {
-    await seedConfigViaTool("media.uploads_enabled", "true");
-  });
-
   test("disabled media page remains usable for existing media while uploads are rejected", async ({
     page,
   }) => {
@@ -600,6 +600,10 @@ test.describe("Media upload capability", () => {
 });
 
 test.describe("Media delete guard", () => {
+  test.beforeEach(async () => {
+    await seedConfigViaTool("media.uploads_enabled", "true");
+  });
+
   async function submitOrdinaryDeleteOnce(page: Page): Promise<{
     release: () => void;
     deleteRequests: () => number;

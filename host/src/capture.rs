@@ -1,11 +1,11 @@
 //! The **`JAUNDER_CAPTURE_DIR` contract** (issue #227, ADR-0057). The e2e harness sets one
 //! directory; each capture stream writes a well-known filename within it. This module is
-//! the single source of the dir-var name and the per-stream filenames, so `server` (which
-//! writes the streams) and `test-support` (which resets/queries them) agree without
-//! restating any path.
+//! the single source of the dir-var name, the per-stream filenames and the per-instance
+//! subdirectory layout, so `server` (which writes the streams), `test-support` (which
+//! resets/queries them) and the host harness agree without restating any path.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// The single env var naming the e2e capture directory. Unset in production ⇒ every
 /// capture stream is inert.
@@ -110,10 +110,47 @@ impl CaptureDirectory {
     }
 
     /// Returns the conventional capture file for a stream without touching the filesystem.
+    /// Collector-written streams resolve to the collector's capture root, which for an
+    /// instance directory is its parent.
     #[must_use]
     pub fn path(&self, stream: Stream) -> PathBuf {
-        self.0.join(stream.filename())
+        let directory = match stream {
+            Stream::Otel | Stream::OtelLogs => self.collector_root(),
+            Stream::Mail | Stream::WebSub | Stream::Diag => &self.0,
+        };
+        directory.join(stream.filename())
     }
+
+    fn collector_root(&self) -> &Path {
+        let is_instance = self
+            .0
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(instance_index)
+            .is_some();
+        match self.0.parent() {
+            Some(root) if is_instance => root,
+            _ => &self.0,
+        }
+    }
+}
+
+/// The subdirectory of the shared collector capture that e2e server instance `index`
+/// (one per Playwright worker, #2076) writes its own streams to.
+#[must_use]
+pub fn instance_directory(index: usize) -> String {
+    format!("instance-{index}")
+}
+
+/// The instance index a capture subdirectory name denotes, the inverse of
+/// [`instance_directory`].
+#[must_use]
+pub fn instance_index(name: &str) -> Option<usize> {
+    let digits = name.strip_prefix("instance-")?;
+    if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse().ok()
 }
 
 impl Stream {
@@ -226,6 +263,35 @@ mod tests {
             !directory.exists(),
             "path() must not recreate the directory"
         );
+    }
+
+    #[test]
+    fn instance_directory_keeps_server_streams_and_resolves_collector_streams_to_its_root() {
+        let temporary = tempfile::tempdir().expect("tempdir");
+        let root = temporary.path().join("capture");
+        let instance = root.join(instance_directory(1));
+        let capture = CaptureDirectory::new(instance.clone()).expect("create instance directory");
+
+        assert_eq!(capture.path(Stream::Mail), instance.join("mail.jsonl"));
+        assert_eq!(capture.path(Stream::WebSub), instance.join("websub.jsonl"));
+        assert_eq!(capture.path(Stream::Diag), instance.join("diag.log"));
+        assert_eq!(capture.path(Stream::Otel), root.join("otel-traces.jsonl"));
+        assert_eq!(capture.path(Stream::OtelLogs), root.join("otel-logs.jsonl"));
+    }
+
+    #[test]
+    fn instance_index_inverts_instance_directory_only() {
+        assert_eq!(instance_directory(0), "instance-0");
+        assert_eq!(instance_index(&instance_directory(12)), Some(12));
+        for name in [
+            "instance-",
+            "instance-x",
+            "instance--1",
+            "instance-1/",
+            "capture",
+        ] {
+            assert_eq!(instance_index(name), None, "{name:?}");
+        }
     }
 
     #[test]

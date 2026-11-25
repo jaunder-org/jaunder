@@ -1,102 +1,16 @@
 /**
- * The gated browsers' Playwright project topology, shared by the config, the
- * census contract and the tests that act only in one project role.
+ * The gated browsers' Playwright project topology, shared by the config and
+ * the census contract.
  *
- * Every gated browser has the same five roles, run in this order: visual
- * contracts, parallel ordinary tests, the serial site-settings group (specs
- * that mutate or must restore global site configuration), the serial Theme
- * group (the Theme specs, which also mutate global site configuration), then
- * invite. The unsplit graph chains them in one Playwright process; the split
- * lanes (`end2end/e2e-lanes.json`) select the `split` projects across isolated
- * VMs, where Theme has a lane of its own because it is the largest serial group.
+ * Every gated browser has exactly one project, named for the browser, running
+ * every test, `@visual` included. It has no dependency: Playwright's `--shard`
+ * reruns dependency projects in full in every shard, so the lanes
+ * (`end2end/e2e-lanes.json`) shard the one project and each test runs exactly
+ * once per backend/browser pair.
  */
 
 export type GatedBrowser = "chromium" | "firefox";
 export const gatedBrowsers: readonly GatedBrowser[] = ["chromium", "firefox"];
-
-export type Role = "visual" | "ordinary" | "siteSettings" | "theme" | "invite";
-export const roles: readonly Role[] = [
-  "visual",
-  "ordinary",
-  "siteSettings",
-  "theme",
-  "invite",
-];
-
-/** The serial roles whose specs own global site configuration exclusively. */
-export const exclusiveConfigurationRoles: readonly Role[] = [
-  "siteSettings",
-  "theme",
-];
-export type Topology = "unsplit" | "split";
-
-export function projectName(
-  browser: GatedBrowser,
-  topology: Topology,
-  role: Role,
-): string {
-  if (topology === "unsplit") {
-    return {
-      visual: `${browser}-visual`,
-      ordinary: browser,
-      siteSettings: `${browser}-admin-site`,
-      theme: `${browser}-theme`,
-      invite: `${browser}-admin`,
-    }[role];
-  }
-  return {
-    visual: `${browser}-special-visual`,
-    ordinary: `${browser}-ordinary`,
-    siteSettings: `${browser}-special-global-configuration`,
-    theme: `${browser}-special-theme`,
-    invite: `${browser}-special-invite`,
-  }[role];
-}
-
-/** Every gated project in `role`, across browsers and topologies. */
-export function projectsInRole(
-  role: Role,
-  browsers: readonly GatedBrowser[] = gatedBrowsers,
-): string[] {
-  return browsers.flatMap((browser) =>
-    (["unsplit", "split"] as const).map((topology) =>
-      projectName(browser, topology, role),
-    ),
-  );
-}
-
-/**
- * Specs that mutate or must restore global site configuration. Passkey
- * ceremonies need Chromium's virtual authenticator, so only Chromium owns them.
- */
-export function siteSettingsSpecs(browser: GatedBrowser): string[] {
-  return [
-    "admin-site",
-    "backup",
-    "smtp",
-    "responsive-shell",
-    "post-image-fit",
-    "media",
-    ...(browser === "chromium" ? ["passkeys"] : []),
-    "timeline-cls",
-    "production-baseline-flow",
-  ];
-}
-
-/** The Theme specs, which mutate the Site's Theme selection and catalog. */
-export const themeSpecs = ["theme", "theme-management", "theme-presentation"];
-
-export const inviteSpecs = ["invite"];
-
-/** Specs whose `@visual` tests are not run by the visual role. */
-export const visualIgnoredSpecs = [
-  "admin-site",
-  "backup",
-  "smtp",
-  "invite",
-  "media",
-  "production-baseline-flow",
-];
 
 export function specPattern(specs: readonly string[]): RegExp {
   return new RegExp(`(${specs.join("|")})\\.spec\\.ts`);

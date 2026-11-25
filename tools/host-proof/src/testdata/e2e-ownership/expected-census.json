@@ -4,24 +4,29 @@
   "topology": "sqlite-firefox-split",
   "tests": [
     {
-      "project_id": "firefox-ordinary",
-      "project_name": "firefox-ordinary",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "test_id": "one"
     },
     {
-      "project_id": "firefox-ordinary",
-      "project_name": "firefox-ordinary",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "test_id": "two"
     },
     {
-      "project_id": "firefox-special-visual",
-      "project_name": "firefox-special-visual",
+      "project_id": "firefox",
+      "project_name": "firefox",
       "test_id": "visual"
     },
     {
-      "project_id": "firefox-special-theme",
-      "project_name": "firefox-special-theme",
-      "test_id": "theme"
+      "project_id": "firefox",
+      "project_name": "firefox",
+      "test_id": "four"
+    },
+    {
+      "project_id": "firefox",
+      "project_name": "firefox",
+      "test_id": "five"
     }
   ]
 }

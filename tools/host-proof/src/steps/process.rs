@@ -45,7 +45,7 @@ impl Process {
         })
     }
 
-    pub(super) fn wait(mut self) -> anyhow::Result<Outcome> {
+    fn wait(&mut self) -> anyhow::Result<Outcome> {
         let running = self.take_running()?;
         let result = self
             .runtime
@@ -53,6 +53,37 @@ impl Process {
             .map_err(anyhow::Error::from);
         self.stopped = result.is_ok();
         result
+    }
+
+    /// Wait for exit unless `interrupt` resolves first, in which case the
+    /// process stays owned and running for a graceful shutdown (`None`).
+    ///
+    /// Processkit reads the child's pipes only while a probe or consuming verb
+    /// runs, so the wait goes through a probe that never succeeds: it drains
+    /// the pipes (running any line handler) and returns once the child exits.
+    /// Without it a child that writes more than a pipe holds blocks forever.
+    pub(super) fn wait_interruptible<F>(&mut self, interrupt: F) -> anyhow::Result<Option<Outcome>>
+    where
+        F: Future<Output = ()>,
+    {
+        let running = self
+            .running
+            .as_mut()
+            .ok_or_else(|| anyhow::anyhow!("process was already stopped"))?;
+        let exited = self.runtime.block_on(async move {
+            let exit = running.wait_for(|| std::future::ready(false), Duration::MAX);
+            tokio::pin!(exit);
+            tokio::pin!(interrupt);
+            tokio::select! {
+                _ = &mut exit => true,
+                () = &mut interrupt => false,
+            }
+        });
+        if exited {
+            self.wait().map(Some)
+        } else {
+            Ok(None)
+        }
     }
 
     pub(super) fn wait_for_port(
@@ -195,10 +226,10 @@ mod tests {
     fn wait_returns_the_child_outcome() {
         let outcome = Process::start(Command::new("sh").args(["-c", "exit 7"]))
             .expect("start shell")
-            .wait()
+            .wait_interruptible(std::future::pending())
             .expect("wait for shell");
 
-        assert_eq!(outcome, Outcome::Exited(7));
+        assert_eq!(outcome, Some(Outcome::Exited(7)));
     }
 
     #[test]

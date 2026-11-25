@@ -2,7 +2,7 @@
   "schema_version": 1,
   "backend": "sqlite",
   "browser": "firefox",
-  "lane": "sqlite-firefox-serial-special",
+  "lane": "sqlite-firefox-5-of-5",
   "phases": [
     { "name": "gate-execution", "duration_ms": 1, "outcome": "success", "detail": "ok", "nix": null },
     { "name": "result-lift", "duration_ms": 1, "outcome": "success", "detail": "copied", "nix": null },
