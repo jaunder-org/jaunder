@@ -1,6 +1,5 @@
-//! Native repository policy and checkout admission, independent of product tooling.
+//! Native source contracts and documentation checks, independent of product tooling.
 pub mod adr;
-pub mod checkout;
 #[cfg(test)]
 mod concern_test_support;
 pub mod files;

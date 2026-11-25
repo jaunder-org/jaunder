@@ -10,7 +10,11 @@ fn main() {
         eprintln!("usage: source-contracts <fixed-policy>");
         std::process::exit(2);
     };
-    if let Err(error) = repository_policy::checkout::prepare_policy_checkout("source-contracts") {
+    if let Err(error) = host_tool::checkout::prepare(
+        "source-contracts",
+        // Git-backed Nix outputs refuse omitted inputs; native Cargo reads live source.
+        option_env!("JAUNDER_REPOSITORY_POLICY_SOURCE"),
+    ) {
         eprintln!("source-contracts: {error:#}");
         std::process::exit(2);
     }

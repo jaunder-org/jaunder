@@ -18,13 +18,15 @@ through `nix eval`, checkout selection, best-effort hook installation) move into
 (ADR-0247). Its only consumers, `host-proof` and `coverage` (`host` feature),
 are also the only outside users of these helpers. So `host-tool` becomes "what
 every host tool does": report its result and prepare its checkout.
-`repository-policy` gains a dependency on `host-tool`. `prepare_policy_checkout`
-stays in `repository-policy`. It reads `JAUNDER_REPOSITORY_POLICY_SOURCE` at
-that crate's compile time, so it cannot move. Callers switch their import paths
-and nothing else. `host-tool` gains `anyhow`, a `tempfile` dev-dependency, and a
-minimal Git test fixture for the moved tests. `repository-policy`'s
-`test_support` calls `host_tool::git::at`. `tools/host-tool/src` joins the
-lint-suppression policed roots.
+`repository-policy` gains a dependency on `host-tool`. The three per-tool
+checkout wrappers (host-proof's, coverage-check's, and
+`prepare_policy_checkout`) collapse into one
+`host_tool::checkout::prepare(owner, source_admits)`. repository-policy's
+executables pass the `JAUNDER_REPOSITORY_POLICY_SOURCE` value compiled into that
+package. Admission and hook behavior are unchanged. `host-tool` gains `anyhow`,
+a `tempfile` dev-dependency, and a minimal Git test fixture for the moved tests.
+`repository-policy`'s `test_support` calls `host_tool::git::at`.
+`tools/host-tool/src` joins the lint-suppression policed roots.
 
 Alternative: a new `tools/checkout` crate. Rejected: it adds a workspace member
 and its packaging for the same two consumers.

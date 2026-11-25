@@ -5,14 +5,10 @@
 
 pub mod audit_wasm;
 pub mod cache_safety;
-pub mod checkout;
 pub use host_tool::report;
 pub mod e2e;
 pub mod e2e_evidence;
 mod e2e_ownership;
-pub mod git {
-    pub use host_tool::git::{at, toplevel};
-}
 pub mod nix_build;
 pub mod playwright_report;
 mod server_fn_coverage;

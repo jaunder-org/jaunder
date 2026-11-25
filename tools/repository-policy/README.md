@@ -8,7 +8,7 @@ markers, server-function inventory). For example, `dev adr-format` runs
 verdict.
 
 Git and checkout admission come from the shared `tools/host-tool` library; this
-package keeps only the wrapper that passes its compiled source predicate
+package's executables pass it their compiled source predicate
 (`docs/adr/drafts/narrow-repository-policy.md`).
 
 Git/index custody (the precommit snapshot, staging reconciliation and the shared

@@ -34,9 +34,10 @@ package's only dependency on the product crate `common`.
   shared contract of the host tools: their JSON report, and how they select and
   admit the caller's checkout and repair `core.hooksPath`. host-proof, coverage
   and repository-policy import these helpers from host-tool.
-- **repository-policy keeps one checkout wrapper.** Its compiled source
-  predicate (`JAUNDER_REPOSITORY_POLICY_SOURCE`) is fixed when the package
-  compiles, so the wrapper that passes it stays in the package.
+- **One checkout entry point.** Every host tool calls host-tool's
+  `checkout::prepare` with its name and, for repository-policy, the source
+  predicate compiled into that package (`JAUNDER_REPOSITORY_POLICY_SOURCE`). No
+  tool keeps its own checkout wrapper.
 - **host-tool's sources stay out of the shared `toolsSrc`.** No in-derivation
   producer links host-tool, so an edit to the helpers rebuilds only host-run
   tool packages.

@@ -182,7 +182,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         ) [ "tools/repository-policy/src/scoped_leptosfmt.rs" "tools/repository-policy/src/bin/scoped-leptosfmt.rs" ];
         common = tool.cargoSourceAdmits "common/src/org.rs" "regular";
         macros = tool.cargoSourceAdmits "macros/src/lib.rs" "regular";
-        native = tool.sourceAdmits "tools/repository-policy/src/checkout.rs" "regular";
+        native = tool.sourceAdmits "tools/repository-policy/src/files.rs" "regular";
         dependency = tool.sourceAdmits "tools/repository-policy/Cargo.toml" "regular";
         test = tool.sourceAdmits "tools/repository-policy/tests/native.rs" "regular";
         evaluation = tool.sourceAdmits "nix/repository-policy.nix" "regular";
@@ -190,12 +190,12 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         productInNative = tool.sourceAdmits "server/src/main.rs" "regular";
         toolsInNative = tool.sourceAdmits "tools/system-artifacts/src/main.rs" "regular";
         csrInNative = tool.sourceAdmits "csr/src/lib.rs" "regular";
-        nativeInCsrAdmission = p.csrBundle.sourceAdmits "tools/repository-policy/src/checkout.rs" "regular";
-        nativeFile = builtins.pathExists (tool.src + "/tools/repository-policy/src/checkout.rs");
-        nativeInTools = builtins.pathExists (p.system-artifacts.src + "/tools/repository-policy/src/checkout.rs");
-        nativeInProduct = builtins.pathExists (p.jaunder.src + "/tools/repository-policy/src/checkout.rs");
-        nativeInCsr = builtins.pathExists (p.csrWasm.src + "/tools/repository-policy/src/checkout.rs");
-        nativeInWasm = builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/tools/repository-policy/src/checkout.rs");
+        nativeInCsrAdmission = p.csrBundle.sourceAdmits "tools/repository-policy/src/files.rs" "regular";
+        nativeFile = builtins.pathExists (tool.src + "/tools/repository-policy/src/files.rs");
+        nativeInTools = builtins.pathExists (p.system-artifacts.src + "/tools/repository-policy/src/files.rs");
+        nativeInProduct = builtins.pathExists (p.jaunder.src + "/tools/repository-policy/src/files.rs");
+        nativeInCsr = builtins.pathExists (p.csrWasm.src + "/tools/repository-policy/src/files.rs");
+        nativeInWasm = builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/tools/repository-policy/src/files.rs");
         hostTool = builtins.all (relative:
           tool.cargoSourceAdmits relative "regular"
           && builtins.pathExists (tool.src + "/${relative}")
@@ -203,7 +203,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
           && !(builtins.pathExists (p.jaunder.src + "/${relative}"))
           && !(builtins.pathExists (p.csrWasm.src + "/${relative}"))
           && !(builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/${relative}"))
-        ) [ "tools/host-tool/src/git.rs" "tools/host-tool/src/checkout.rs" ];
+        ) [ "tools/host-tool/src/report.rs" "tools/host-tool/src/git.rs" "tools/host-tool/src/checkout.rs" ];
       }"#;
     let output = Command::new("nix")
         .args([

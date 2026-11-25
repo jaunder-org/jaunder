@@ -4698,12 +4698,12 @@ result envelope. Shared source inventory, marker and server-function contracts
 have one canonical home, reused by the remaining runtime coverage consumer
 rather than cloned. Git and checkout admission (caller checkout selection,
 untracked-input admission and `core.hooksPath` repair) live in the shared
-`tools/host-tool` library beside the host-tool report contract;
-repository-policy keeps only the wrapper that passes its compiled source
-predicate. No in-derivation producer links host-tool, so `toolsSrc` excludes its
-sources. The informational repository census and the Org timezone extractor are
-retired. The narrow scoped-Leptosfmt adapter is the formatter exception, not a
-general process runner.
+`tools/host-tool` library beside the host-tool report contract, behind one
+`prepare(owner, source_admits)` entry; repository-policy's executables pass
+their compiled source predicate to it. No in-derivation producer links
+host-tool, so `toolsSrc` excludes its sources. The informational repository
+census and the Org timezone extractor are retired. The narrow scoped-Leptosfmt
+adapter is the formatter exception, not a general process runner.
 
 Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).
