@@ -301,3 +301,5 @@ The two-PR semantic-conflict catch is **not** manufactured here (a serial
 single-dev repo does not naturally produce two conflicting queued PRs); it rests
 on `ALLGREEN` grouping + GitHub's documented stacked-build / bisect-on-failure
 (ADR rationale).
+
+<!-- docs-only probe salt 1 -->
