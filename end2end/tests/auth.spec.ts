@@ -465,6 +465,7 @@ test("a session check sent before sign-out does not restore the session after it
   // #2114: the check `/logout` starts goes out with the still-valid cookie. Its
   // signed-in answer must not land after sign-out has already reached Local.
   const title = "Signed-out landing";
+  const masthead = `${SEL.topbarHeading}:has-text("${title}")`;
   await seedConfigViaTool("site.title", title);
   await signInAs(page, user.username);
   await goto(page, "/app");
@@ -500,7 +501,7 @@ test("a session check sent before sign-out does not restore the session after it
       await answered;
       releaseLogout();
     },
-    { url: "/", ready: `${SEL.topbarHeading}:has-text("${title}")` },
+    { url: "/", ready: masthead },
   );
   expect(staleBody).toContain(user.username);
 
@@ -512,9 +513,7 @@ test("a session check sent before sign-out does not restore the session after it
   releaseCheck();
   expect(await (await nextCheck).json()).toBeNull();
   await expect(page).toHaveURL(`${BASE_URL}/`);
-  await expect(
-    page.locator(`${SEL.topbarHeading}:has-text("${title}")`),
-  ).toBeVisible();
+  await expect(page.locator(masthead)).toBeVisible();
   await expect(page.locator(SEL.accountControl)).toHaveCount(0);
 });
 

@@ -19,7 +19,9 @@ pub struct SessionContext {
     /// Synchronously readable for chrome.
     pub current: RwSignal<Option<SessionUser>>,
     /// Per-navigation server confirmation. Awaiting it yields the authoritative
-    /// (cookie-checked) session for gates that must not trust a stale marker.
+    /// (cookie-checked) session for gates that must not trust a stale marker. The
+    /// one client-written value is sign-out's anonymous answer (`clear_session`),
+    /// which can only deny.
     pub reconcile: Resource<WebResult<Option<SessionUser>>>,
 }
 impl SessionContext {
