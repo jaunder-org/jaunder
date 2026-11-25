@@ -144,14 +144,16 @@ caches measurement output or changes the baseline. Comparison runs only after
 successful production when a committed baseline exists; `if: always()` uploads
 the entire invocation evidence tree even on failure.
 `dev perf-compare <result-path>` prints absolute median/p95/spread and advisory
-20-percent timing warnings; producer failures and an unsupported schema, dataset
-plan or compatibility-key set are refusals, not advisory.
-`dev perf-import-baseline <positive-run-id>` is the only baseline mutation and
-admits only a verified successful `main` schedule/manual artifact with the exact
-repository/workflow/job/run-attempt, head, artifact and provenance identities,
-canonical complete medium evidence, and baseline compatibility.
-PR/local/noncanonical evidence cannot seed it. Atomic publication is per file;
-stable-copy failure leaves the complete nonce result and reports failure.
+20-percent timing warnings; an unsupported schema, or a dataset plan or
+compatibility-key set that differs from the baseline, is a refusal, not
+advisory. `dev perf-import-baseline <positive-run-id>` is the only baseline
+mutation and admits only a verified successful `main` schedule/manual artifact
+with the exact repository/workflow/job/run-attempt, head, artifact and
+provenance identities, canonical medium evidence, and compatibility with an
+existing baseline; it relies on the assembling run for completeness rather than
+rechecking it. PR/local/noncanonical evidence cannot seed it. Atomic publication
+is per file; stable-copy failure leaves the complete nonce result and reports
+failure.
 
 **Performance workflow decision (issue #1894).** The
 [performance workflow ownership decision](adr/0241-performance-workflow-ownership.md)
@@ -5368,8 +5370,8 @@ results, with traps only for cleanup or failed-step reporting and concurrency
 only from standard tools; signal forwarding, supervising long-lived children, or
 data shaping beyond `jq` means Python. Shell inside Nix builders and workflow
 `run:` steps is outside the rule. Under that decision `e2e-local` has already
-moved into `dev` (#2066), `perf-data`'s host work is now Python in `dev perf*`,
-and `pr-observer` has already become the native `dev pr-watch`
+moved into `dev` (#2066), the performance workflow's host work is now Python in
+`dev perf*`, and `pr-observer` has already become the native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
 [upgrade test](adr/0265-upgrade-test.md). The placements below describe the

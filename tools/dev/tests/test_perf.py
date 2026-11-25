@@ -79,7 +79,13 @@ os.execv({REAL_GIT!r}, ["git", *sys.argv[1:]])
 
 
 def key(workload: str, backend: str, browser: str | None) -> dict[str, Any]:
-    return {"workload": workload, "backend": backend, "browser": browser}
+    return {
+        "workload": workload,
+        "backend": backend,
+        "browser": browser,
+        "measurement_frame": "cold",
+        "measurement_position": "point" if "detail" in workload else "initial",
+    }
 
 
 def summary(median: int, p95: int, minimum: int = 1, maximum: int = 9) -> Any:
@@ -716,22 +722,22 @@ def test_comparison_reports_timing_and_advisory_regressions_without_failing(
     assert result.stdout.decode().splitlines() == [
         "advisory only",
         (
-            "home/sqlite/chromium: baseline median=100us p95=100us spread=1..9us; "
+            "home/sqlite/chromium/cold/initial: baseline median=100us p95=100us spread=1..9us; "
             "candidate median=120us p95=119us spread=3..300us; "
             "advisory median=at-least-20-percent p95=none"
         ),
         (
-            "public_timeline/sqlite/-: baseline median=100us p95=100us spread=1..9us; "
+            "public_timeline/sqlite/-/cold/initial: baseline median=100us p95=100us spread=1..9us; "
             "candidate median=119us p95=121us spread=1..9us; "
             "advisory median=none p95=at-least-20-percent"
         ),
         (
-            "revision_detail/postgres/-: baseline median=0us p95=0us spread=1..9us; "
+            "revision_detail/postgres/-/cold/point: baseline median=0us p95=0us spread=1..9us; "
             "candidate median=0us p95=1us spread=1..9us; "
             "advisory median=none p95=zero-baseline-increase"
         ),
         (
-            "owner_history/postgres/-: baseline median=0us p95=0us spread=1..9us; "
+            "owner_history/postgres/-/cold/initial: baseline median=0us p95=0us spread=1..9us; "
             "candidate median=0us p95=0us spread=1..9us; "
             "advisory median=none p95=none"
         ),
@@ -975,6 +981,22 @@ ADMISSION = [
         "lacks the complete",
     ),
     (edit("artifacts", ("errors",), ["rate limited"]), "contains errors"),
+    (edit("run", ("repository",), None), "Actions run belongs to another repository"),
+    (edit("run", ("head_sha",), "   "), "has no head SHA or attempt"),
+    (edit("run", ("run_attempt",), "3"), "has no head SHA or attempt"),
+    (edit("run", ("run_attempt",), True), "has no head SHA or attempt"),
+    (edit("artifacts", ("artifacts", 0, "name"), "other"), "lacks the complete"),
+    (edit("artifacts", ("artifacts", 0, "id"), "7"), "lacks the complete"),
+    (edit("artifacts", ("artifacts", 0, "id"), -7), "lacks the complete"),
+    (edit("artifacts", ("artifacts", 0, "workflow_run"), None), "lacks the complete"),
+    (
+        edit("artifacts", ("artifacts", 0, "workflow_run", "id"), 1),
+        "lacks the complete",
+    ),
+    (
+        edit("artifacts", ("artifacts", 0, "workflow_run", "head_branch"), "feature"),
+        "lacks the complete",
+    ),
 ]
 
 
@@ -1023,6 +1045,13 @@ EVIDENCE = [
         edit("artifact", ("provenance", "details", "run_id"), 1),
         "artifact provenance does not match",
     ),
+    *[
+        (
+            edit("artifact", ("provenance", "details", field), "other"),
+            "artifact provenance does not match",
+        )
+        for field in ["repository", "workflow", "job", "reference"]
+    ],
 ]
 
 

@@ -21,7 +21,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, NoReturn
+from typing import Any, NamedTuple, NoReturn
 
 from dev import steps
 
@@ -54,6 +54,14 @@ class Request:
     posts: str
     authors: str
     revisions: str
+
+
+class Retained(NamedTuple):
+    """A built producer: its name, its Nix output and its checked fragment."""
+
+    name: str
+    identity: str
+    envelope: dict[str, Any]
 
 
 def _refuse(message: str) -> NoReturn:
@@ -118,9 +126,9 @@ def _check(name: str, selected: dict[str, Any], retained: Path) -> dict[str, Any
     return envelope
 
 
-def _retain(run_root: Path, selected: dict[str, Any]) -> dict[str, Any]:
+def _retain(run_root: Path, selected: dict[str, Any]) -> Retained:
     """Builds one selected producer, keeps a writable copy of its evidence,
-    and returns its checked fragment."""
+    and checks its fragment."""
     name = str(selected["name"])
     identity = str(selected["identity"])
 
@@ -156,7 +164,7 @@ def _retain(run_root: Path, selected: dict[str, Any]) -> dict[str, Any]:
         + ["-exec", "chmod", "u+w", "--", "{}", "+"],
     )
     with steps.phase(f"{name}-check"):
-        return _check(name, selected, retained)
+        return Retained(name, output, _check(name, selected, retained))
 
 
 def _canonical(selection: dict[str, Any]) -> bool:
@@ -198,14 +206,14 @@ def _assemble(
     run_root: Path,
     nonce: str,
     selection: dict[str, Any],
-    built: list[tuple[str, str, dict[str, Any]]],
+    built: list[Retained],
 ) -> None:
     """Joins the checked fragments, in selection order, into one result."""
-    manifest = built[0][2]["manifest"]
-    if any(envelope["manifest"] != manifest for _, _, envelope in built):
+    manifest = built[0].envelope["manifest"]
+    if any(producer.envelope["manifest"] != manifest for producer in built):
         _refuse("producer fragments describe different datasets")
     canonical = _canonical(selection)
-    results = [envelope["fragment"]["result"] for _, _, envelope in built]
+    results = [producer.envelope["fragment"]["result"] for producer in built]
     result = {
         "schema_version": SCHEMA_VERSION,
         "manifest": manifest,
@@ -216,7 +224,10 @@ def _assemble(
             "measured_at_unix_ms": time.time_ns() // 1_000_000,
             "freshness_nonce": nonce,
             "producer_derivation_identities": sorted(
-                ({"name": name, "identity": output} for name, output, _ in built),
+                (
+                    {"name": producer.name, "identity": producer.identity}
+                    for producer in built
+                ),
                 key=lambda identity: identity["name"],
             ),
         },
@@ -247,10 +258,7 @@ def measure(request: Request) -> None:
         )
     )
     selection = _read(selection_path)
-    built = [
-        (str(selected["name"]), str(selected["identity"]), _retain(run_root, selected))
-        for selected in selection["producers"]
-    ]
+    built = [_retain(run_root, selected) for selected in selection["producers"]]
     with steps.phase("perf-assemble"):
         _assemble(run_root, nonce, selection["selection"], built)
 
@@ -262,9 +270,13 @@ def _versioned(path: Path) -> dict[str, Any]:
     return document
 
 
+def _key(item: dict[str, Any]) -> str:
+    """A workload's compatibility key, comparable across runs."""
+    return json.dumps(item["key"], sort_keys=True)
+
+
 def _keys(run: dict[str, Any]) -> list[str]:
-    """The run's compatibility keys, comparable across runs."""
-    return sorted(json.dumps(item["key"], sort_keys=True) for item in run["workloads"])
+    return sorted(_key(item) for item in run["workloads"])
 
 
 def _classify(baseline: int, candidate: int) -> str:
@@ -291,17 +303,15 @@ def compare(result: str) -> None:
             _refuse("candidate dataset plan differs from baseline")
         if _keys(candidate) != _keys(baseline):
             _refuse("candidate compatibility keys differ from baseline")
-        reference = {
-            json.dumps(item["key"], sort_keys=True): item["summary"]
-            for item in baseline["workloads"]
-        }
+        reference = {_key(item): item["summary"] for item in baseline["workloads"]}
         print("advisory only")
         for item in candidate["workloads"]:
             key = item["key"]
-            before = reference[json.dumps(key, sort_keys=True)]
+            before = reference[_key(item)]
             after = item["summary"]
             print(
-                f"{key['workload']}/{key['backend']}/{key['browser'] or '-'}: "
+                f"{key['workload']}/{key['backend']}/{key['browser'] or '-'}/"
+                f"{key['measurement_frame']}/{key['measurement_position']}: "
                 f"baseline {_timing(before)}; candidate {_timing(after)}; "
                 f"advisory median={_classify(before['median_us'], after['median_us'])} "
                 f"p95={_classify(before['p95_us'], after['p95_us'])}"
@@ -315,15 +325,19 @@ def _github(name: str, path: str) -> Any:
     return body
 
 
+def _positive(value: object) -> bool:
+    """A positive integer, as GitHub's numeric identifiers are."""
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
 def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, int]:
     """The run's head SHA and attempt, once the run, its job and its artifact
     are the trusted ones; nothing is downloaded before this."""
     if metadata.get("id") != run_id:
         _refuse("Actions run ID mismatch")
-    if (
-        metadata.get("repository", {}).get("full_name") != TRUSTED_REPOSITORY
-        or metadata.get("head_repository", {}).get("full_name") != TRUSTED_REPOSITORY
-    ):
+    if (metadata.get("repository") or {}).get("full_name") != TRUSTED_REPOSITORY or (
+        metadata.get("head_repository") or {}
+    ).get("full_name") != TRUSTED_REPOSITORY:
         _refuse("Actions run belongs to another repository")
     if (
         metadata.get("path") != TRUSTED_WORKFLOW_PATH
@@ -338,7 +352,7 @@ def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, 
         _refuse("baseline import requires main")
     head_sha = metadata.get("head_sha")
     attempt = metadata.get("run_attempt")
-    if not head_sha or not attempt:
+    if not isinstance(head_sha, str) or not head_sha.strip() or not _positive(attempt):
         _refuse("Actions run has no head SHA or attempt")
     if not any(
         job.get("name") == TRUSTED_JOB
@@ -352,11 +366,11 @@ def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, 
     if not any(
         artifact.get("name") == ARTIFACT
         and artifact.get("expired") is False
-        and artifact.get("id")
-        and artifact.get("size_in_bytes")
-        and artifact.get("workflow_run", {}).get("id") == run_id
-        and artifact.get("workflow_run", {}).get("head_branch") == "main"
-        and artifact.get("workflow_run", {}).get("head_sha") == head_sha
+        and _positive(artifact.get("id"))
+        and _positive(artifact.get("size_in_bytes"))
+        and (artifact.get("workflow_run") or {}).get("id") == run_id
+        and (artifact.get("workflow_run") or {}).get("head_branch") == "main"
+        and (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
         for artifact in artifacts.get("artifacts", [])
     ):
         _refuse(

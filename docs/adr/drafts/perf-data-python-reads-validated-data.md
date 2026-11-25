@@ -71,5 +71,6 @@ fails loudly either way.
   the retained producer trees are unchanged.
 - Accepted losses: the host no longer re-checks fragment contents, browser
   diagnostic file existence and confinement, or a result edited by hand before
-  comparison or import. Import still admits only an authenticated `main` run of
-  the project's own workflow.
+  comparison or import. Import also relies on the assembling run for a result's
+  completeness: the first baseline has no earlier one to match. Import still
+  admits only an authenticated `main` run of the project's own workflow.
