@@ -1,19 +1,15 @@
 """The human view of a step report: a host-proof tool's JSON, or `dev`'s own.
 
 A diagnostic's rendered `report` (trace tables) comes first, verbatim, then one
-line per step. The producing executable's exit status remains the verdict.
+line per step. The producing executable's exit status remains the verdict. The
+cell helpers format the trace diagnostics' tables.
 """
 
 import json
-import sys
-import time
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from typing import Any
 
 from tabulate import tabulate
-
-from dev import steps
-from dev.traces import EvidenceError
 
 
 def render_report(report: Any) -> str:
@@ -55,31 +51,6 @@ def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
     )
 
 
-def verdict(
-    name: str,
-    decide: Callable[[], str],
-    refused: Callable[[EvidenceError], int] = lambda _error: 1,
-) -> None:
-    """Runs one in-process verdict as the step `name` and shows its result.
-
-    `decide` returns the step's detail, having written any report of its own
-    first. Evidence it refuses fails the step with the status `refused` gives
-    that refusal, as a failed tool's status would.
-    """
-    started_ns = time.time_ns()
-    with steps.phase(name):
-        try:
-            detail, code = decide(), 0
-        except EvidenceError as error:
-            detail, code = str(error), refused(error)
-        duration_ms = (time.time_ns() - started_ns) // 1_000_000
-        step = {
-            "name": name,
-            "ok": not code,
-            "duration_ms": duration_ms,
-            "detail": detail,
-        }
-        sys.stdout.write(render_report({"steps": [step]}))
-        sys.stdout.flush()
-        if code:
-            raise steps.StepFailed(code, signalled=False)
+def ms(value: float | None) -> str:
+    """A millisecond value as a report cell: three decimals, `-` when unset."""
+    return "-" if value is None else f"{value:.3f}"

@@ -14,19 +14,22 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from dev import report
+from dev.report import ms
 from dev.traces import (
     CURRENT_TIMING_SCHEMA,
+    TEST_SPAN,
     BootOutcome,
     Decomposition,
     Filters,
     Span,
-    as_i64,
     decompose,
     field_f64,
+    marks_by_navigation,
     member,
+    navigation_marks,
     parse_json_attr,
     plain_sum,
     read_spans,
@@ -77,16 +80,13 @@ PREAMBLE = (
 SEGMENT_HEADERS = ("segment", "median_ms", "share_of_boot_total_%", "n")
 
 
-def _lower_middle(values: Sequence[float]) -> float:
-    return sorted(values)[(len(values) - 1) // 2]
-
-
 def median(values: Sequence[float]) -> float | None:
-    """The median, taking the lower of the two middle values on an even count.
+    """The median, taking the lower of the two middle values on an even count;
+    None for no values.
 
     No in-repo convention exists to inherit, so this one is pinned by a test.
     """
-    return _lower_middle(values) if values else None
+    return sorted(values)[(len(values) - 1) // 2] if values else None
 
 
 @dataclass(frozen=True)
@@ -204,8 +204,9 @@ class Population:
         for decomposition in self.decomposed:
             for label, value in decomposition.segments:
                 groups.setdefault(label, []).append(value)
+        # Every label was seen with a value, so each has a median.
         return [
-            SegmentMedian(label, _lower_middle(values), len(values))
+            SegmentMedian(label, cast(float, median(values)), len(values))
             for label, values in groups.items()
         ]
 
@@ -258,18 +259,6 @@ def _shape_signature(navigation: Any) -> str | None:
             return None
         parts.append(f"{key}={value}")
     return ",".join(parts)
-
-
-def _marks_by_navigation(marks: Any) -> dict[int, list[Any]]:
-    """Boot marks keyed by navigation id, from their own attribute: the boot
-    total must come from somewhere other than the segments for the closure
-    check to mean anything."""
-    by_id: dict[int, list[Any]] = {}
-    for entry in marks if isinstance(marks, list) else []:
-        identifier, found = as_i64(member(entry, "id")), member(entry, "marks")
-        if identifier is not None and isinstance(found, list):
-            by_id[identifier] = found
-    return by_id
 
 
 def _text(navigation: Any, key: str, default: str) -> str:
@@ -335,7 +324,7 @@ def boot_phase_rows(spans: list[Span]) -> list[Population]:
     """
     groups: dict[tuple[str, str, str, str], Population] = {}
     for span in spans:
-        if span.name != "e2e.test":
+        if span.name != TEST_SPAN:
             continue
         navigations = parse_json_attr(span.raw, "e2e.navigation_top_json", span.source)
         # Both optional attributes are read before either's absence can skip
@@ -343,7 +332,7 @@ def boot_phase_rows(spans: list[Span]) -> list[Population]:
         marks = parse_json_attr(span.raw, "e2e.boot_marks_json", span.source)
         if not isinstance(navigations, list):
             continue
-        by_id = _marks_by_navigation(marks)
+        by_id = marks_by_navigation(marks)
         for navigation in navigations:
             arm = _text(navigation, "wasmExperimentArm", "") or "-"
             key = (
@@ -353,9 +342,7 @@ def boot_phase_rows(spans: list[Span]) -> list[Population]:
                 arm,
             )
             population = groups.setdefault(key, Population(*key))
-            identifier = as_i64(member(navigation, "id"))
-            found = [] if identifier is None else by_id.get(identifier, [])
-            _add(population, navigation, found)
+            _add(population, navigation, navigation_marks(navigation, by_id))
     return sorted(
         groups.values(),
         key=lambda row: (
@@ -376,13 +363,9 @@ def boot_phases(inputs: Sequence[Path]) -> list[Population]:
     return boot_phase_rows(spans)
 
 
-def _ms(value: float | None) -> str:
-    return "-" if value is None else f"{value:.3f}"
-
-
 def _estimate(label: str, estimate: Estimate) -> str:
     return (
-        f"mean {label} ± SE (n={estimate.n}): {_ms(estimate.mean)} ± {_ms(estimate.se)}"
+        f"mean {label} ± SE (n={estimate.n}): {ms(estimate.mean)} ± {ms(estimate.se)}"
     )
 
 
@@ -461,18 +444,18 @@ def _summary(row: Population) -> list[str]:
             f"unique shapes: {len(row.shapes)}",
         ],
         [
-            f"median wasmApiMs (n={row.direct_complete}): {_ms(median(row.wasm_api_ms))}",
-            f"median wasmInitMs (n={row.direct_complete}): {_ms(median(row.wasm_init_ms))}",
+            f"median wasmApiMs (n={row.direct_complete}): {ms(median(row.wasm_api_ms))}",
+            f"median wasmInitMs (n={row.direct_complete}): {ms(median(row.wasm_init_ms))}",
         ],
         [
-            f"mean wasmApiMs ± SE: {_ms(api.mean)} ± {_ms(api.se)}",
-            f"mean wasmInitMs ± SE: {_ms(init.mean)} ± {_ms(init.se)}",
+            f"mean wasmApiMs ± SE: {ms(api.mean)} ± {ms(api.se)}",
+            f"mean wasmInitMs ± SE: {ms(init.mean)} ± {ms(init.se)}",
         ],
         [_estimate("commitToDocumentStartMs", row.bridge_estimate(0))],
         [_estimate("mountDoneToBindingMs", row.bridge_estimate(1))],
         [
             _estimate("frameSkewRemainderMs", row.bridge_estimate(2)),
-            f"max |remainder|: {_ms(row.remainder_max_abs_ms)}",
+            f"max |remainder|: {ms(row.remainder_max_abs_ms)}",
         ],
     ]
     return ["  ".join(fields) for fields in lines]
@@ -494,16 +477,16 @@ def render(rows: Sequence[Population]) -> str:
             )
             continue
         total = row.boot_total_ms
-        out += f"median bootTotalMs: {_ms(total)}\n"
-        out += f"median commitToMountMs: {_ms(row.commit_to_mount_ms)}\n"
+        out += f"median bootTotalMs: {ms(total)}\n"
+        out += f"median commitToMountMs: {ms(row.commit_to_mount_ms)}\n"
         out += (
             "median frame skew (commitToMountMs - bootTotalMs):"
-            f" {_ms(row.frame_skew_ms)}\n"
+            f" {ms(row.frame_skew_ms)}\n"
         )
         cells = [
             [
                 segment.label,
-                f"{segment.median_ms:.3f}",
+                ms(segment.median_ms),
                 f"{segment.median_ms / total * 100.0:.1f}"
                 if total is not None and total > 0.0
                 else "-",

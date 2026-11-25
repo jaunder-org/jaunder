@@ -29,6 +29,8 @@ from opentelemetry.trace import Span
 
 from dev import trace
 from dev.commands import Tool
+from dev.evidence import EvidenceError
+from dev.report import render_report
 from dev.spans import (
     CACHE,
     COMMAND_LINE,
@@ -252,6 +254,36 @@ def phase(name: str) -> Iterator[None]:
             span.set_attribute(STATUS, Status.FAILED)
             raise
         span.set_attribute(STATUS, Status.OK)
+
+
+def verdict(
+    name: str,
+    decide: Callable[[], str],
+    refused: Callable[[EvidenceError], int] = lambda _error: 1,
+) -> None:
+    """Runs one in-process verdict as the step `name` and shows its result.
+
+    `decide` returns the step's detail, having written any report of its own
+    first. Evidence it refuses fails the step with the status `refused` gives
+    that refusal, as a failed tool's status would.
+    """
+    started_ns = time.time_ns()
+    with phase(name):
+        try:
+            detail, code = decide(), 0
+        except EvidenceError as error:
+            detail, code = str(error), refused(error)
+        duration_ms = (time.time_ns() - started_ns) // 1_000_000
+        step = {
+            "name": name,
+            "ok": not code,
+            "duration_ms": duration_ms,
+            "detail": detail,
+        }
+        sys.stdout.write(render_report({"steps": [step]}))
+        sys.stdout.flush()
+        if code:
+            raise StepFailed(code, signalled=False)
 
 
 # Judges a successful step's captured output: the reason to refuse it, or None.

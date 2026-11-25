@@ -8,11 +8,11 @@ from typing import Any
 import pytest
 from conftest import write_capture
 
+from dev.evidence import EvidenceError
 from dev.traces import (
     TRACE_MEMBER,
     BootOutcome,
     Decomposition,
-    EvidenceError,
     Filters,
     MalformedJsonAttr,
     decompose,

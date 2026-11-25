@@ -9,6 +9,7 @@ import pytest
 from conftest import FIXTURES, Checkout, write_lane_capture
 
 from dev import report
+from dev.evidence import EvidenceError
 from dev.trace_analysis import (
     LIFECYCLE_SPAN_NAME,
     Analysis,
@@ -20,7 +21,7 @@ from dev.trace_analysis import (
     lanes,
     render,
 )
-from dev.traces import EvidenceError, Filters, MalformedJsonAttr, Span, parse_spans
+from dev.traces import Filters, MalformedJsonAttr, Span, parse_spans
 
 SAMPLE = FIXTURES / "trace-analysis" / "otel-traces-sample.jsonl"
 NONE = ReportedDurations()

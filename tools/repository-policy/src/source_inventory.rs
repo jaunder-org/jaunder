@@ -302,9 +302,13 @@ mod endpoint_tests {
         uri_path: String,
     }
 
-    /// Every such hit in `dev`'s seed capture
+    /// Every such hit with a `web::` module in `dev`'s seed capture
     /// (`tools/dev/tests/fixtures/server-fn-coverage/otel-traces-seed.jsonl`),
     /// extracted once and committed so this check needs no trace reader.
+    /// `dev`'s `test_the_seed_endpoint_fixture_is_derived_from_the_seed`
+    /// (`tools/dev/tests/test_server_fn_coverage.py`) re-derives it from the
+    /// seed and fails on any difference; its `seed_endpoints` writes the
+    /// refreshed fixture after the seed is re-recorded.
     const SEED_ENDPOINTS: &str = include_str!("testdata/server-fn-seed-endpoints.json");
 
     /// The derived endpoint matches the URI a real run requested (ADR-0120).

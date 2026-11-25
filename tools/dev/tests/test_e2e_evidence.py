@@ -9,14 +9,11 @@ from typing import Any
 import pytest
 from conftest import FIXTURES, lift_lanes, write_capture, write_lane_capture
 
-from dev import e2e_evidence
 from dev.e2e_evidence import (
     LaneEvidence,
-    read_catalog,
     reconcile,
     reconcile_ownership,
     reconciled_lanes,
-    report_specs,
     validate_boot_files,
     validate_boot_json,
     validate_duration_files,
@@ -24,7 +21,8 @@ from dev.e2e_evidence import (
     validate_population,
     verify_lane,
 )
-from dev.traces import TRACE_MEMBER, EvidenceError
+from dev.evidence import EvidenceError, ExpectedLane, read_catalog
+from dev.traces import TRACE_MEMBER
 
 CATALOG = FIXTURES / "e2e-lanes.json"
 OWNERSHIP = FIXTURES / "e2e-ownership"
@@ -172,7 +170,7 @@ def test_a_phase_sidecar_needs_each_required_phase_to_succeed(
 # Ownership.
 
 
-def lane(identity: str) -> e2e_evidence.ExpectedLane:
+def lane(identity: str) -> ExpectedLane:
     return next(lane for lane in read_catalog(CATALOG) if lane.identity == identity)
 
 
@@ -404,84 +402,7 @@ def test_a_report_without_specs_has_no_population() -> None:
         reconcile_ownership("sqlite", "firefox", read_catalog(CATALOG), evidence)
 
 
-# The lane catalog.
-
-
-@pytest.mark.parametrize(
-    ("catalog", "message"),
-    [
-        (None, "reading"),
-        ("{", "parsing"),
-        ('{"schemaVersion": 2, "lanes": [{}]}', "parsing"),
-        ('{"schemaVersion": 2, "lanes": []}', "unsupported or empty"),
-        ('{"schemaVersion": 1, "lanes": []}', "unsupported or empty"),
-        ("[]", "expected an object"),
-    ],
-)
-def test_an_unusable_catalog_is_refused(
-    tmp_path: Path, catalog: str | None, message: str
-) -> None:
-    path = tmp_path / "lanes.json"
-    if catalog is not None:
-        path.write_text(catalog)
-    with pytest.raises(EvidenceError, match=message):
-        read_catalog(path)
-
-
-def test_a_catalog_with_a_duplicate_identity_is_refused(tmp_path: Path) -> None:
-    path = tmp_path / "lanes.json"
-    edit_catalog = json.loads(CATALOG.read_text())
-    edit_catalog["lanes"].append(edit_catalog["lanes"][0])
-    path.write_text(json.dumps(edit_catalog))
-    with pytest.raises(EvidenceError, match="duplicate ownership catalog identity"):
-        read_catalog(path)
-
-
 # Strict decoding.
-
-
-@pytest.mark.parametrize(
-    ("document", "message"),
-    [
-        ({"suites": [{"specs": [{}]}]}, "missing field `tests`"),
-        ({"suites": [{}]}, "missing field `specs`"),
-        ({"suites": None}, "missing field `suites`"),
-        ({"suites": {}}, "expected an array"),
-        ({"suites": [{"specs": [{"id": 1, "tests": []}]}]}, "`id`: expected a string"),
-        (
-            {"suites": [{"specs": [{"line": -1, "tests": []}]}]},
-            "`line`: expected a u64",
-        ),
-        ({"suites": [{"specs": [{"line": True, "tests": []}]}]}, "expected a u64"),
-        (
-            {"suites": [{"specs": [{"tests": [{"results": [{"duration": "1"}]}]}]}]},
-            "`duration`: expected a number",
-        ),
-        (
-            {"suites": [{"specs": [{"tests": [{"results": [{"retry": 2**32}]}]}]}]},
-            "`retry`: expected a u32",
-        ),
-    ],
-)
-def test_a_report_is_decoded_strictly(document: Any, message: str) -> None:
-    with pytest.raises(EvidenceError, match=message):
-        report_specs(json.dumps(document))
-
-
-def test_report_specs_are_visited_in_reporter_order() -> None:
-    document = {
-        "suites": [
-            {
-                "suites": [{"suites": [], "specs": [{"id": "nested", "tests": []}]}],
-                "specs": [{"id": "outer", "tests": []}],
-            }
-        ]
-    }
-    assert [spec.id for spec in report_specs(json.dumps(document))] == [
-        "outer",
-        "nested",
-    ]
-    assert report_specs("{}") == []
 
 
 @pytest.mark.parametrize(
@@ -489,7 +410,9 @@ def test_report_specs_are_visited_in_reporter_order() -> None:
     [
         ({"complete": "yes"}, "`complete`: expected a boolean"),
         ({"lane": 5}, "`lane`: expected a string"),
-        ({"shard_index": 256}, "`shard_index`: expected a u8"),
+        ({"shard_index": -1}, "`shard_index`: expected a non-negative integer"),
+        ({"shard_count": True}, "`shard_count`: expected a non-negative integer"),
+        ({"schema_version": 1.0}, "`schema_version`: expected a non-negative"),
     ],
 )
 def test_a_lane_manifest_is_decoded_strictly(manifest: Any, message: str) -> None:

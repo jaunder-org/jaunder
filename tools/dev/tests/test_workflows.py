@@ -19,7 +19,11 @@ from conftest import (
     Checkout,
     Workflow,
     lift_lanes,
+    write_lane_capture,
 )
+
+from dev.e2e_evidence import LaneEvidence
+from dev.traces import read_trace_member
 
 SHELL_SYNTAX = "a b ; touch pwned $(touch pwned)"
 
@@ -557,6 +561,95 @@ def test_e2e_regenerate_coverage_refuses_unreconciled_lanes(checkout: Checkout) 
         "reconcile before flow coverage: reading expected census"
     )
     assert not (checkout.root / "docs" / "coverage").exists()
+
+
+# Each coverage verdict: its command, and where its line falls among those shown.
+COVERAGE_MODES = {
+    "verify": (["e2e-reconcile", "sqlite", "chromium", ".xtask/diagnostics"], 1),
+    "regenerate": (["e2e-regenerate-coverage"], 0),
+}
+# The OpenTelemetry SDK's own record of losing spans, in a server's diag.log.
+SPAN_LOSS = json.dumps(
+    {
+        "level": "WARN",
+        "target": "opentelemetry_sdk",
+        "fields": {"name": "BatchSpanProcessor.SpanDroppingStarted"},
+    }
+)
+
+
+def coverage_lanes(checkout: Checkout, inventory: str) -> list[LaneEvidence]:
+    """The coverage pair's lanes, lifted where both coverage verdicts read
+    them, with `inventory` as this checkout's `source-contracts` body."""
+    checkout.built("source-contracts", inventory)
+    checkout.tool("nix", store_nix())
+    catalog(checkout.root)
+    # The pair's producers are recorded, not run; their lanes are already lifted.
+    checkout.tool("bash", "")
+    return lift_lanes(checkout.root / ".xtask" / "diagnostics", "chromium")
+
+
+@pytest.mark.parametrize("mode", list(COVERAGE_MODES))
+def test_coverage_refuses_a_lane_whose_server_lost_spans(
+    checkout: Checkout, mode: str
+) -> None:
+    lanes = coverage_lanes(checkout, INVENTORY)
+    capture = lanes[1].capture
+    write_lane_capture(capture, read_trace_member(capture), SPAN_LOSS.encode())
+    args, line = COVERAGE_MODES[mode]
+    result = checkout.dev(*args)
+    assert result.returncode == 1, result
+    assert verdict_lines(result)[line].startswith(
+        f"[FAIL] server-fn-coverage-{mode} — refusing "
+        f"{capture.relative_to(checkout.root)}: the capture is incomplete: the "
+        "server's OpenTelemetry SDK lost an unknown number of span(s)"
+    )
+    assert not (checkout.root / "docs" / "coverage").exists()
+
+
+@pytest.mark.parametrize("mode", list(COVERAGE_MODES))
+@pytest.mark.parametrize(
+    ("inventory", "detail"),
+    [
+        ("sys.exit(3)", "listing the server-fn inventory failed with status 3"),
+        ("print('not a listing')", "the server-fn inventory listing is malformed: "),
+    ],
+)
+def test_coverage_without_an_inventory_is_a_failed_verdict(
+    checkout: Checkout, mode: str, inventory: str, detail: str
+) -> None:
+    coverage_lanes(checkout, inventory)
+    args, line = COVERAGE_MODES[mode]
+    result = checkout.dev(*args)
+    assert result.returncode == 1, result
+    assert verdict_lines(result)[line].startswith(
+        f"[FAIL] server-fn-coverage-{mode} — {detail}"
+    )
+
+
+def test_a_signalled_inventory_ends_the_gate_without_a_verdict(
+    checkout: Checkout,
+) -> None:
+    coverage_lanes(checkout, "os.kill(os.getpid(), signal.SIGTERM)")
+    result = checkout.dev("e2e-regenerate-coverage")
+    assert result.returncode == 128 + 15, result
+    assert b"server-fn-coverage-regenerate" not in result.stdout
+
+
+def test_a_snapshot_regeneration_cannot_write_is_a_failed_verdict(
+    checkout: Checkout,
+) -> None:
+    coverage_lanes(checkout, INVENTORY)
+    (checkout.root / "docs").mkdir()
+    (checkout.root / "docs" / "coverage").write_text("not a directory")
+    result = checkout.dev("e2e-regenerate-coverage")
+    assert result.returncode == 1, result
+    assert verdict_lines(result) == [
+        (
+            "[FAIL] server-fn-coverage-regenerate — writing "
+            "docs/coverage/server-fns.json: [Errno 17] File exists: 'docs/coverage'"
+        )
+    ]
 
 
 STATIC_ALL = [

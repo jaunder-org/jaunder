@@ -27,8 +27,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dev.evidence import EvidenceError, loads
 from dev.traces import (
-    EvidenceError,
+    TEST_SPAN,
     Filters,
     Span,
     get_attr,
@@ -46,7 +47,6 @@ API_PREFIX = "/api/"
 MODULE_ATTRS = ("code.module.name", "code.namespace")
 # The crate prefix module attributes carry and inventory modules do not.
 CRATE_PREFIX = "web::"
-TEST_SPAN = "e2e.test"
 # The `e2e.test` span's attribute holding the test's title.
 TEST_TITLE_ATTR = "e2e.test"
 # A cycle guard: a malformed capture must not hang a gate.
@@ -78,11 +78,19 @@ class ServerFn:
 
 def parse_inventory(listing: bytes) -> list[ServerFn]:
     """`source-contracts server-fn-inventory`'s listing, which it already
-    derived and validated; read, not checked again."""
-    return [
-        ServerFn(entry["qualified"], entry["module"], entry["ident"], entry["endpoint"])
-        for entry in json.loads(listing)
-    ]
+    derived and validated; read, not checked again. A listing that is not one
+    is refused rather than read as some other inventory."""
+    try:
+        return [
+            ServerFn(
+                entry["qualified"], entry["module"], entry["ident"], entry["endpoint"]
+            )
+            for entry in json.loads(listing)
+        ]
+    except (ValueError, LookupError, TypeError) as error:
+        raise EvidenceError(
+            f"the server-fn inventory listing is malformed: {error!r}"
+        ) from error
 
 
 @dataclass
@@ -112,7 +120,7 @@ def span_module(span: Span) -> str:
     return get_attr(span.raw, MODULE_ATTRS[0]) or get_attr(span.raw, MODULE_ATTRS[1])
 
 
-def _endpoint(uri: str) -> str | None:
+def uri_endpoint(uri: str) -> str | None:
     """The server-fn endpoint a request `uri` names, origin-form or absolute,
     without its query or fragment; None for anything not under `/api/`."""
     path = re.split("[?#]", uri, maxsplit=1)[0]
@@ -129,7 +137,7 @@ def _identify(span: Span, inventory: list[ServerFn]) -> ServerFn | None:
         for fn in inventory:
             if relative == fn.module and span.name in fn.candidate_span_names():
                 return fn
-    endpoint = _endpoint(span.uri)
+    endpoint = uri_endpoint(span.uri)
     if endpoint is None:
         return None
     return next((fn for fn in inventory if fn.endpoint == endpoint), None)
@@ -191,7 +199,7 @@ def refuse_span_loss(diag_log: str) -> None:
     dropped: int | None = None
     for line in diag_log.split("\n"):
         try:
-            record = json.loads(line)
+            record = loads(line)
         except ValueError:
             continue
         if not isinstance(record, dict):
@@ -290,14 +298,15 @@ def render(coverage: Coverage) -> str:
 def verify(coverage: Coverage, snapshot: Path) -> str:
     """The committed snapshot is byte for byte what `coverage` renders.
 
-    Bytes, not parsed values: a hand edit that parses equal is still drift. An
-    unreadable snapshot reads as empty, which never matches.
+    Bytes, not parsed values or decoded text: a hand edit that parses equal,
+    or line endings a checkout rewrote, is still drift. An unreadable snapshot
+    reads as empty, which never matches.
     """
     try:
-        committed = snapshot.read_text(encoding="utf-8")
-    except OSError, ValueError:
-        committed = ""
-    if committed != render(coverage):
+        committed = snapshot.read_bytes()
+    except OSError:
+        committed = b""
+    if committed != render(coverage).encode():
         raise EvidenceError(
             f"{snapshot} is out of date with this run's traces — regenerate it "
             f"with `{REGENERATE_CMD}` and commit the result"
@@ -307,8 +316,11 @@ def verify(coverage: Coverage, snapshot: Path) -> str:
 
 def regenerate(coverage: Coverage, snapshot: Path) -> str:
     """Writes the snapshot `coverage` renders, its one generated artifact."""
-    snapshot.parent.mkdir(parents=True, exist_ok=True)
-    snapshot.write_text(render(coverage), encoding="utf-8")
+    try:
+        snapshot.parent.mkdir(parents=True, exist_ok=True)
+        snapshot.write_bytes(render(coverage).encode())
+    except OSError as error:
+        raise EvidenceError(f"writing {snapshot}: {error}") from error
     return (
         f"{len(coverage.covered)} covered, {len(coverage.orphans)} fn(s) with "
         f"unattributed hits → {snapshot}"

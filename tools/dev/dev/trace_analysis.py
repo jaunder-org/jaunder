@@ -7,18 +7,20 @@ medians, which `analyze` does not.
 """
 
 import functools
-import re
 import sys
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from dev import boot_phases, e2e_evidence, report, steps
+from dev import boot_phases, report, steps
+from dev.evidence import CATALOG, EvidenceError, pair_lanes, read_catalog, report_specs
+from dev.report import ms
 from dev.traces import (
     CURRENT_TIMING_SCHEMA,
     MIN_BOOT_PHASES,
-    EvidenceError,
+    PAGE_SPAN,
+    TEST_SPAN,
     Filters,
     MalformedJsonAttr,
     Span,
@@ -29,6 +31,7 @@ from dev.traces import (
     member,
     parse_json_attr,
     parse_spans,
+    parse_u64,
     read_spans,
     read_trace_member,
     span_interval_ms,
@@ -43,17 +46,9 @@ BROWSERS = ("chromium", "firefox")
 SYSTEM = "x86_64-linux"
 
 
-def _u64(text: str) -> int | None:
-    """`text` as an unsigned 64-bit decimal, as Rust's `u64::from_str` reads it."""
-    if not re.fullmatch(r"\+?[0-9]+", text):
-        return None
-    value = int(text)
-    return value if value < 2**64 else None
-
-
 def _count(span: Span, key: str) -> int:
     """An integer-count attribute; 0 when absent or not a count."""
-    return _u64(get_attr(span.raw, key)) or 0
+    return parse_u64(get_attr(span.raw, key)) or 0
 
 
 def _label(value: str) -> str:
@@ -96,12 +91,7 @@ def _attempts(path: Path) -> Attempts:
         raise EvidenceError(
             f"failed to read playwright report {path}: {error}"
         ) from error
-    try:
-        specs = e2e_evidence.report_specs(raw)
-    except EvidenceError as error:
-        raise EvidenceError(
-            f"failed to parse playwright report {path}: {error}"
-        ) from error
+    specs = report_specs(raw, f"failed to parse playwright report {path}")
     attempts = {}
     for spec in specs:
         for test in spec.tests:
@@ -222,24 +212,20 @@ class Analysis:
     sections: list[Section]
 
 
-def _ms(value: float) -> str:
-    return f"{value:.3f}"
-
-
 def _hotspot_section(title: str, groups: dict[str, _Agg], name: str) -> Section:
     rows = _sorted_desc(groups.items(), lambda item: item[1].max_ms)
     return Section(
         title,
         ("max_ms", "avg_ms", "total_ms", "count", name),
         [
-            [_ms(a.max_ms), _ms(a.avg_ms), _ms(a.total_ms), str(a.count), key]
+            [ms(a.max_ms), ms(a.avg_ms), ms(a.total_ms), str(a.count), key]
             for key, a in rows
         ],
     )
 
 
 def _e2e_tests(spans: list[Span]) -> list[Span]:
-    return [span for span in spans if span.name == "e2e.test"]
+    return [span for span in spans if span.name == TEST_SPAN]
 
 
 def _navigation_spans(spans: list[Span]) -> list[Span]:
@@ -247,8 +233,8 @@ def _navigation_spans(spans: list[Span]) -> list[Span]:
     return [
         span
         for span in spans
-        if span.name == "e2e.test"
-        or (span.name == "e2e.page" and has_attr(span.raw, "e2e.navigation_top_json"))
+        if span.name == TEST_SPAN
+        or (span.name == PAGE_SPAN and has_attr(span.raw, "e2e.navigation_top_json"))
     ]
 
 
@@ -277,7 +263,7 @@ def _span_coverage(spans: list[Span], reported: ReportedDurations) -> list[list[
         key = AttemptKey(
             get_attr(envelope.raw, "e2e.test"),
             get_attr(envelope.raw, "e2e.project"),
-            _u64(get_attr(envelope.raw, "e2e.retry")) or 0,
+            parse_u64(get_attr(envelope.raw, "e2e.retry")) or 0,
         )
         # Scoped by the envelope's own trace file (see ReportedDurations).
         reported_ms = reported.get(envelope.source, key)
@@ -295,9 +281,9 @@ def _span_coverage(spans: list[Span], reported: ReportedDurations) -> list[list[
         pct = uncovered_ms / reported_ms * 100.0 if reported_ms > 0.0 else 0.0
         cells = [
             _label(key.project),
-            _ms(reported_ms),
-            _ms(covered_ms),
-            _ms(uncovered_ms),
+            ms(reported_ms),
+            ms(covered_ms),
+            ms(uncovered_ms),
             f"{pct:.1f}",
             key.test,
         ]
@@ -398,7 +384,7 @@ def _spans_sections(spans: list[Span], top: str) -> tuple[Section, Section]:
             ),
             [
                 [
-                    _ms(span.duration_ms),
+                    ms(span.duration_ms),
                     _label(span.trace_id),
                     _label(span.name),
                     _label(span.method),
@@ -415,7 +401,7 @@ def _spans_sections(spans: list[Span], top: str) -> tuple[Section, Section]:
             ("duration_ms", "project", "actions", "requests", "trace_id", "test"),
             [
                 [
-                    _ms(span.duration_ms),
+                    ms(span.duration_ms),
                     _label(span.project),
                     str(_count(span, "e2e.action_count")),
                     str(_count(span, "e2e.request_count")),
@@ -510,7 +496,7 @@ def _long_task_sections(spans: list[Span], top: str) -> tuple[Section, Section]:
             "Long-task totals by project",
             ("project", "tests", "tasks", "avg_ms_per_test", "max_task_ms"),
             [
-                [name, str(int(p[0])), str(int(p[1])), _ms(p[2] / p[0]), _ms(p[3])]
+                [name, str(int(p[0])), str(int(p[1])), ms(p[2] / p[0]), ms(p[3])]
                 for name, p in by_project
             ],
             ranked=False,
@@ -550,9 +536,9 @@ def _resource_sections(spans: list[Span], top: str) -> tuple[Section, Section]:
             ("max_ms", "avg_ms", "total_ms", "count", "initiator", "asset"),
             [
                 [
-                    _ms(a.max_ms),
-                    _ms(a.avg_ms),
-                    _ms(a.total_ms),
+                    ms(a.max_ms),
+                    ms(a.avg_ms),
+                    ms(a.total_ms),
                     str(a.count),
                     initiator,
                     name,
@@ -590,8 +576,8 @@ def _totals_sections(spans: list[Span]) -> tuple[Section, Section]:
                 [
                     name,
                     str(int(p[0])),
-                    _ms(p[1] / p[0]),
-                    _ms(p[2]),
+                    ms(p[1] / p[0]),
+                    ms(p[2]),
                     f"{p[3] / p[0]:.2f}",
                     f"{p[4] / p[0]:.2f}",
                 ]
@@ -602,7 +588,7 @@ def _totals_sections(spans: list[Span]) -> tuple[Section, Section]:
         Section(
             "Trace totals (sum of span durations)",
             ("total_ms", "spans", "trace_id"),
-            [[_ms(t[0]), str(int(t[1])), trace] for trace, t in by_trace],
+            [[ms(t[0]), str(int(t[1])), trace] for trace, t in by_trace],
         ),
     )
 
@@ -716,7 +702,7 @@ def analyze_command(
         _show(render(analysis, top))
         return f"{analysis.span_count} span(s)"
 
-    report.verdict("traces-analyze", decide, _status)
+    steps.verdict("traces-analyze", decide, _status)
 
 
 def boot_phases_command(files: Sequence[Path]) -> None:
@@ -725,7 +711,7 @@ def boot_phases_command(files: Sequence[Path]) -> None:
         _show(boot_phases.render(rows))
         return f"{len(rows)} population(s)"
 
-    report.verdict("traces-boot-phases", decide, _status)
+    steps.verdict("traces-boot-phases", decide, _status)
 
 
 @dataclass(frozen=True)
@@ -759,13 +745,12 @@ def lanes(catalog: Path, single_worker: bool, browser: str | None) -> list[Lane]
             for backend in BACKENDS
             for name in browsers
         ]
-    enabled = [lane for lane in e2e_evidence.read_catalog(catalog) if lane.enabled]
+    lanes = read_catalog(catalog)
     return [
         Lane(lane.identity, "checks", f"e2e-{lane.identity}")
         for backend in BACKENDS
         for name in browsers
-        for lane in enabled
-        if (lane.backend, lane.browser) == (backend, name)
+        for lane in pair_lanes(lanes, backend, name)
     ]
 
 
@@ -777,7 +762,7 @@ def run_command(
     A failed build stops with Nix's status. Each lane's Playwright report,
     when its output has one, is paired with its own trace (ReportedDurations).
     """
-    selected = lanes(Path("end2end/e2e-lanes.json"), single_worker, browser)
+    selected = lanes(Path(CATALOG), single_worker, browser)
     outputs = [
         Path(steps.nix_build(lane.attribute, lane.installable, keep=False))
         for lane in selected
@@ -800,4 +785,4 @@ def run_command(
         _show(render(analyze_spans(spans, None, reported, top), top))
         return f"{len(selected)} trace file(s)"
 
-    report.verdict("traces-run", decide, _status)
+    steps.verdict("traces-run", decide, _status)

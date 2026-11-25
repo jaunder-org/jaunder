@@ -7,21 +7,38 @@ checks one backend/browser pair's lanes together against the lane catalog
 and an independent census of the expected tests, and reports every failure
 it finds, not just the first. Neither builds or runs anything.
 
-Each input is decoded strictly, as its Rust writer types it: a missing field
-or a value of the wrong type is a failure, not a default.
+Each input is decoded strictly (`evidence`): a missing field or a value of the
+wrong kind is a failure, not a default.
 """
 
 import json
-import math
-import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from dev.traces import (
-    BootOutcome,
+from dev.evidence import (
+    BOOLEAN,
+    COUNT,
+    NUMBER,
+    STRING,
     EvidenceError,
+    ExpectedLane,
+    ReportSpec,
+    decode,
+    objects,
+    optional,
+    pair_lanes,
+    read,
+    read_catalog,
+    report_specs,
+    required,
+)
+from dev.traces import (
+    CURRENT_TIMING_SCHEMA,
+    PAGE_SPAN,
+    TEST_SPAN,
+    BootOutcome,
     Filters,
     MalformedJsonAttr,
     Span,
@@ -30,9 +47,12 @@ from dev.traces import (
     field_f64,
     get_attr,
     has_attr,
+    marks_by_navigation,
+    navigation_marks,
     page_boot_decomposition_outcome,
     parse_json_attr,
     parse_spans,
+    parse_u64,
     read_trace_member,
 )
 
@@ -50,223 +70,8 @@ PHASE_NAMES = (
 PHASE_OUTCOMES = ("success", "failed", "unavailable")
 
 
-# Strict decoding: each reader returns the field as its writer types it, or
-# raises EvidenceError naming the field. An optional field may be absent or
-# null; a required one may be neither.
-
-
-def _object(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        raise EvidenceError("invalid type: expected an object")
-    return value
-
-
-def _present(value: dict[str, Any], key: str) -> Any:
-    found = value.get(key)
-    if found is None:
-        raise EvidenceError(f"missing field `{key}`")
-    return found
-
-
-def _as_string(found: Any, key: str) -> str:
-    if not isinstance(found, str):
-        raise EvidenceError(f"invalid type for `{key}`: expected a string")
-    return found
-
-
-def _string(value: dict[str, Any], key: str) -> str:
-    return _as_string(_present(value, key), key)
-
-
-def _optional_string(value: dict[str, Any], key: str) -> str | None:
-    found = value.get(key)
-    return None if found is None else _as_string(found, key)
-
-
-def _boolean(value: dict[str, Any], key: str) -> bool:
-    found = _present(value, key)
-    if not isinstance(found, bool):
-        raise EvidenceError(f"invalid type for `{key}`: expected a boolean")
-    return found
-
-
-def _as_unsigned(found: Any, key: str, bits: int) -> int:
-    if not (type(found) is int and 0 <= found < 2**bits):
-        raise EvidenceError(f"invalid value for `{key}`: expected a u{bits}")
-    return found
-
-
-def _unsigned(value: dict[str, Any], key: str, bits: int) -> int:
-    return _as_unsigned(_present(value, key), key, bits)
-
-
-def _optional_unsigned(value: dict[str, Any], key: str, bits: int) -> int | None:
-    found = value.get(key)
-    return None if found is None else _as_unsigned(found, key, bits)
-
-
-def _as_number(found: Any, key: str) -> float:
-    if isinstance(found, bool) or not isinstance(found, int | float):
-        raise EvidenceError(f"invalid type for `{key}`: expected a number")
-    return float(found)
-
-
-def _number(value: dict[str, Any], key: str) -> float:
-    return _as_number(_present(value, key), key)
-
-
-def _optional_number(value: dict[str, Any], key: str) -> float | None:
-    found = value.get(key)
-    return None if found is None else _as_number(found, key)
-
-
-def _array(value: dict[str, Any], key: str, default: bool = False) -> list[Any]:
-    """A required array, or with `default` one that may be absent (not null)."""
-    if default and key not in value:
-        return []
-    found = _present(value, key)
-    if not isinstance(found, list):
-        raise EvidenceError(f"invalid type for `{key}`: expected an array")
-    return found
-
-
-def _decode[T](raw: str, decode: Callable[[Any], T]) -> T:
-    """`raw` JSON decoded by `decode`, any failure an EvidenceError."""
-    try:
-        document = json.loads(raw)
-    except ValueError as error:
-        raise EvidenceError(str(error)) from error
-    return decode(document)
-
-
-def _read(path: Path, kind: str) -> str:
-    try:
-        return path.read_text(encoding="utf-8")
-    except (OSError, ValueError) as error:
-        raise EvidenceError(f"reading {kind} {path}: {error}") from error
-
-
-# The Playwright JSON report, the authority for which tests and projects
-# executed (ADR-0165).
-
-
-@dataclass(frozen=True)
-class ReportAttempt:
-    retry: int | None
-    duration: float | None
-
-
-@dataclass(frozen=True)
-class ReportTest:
-    project_id: str | None
-    project_name: str | None
-    results: list[ReportAttempt]
-
-
-@dataclass(frozen=True)
-class ReportSpec:
-    id: str | None
-    title: str | None
-    file: str | None
-    line: int | None
-    tests: list[ReportTest]
-
-
-def _report_specs(document: Any) -> list[ReportSpec]:
-    """Every spec of a report, nested suites included, in reporter order."""
-    specs: list[ReportSpec] = []
-
-    def suite(value: Any) -> None:
-        value = _object(value)
-        children = _array(value, "suites", default=True)
-        for spec in _array(value, "specs"):
-            spec = _object(spec)
-            tests = [
-                ReportTest(
-                    _optional_string(test, "projectId"),
-                    _optional_string(test, "projectName"),
-                    [
-                        ReportAttempt(
-                            _optional_unsigned(attempt, "retry", 32),
-                            _optional_number(attempt, "duration"),
-                        )
-                        for attempt in map(
-                            _object, _array(test, "results", default=True)
-                        )
-                    ],
-                )
-                for test in map(_object, _array(spec, "tests"))
-            ]
-            specs.append(
-                ReportSpec(
-                    _optional_string(spec, "id"),
-                    _optional_string(spec, "title"),
-                    _optional_string(spec, "file"),
-                    _optional_unsigned(spec, "line", 64),
-                    tests,
-                )
-            )
-        for child in children:
-            suite(child)
-
-    for child in _array(_object(document), "suites", default=True):
-        suite(child)
-    return specs
-
-
-def report_specs(raw: str) -> list[ReportSpec]:
-    """A Playwright JSON report's specs, decoded strictly."""
-    return _decode(raw, _report_specs)
-
-
-# The lane catalog and ownership: which lanes must exist, and that their
-# reports together execute exactly the expected tests, each once.
-
-
-@dataclass(frozen=True)
-class ExpectedLane:
-    """A lane's runtime expectations, not its build or scheduling."""
-
-    backend: str
-    browser: str
-    shard_index: int | None
-    shard_count: int | None
-    identity: str
-    enabled: bool
-
-
-def _catalog(document: Any) -> tuple[int, list[ExpectedLane]]:
-    document = _object(document)
-    version = _unsigned(document, "schemaVersion", 8)
-    lanes = [
-        ExpectedLane(
-            _string(lane, "backend"),
-            _string(lane, "browser"),
-            _optional_unsigned(lane, "shardIndex", 8),
-            _optional_unsigned(lane, "shardCount", 8),
-            _string(lane, "identity"),
-            _boolean(lane, "enabled"),
-        )
-        for lane in map(_object, _array(document, "lanes"))
-    ]
-    return version, lanes
-
-
-def read_catalog(path: Path) -> list[ExpectedLane]:
-    """The caller-selected lane catalog."""
-    try:
-        raw = path.read_text(encoding="utf-8")
-    except (OSError, ValueError) as error:
-        raise EvidenceError(f"reading {path}: {error}") from error
-    try:
-        version, lanes = _decode(raw, _catalog)
-    except EvidenceError as error:
-        raise EvidenceError(f"parsing {path}: {error}") from error
-    if version != 1 or not lanes:
-        raise EvidenceError("unsupported or empty ownership catalog")
-    if len({lane.identity for lane in lanes}) != len(lanes):
-        raise EvidenceError("duplicate ownership catalog identity")
-    return lanes
+# Ownership: the pair's lanes, and that their reports together execute exactly
+# the expected tests, each once.
 
 
 # (project id, project name, test id)
@@ -296,43 +101,34 @@ class _LaneManifest:
 def _tests(document: dict[str, Any]) -> list[Identity]:
     return [
         (
-            _string(test, "project_id"),
-            _string(test, "project_name"),
-            _string(test, "test_id"),
+            required(test, "project_id", STRING),
+            required(test, "project_name", STRING),
+            required(test, "test_id", STRING),
         )
-        for test in map(_object, _array(document, "tests"))
+        for test in objects(document, "tests")
     ]
 
 
-def _census(document: Any) -> _Census:
-    document = _object(document)
+def _census(document: dict[str, Any]) -> _Census:
     return _Census(
-        _unsigned(document, "schema_version", 8),
-        _boolean(document, "complete"),
-        _string(document, "topology"),
+        required(document, "schema_version", COUNT),
+        required(document, "complete", BOOLEAN),
+        required(document, "topology", STRING),
         _tests(document),
     )
 
 
-def _lane_manifest(document: Any) -> _LaneManifest:
-    document = _object(document)
+def _lane_manifest(document: dict[str, Any]) -> _LaneManifest:
     return _LaneManifest(
-        _unsigned(document, "schema_version", 8),
-        _boolean(document, "complete"),
-        _string(document, "lane"),
-        _string(document, "backend"),
-        _string(document, "browser"),
-        _optional_unsigned(document, "shard_index", 8),
-        _optional_unsigned(document, "shard_count", 8),
+        required(document, "schema_version", COUNT),
+        required(document, "complete", BOOLEAN),
+        required(document, "lane", STRING),
+        required(document, "backend", STRING),
+        required(document, "browser", STRING),
+        optional(document, "shard_index", COUNT),
+        optional(document, "shard_count", COUNT),
         _tests(document),
     )
-
-
-def _decoded[T](raw: str, decode: Callable[[Any], T], what: str) -> T:
-    try:
-        return _decode(raw, decode)
-    except EvidenceError as error:
-        raise EvidenceError(f"malformed {what}: {error}") from error
 
 
 def _identities(tests: list[Identity], label: str) -> set[Identity]:
@@ -344,8 +140,13 @@ def _identities(tests: list[Identity], label: str) -> set[Identity]:
     return identities
 
 
+def _foreign(identities: set[Identity], browser: str) -> bool:
+    """Whether any of `identities` belongs to a project other than `browser`'s."""
+    return any(project != browser for _, project, _ in identities)
+
+
 def _report_identities(raw: str, lane: str) -> set[Identity]:
-    specs = _decoded(raw, _report_specs, f"report for `{lane}`")
+    specs = report_specs(raw, f"malformed report for `{lane}`")
     if not specs:
         raise EvidenceError(f"report for `{lane}` has no specs")
     identities = []
@@ -364,19 +165,24 @@ def _report_identities(raw: str, lane: str) -> set[Identity]:
     return unique
 
 
-def _names_lane(
-    manifest: _LaneManifest, lane: ExpectedLane, backend: str, browser: str
-) -> bool:
-    """Whether a complete current manifest is the one `lane`'s producer wrote."""
-    return (
+def _selected(
+    lane: ExpectedLane, manifest_raw: str, where: str, mismatched: str
+) -> set[Identity]:
+    """The tests `lane`'s lane manifest selected, once it is the complete,
+    current manifest that lane's producer wrote; `mismatched` refuses any other.
+    """
+    manifest = decode(manifest_raw, _lane_manifest, f"malformed lane manifest{where}")
+    if not (
         manifest.schema_version == 1
         and manifest.complete
         and manifest.lane == lane.identity
-        and manifest.backend == backend
-        and manifest.browser == browser
+        and manifest.backend == lane.backend
+        and manifest.browser == lane.browser
         and manifest.shard_index == lane.shard_index
         and manifest.shard_count == lane.shard_count
-    )
+    ):
+        raise EvidenceError(mismatched)
+    return _identities(manifest.tests, "lane manifest")
 
 
 def validate_population(lane: ExpectedLane, report_raw: str, manifest_raw: str) -> None:
@@ -385,14 +191,13 @@ def validate_population(lane: ExpectedLane, report_raw: str, manifest_raw: str) 
     That pair defines the runtime population (ADR-0165), which must all belong
     to the lane's one project, named for its browser.
     """
-    manifest = _decoded(manifest_raw, _lane_manifest, "lane manifest")
-    if not _names_lane(manifest, lane, lane.backend, lane.browser):
-        raise EvidenceError("mismatched or incomplete lane manifest")
-    selected = _identities(manifest.tests, "lane manifest")
+    selected = _selected(
+        lane, manifest_raw, "", "mismatched or incomplete lane manifest"
+    )
     reported = _report_identities(report_raw, lane.identity)
     if not selected or selected != reported:
         raise EvidenceError("lane manifest/report population mismatch")
-    if any(project != lane.browser for _, project, _ in selected):
+    if _foreign(selected, lane.browser):
         raise EvidenceError(
             "lane project population differs from the lane's browser project"
         )
@@ -408,25 +213,18 @@ def reconcile_ownership(
 
     Evidence is `(lane identity, expected census, report, lane manifest)`.
     """
-    lanes = [
-        lane
-        for lane in catalog
-        if lane.backend == backend and lane.browser == browser and lane.enabled
-    ]
+    lanes = {lane.identity: lane for lane in pair_lanes(catalog, backend, browser)}
     supplied = {identity for identity, *_ in evidence}
     # The catalog's shape is checked by `scripts/e2e-matrix.jq`; here the
     # evidence must name exactly the pair's enabled lanes.
-    if (
-        not lanes
-        or {lane.identity for lane in lanes} != supplied
-        or len(evidence) != len(supplied)
-    ):
+    if not lanes or set(lanes) != supplied or len(evidence) != len(supplied):
         raise EvidenceError("shard lane evidence does not exactly match the catalog")
     expected_all: set[Identity] | None = None
     observed: set[Identity] = set()
     for identity, census_raw, report_raw, manifest_raw in evidence:
-        lane = next(lane for lane in lanes if lane.identity == identity)
-        census = _decoded(census_raw, _census, f"expected census for `{identity}`")
+        census = decode(
+            census_raw, _census, f"malformed expected census for `{identity}`"
+        )
         if (
             census.schema_version != 1
             or not census.complete
@@ -438,19 +236,19 @@ def reconcile_ownership(
         expected = _identities(census.tests, "expected census")
         if not expected:
             raise EvidenceError("empty expected census")
-        if any(project != browser for _, project, _ in expected):
+        if _foreign(expected, browser):
             raise EvidenceError("expected census has unowned project")
         if expected_all is None:
             expected_all = expected
         elif expected_all != expected:
             raise EvidenceError("lifted expected censuses are not identical")
-        manifest = _decoded(
-            manifest_raw, _lane_manifest, f"lane manifest for `{identity}`"
+        selected = _selected(
+            lanes[identity],
+            manifest_raw,
+            f" for `{identity}`",
+            f"mismatched lane manifest for `{identity}`",
         )
-        if not _names_lane(manifest, lane, backend, browser):
-            raise EvidenceError(f"mismatched lane manifest for `{identity}`")
-        selected = _identities(manifest.tests, "lane manifest")
-        if not selected or any(project != browser for _, project, _ in selected):
+        if not selected or _foreign(selected, browser):
             raise EvidenceError(f"lane manifest has unowned project for `{identity}`")
         reported = _report_identities(report_raw, identity)
         if selected != reported:
@@ -506,30 +304,29 @@ _Attempts = dict[_TestIdentity, dict[int, float]]
 _ManifestTests = list[tuple[_TestIdentity, list[tuple[int, float]]]]
 
 
-def _duration_manifest(document: Any) -> tuple[int, bool, _ManifestTests]:
-    document = _object(document)
+def _duration_manifest(document: dict[str, Any]) -> tuple[int, bool, _ManifestTests]:
     return (
-        _unsigned(document, "schema_version", 32),
-        _boolean(document, "complete"),
+        required(document, "schema_version", COUNT),
+        required(document, "complete", BOOLEAN),
         [
             (
                 _TestIdentity(
-                    _string(test, "test_id"),
-                    _string(test, "project_id"),
-                    _string(test, "project_name"),
-                    _string(test, "title"),
-                    _string(test, "file"),
-                    _unsigned(test, "line", 64),
+                    required(test, "test_id", STRING),
+                    required(test, "project_id", STRING),
+                    required(test, "project_name", STRING),
+                    required(test, "title", STRING),
+                    required(test, "file", STRING),
+                    required(test, "line", COUNT),
                 ),
                 [
                     (
-                        _unsigned(attempt, "retry", 32),
-                        _number(attempt, "effective_timeout_ms"),
+                        required(attempt, "retry", COUNT),
+                        required(attempt, "effective_timeout_ms", NUMBER),
                     )
-                    for attempt in map(_object, _array(test, "attempts"))
+                    for attempt in objects(test, "attempts")
                 ],
             )
-            for test in map(_object, _array(document, "tests"))
+            for test in objects(document, "tests")
         ],
     )
 
@@ -555,7 +352,7 @@ def _manifest_attempts(tests: _ManifestTests) -> _Attempts:
             raise EvidenceError(f"manifest test has no attempts: {identity.describe()}")
         timeouts: dict[int, float] = {}
         for retry, timeout in attempts:
-            if not math.isfinite(timeout) or timeout <= 0:
+            if timeout <= 0:
                 raise EvidenceError(
                     f"manifest attempt retry {retry} has a non-positive or "
                     f"non-finite effective timeout: {identity.describe()}"
@@ -608,7 +405,7 @@ def _report_attempts(specs: list[ReportSpec]) -> _Attempts:
                     raise EvidenceError(
                         f"report retry {retry} has no duration: {identity.describe()}"
                     )
-                if not math.isfinite(duration) or duration < 0:
+                if duration < 0:
                     raise EvidenceError(
                         f"report retry {retry} has a non-finite or negative "
                         f"duration: {identity.describe()}"
@@ -677,14 +474,10 @@ def _pressure(expected: _Attempts, observed: _Attempts) -> str:
 
 def validate_duration_json(report_json: str, manifest_json: str) -> str:
     """The duration budget over in-memory report and manifest JSON."""
-    try:
-        specs = report_specs(report_json)
-    except EvidenceError as error:
-        raise EvidenceError(f"parsing Playwright report: {error}") from error
-    try:
-        version, complete, tests = _decode(manifest_json, _duration_manifest)
-    except EvidenceError as error:
-        raise EvidenceError(f"parsing duration-budget manifest: {error}") from error
+    specs = report_specs(report_json, "parsing Playwright report")
+    version, complete, tests = decode(
+        manifest_json, _duration_manifest, "parsing duration-budget manifest"
+    )
     if version != 1:
         raise EvidenceError(
             f"unsupported manifest schema_version {version}; expected 1"
@@ -696,7 +489,7 @@ def validate_duration_json(report_json: str, manifest_json: str) -> str:
 
 def validate_duration_files(report: Path, manifest: Path) -> str:
     """The duration budget over a lane's lifted report and duration manifest."""
-    return validate_duration_json(_read(report, "report"), _read(manifest, "manifest"))
+    return validate_duration_json(read(report, "report"), read(manifest, "manifest"))
 
 
 # Boot decomposition coverage: every project the report executed has mounted
@@ -716,24 +509,23 @@ def _report_projects(specs: list[ReportSpec]) -> set[str]:
 def _dropped(span: Span, project: str) -> None:
     if not has_attr(span.raw, "e2e.navigation_top_dropped"):
         raise EvidenceError(f"project {project}: missing dropped-navigation count")
-    value = get_attr(span.raw, "e2e.navigation_top_dropped")
-    if not re.fullmatch(r"\+?[0-9]+", value) or int(value) >= 2**64:
+    text = get_attr(span.raw, "e2e.navigation_top_dropped")
+    count = parse_u64(text)
+    if count is None:
         raise EvidenceError(
-            f"project {project}: malformed dropped-navigation count {json.dumps(value)}"
+            f"project {project}: malformed dropped-navigation count {json.dumps(text)}"
         )
-    if int(value):
-        raise EvidenceError(
-            f"project {project}: {int(value)} dropped navigation record(s)"
-        )
+    if count:
+        raise EvidenceError(f"project {project}: {count} dropped navigation record(s)")
 
 
-def _marks_by_navigation(marks: Any, project: str) -> dict[int, list[Any]]:
-    if marks is None:
-        return {}
-    if not isinstance(marks, list):
+def _boot_marks(marks: Any, project: str) -> dict[int, list[Any]]:
+    """The boot marks by navigation id, once every entry is well formed and
+    names its navigation once."""
+    if marks is not None and not isinstance(marks, list):
         raise EvidenceError(f"project {project}: boot-mark evidence is not an array")
-    by_navigation: dict[int, list[Any]] = {}
-    for entry in marks:
+    seen: set[int] = set()
+    for entry in marks or []:
         if not isinstance(entry, dict):
             raise EvidenceError(f"project {project}: boot-mark entry is not an object")
         identity = as_i64(entry.get("id"))
@@ -757,25 +549,23 @@ def _marks_by_navigation(marks: Any, project: str) -> dict[int, list[Any]]:
                 raise EvidenceError(
                     f"project {project}: boot-mark startTime is not a finite number"
                 )
-        if identity in by_navigation:
+        if identity in seen:
             raise EvidenceError(
                 f"project {project}: duplicate boot-mark navigation id {identity}"
             )
-        by_navigation[identity] = records
-    return by_navigation
+        seen.add(identity)
+    return marks_by_navigation(marks)
 
 
 def _navigation(
     project: str, navigation: Any, marks: dict[int, list[Any]], page: bool
 ) -> None:
-    if navigation.get("wasmTimingSchema") != "direct-init-v1":
+    if navigation.get("wasmTimingSchema") != CURRENT_TIMING_SCHEMA:
         raise EvidenceError(f"project {project}: legacy or missing timing schema")
     # The shared decomposition owns both the boot-interval floor and closure,
     # so this gate cannot count unrelated properties.
-    identity = as_i64(navigation.get("id"))
-    own = [] if identity is None else marks.get(identity, [])
     classify = page_boot_decomposition_outcome if page else boot_decomposition_outcome
-    outcome = classify(navigation, own)
+    outcome = classify(navigation, navigation_marks(navigation, marks))
     if outcome is BootOutcome.INCOMPLETE:
         raise EvidenceError(f"project {project}: incomplete direct-init decomposition")
     if outcome is BootOutcome.CLOSURE_VIOLATION:
@@ -796,7 +586,7 @@ def _trace_projects(spans: list[Span]) -> set[str]:
     projects: set[str] = set()
     mounted: dict[str, int] = {}
     for span in spans:
-        if span.name not in ("e2e.test", "e2e.page"):
+        if span.name not in (TEST_SPAN, PAGE_SPAN):
             continue
         project = span.project
         if not project:
@@ -812,7 +602,7 @@ def _trace_projects(spans: list[Span]) -> set[str]:
             raise EvidenceError(
                 f"project {project}: navigation evidence is not an array"
             )
-        marks = _marks_by_navigation(
+        marks = _boot_marks(
             _attr_json(span, "e2e.boot_marks_json", project, "boot-mark evidence"),
             project,
         )
@@ -834,7 +624,7 @@ def _trace_projects(spans: list[Span]) -> set[str]:
                     "a finite number"
                 )
             mounted[project] = mounted.get(project, 0) + 1
-            _navigation(project, navigation, marks, span.name == "e2e.page")
+            _navigation(project, navigation, marks, span.name == PAGE_SPAN)
     for project in sorted(projects):
         if not mounted.get(project):
             raise EvidenceError(f"project {project}: no mounted navigation evidence")
@@ -847,11 +637,7 @@ def _trace_projects(spans: list[Span]) -> set[str]:
 
 def validate_boot_json(report_json: str, trace_jsonl: str) -> str:
     """Boot decomposition coverage over an in-memory report and trace."""
-    try:
-        specs = report_specs(report_json)
-    except EvidenceError as error:
-        raise EvidenceError(f"parsing Playwright report: {error}") from error
-    expected = _report_projects(specs)
+    expected = _report_projects(report_specs(report_json, "parsing Playwright report"))
     try:
         spans = parse_spans(trace_jsonl, Filters(), "trace capture")
     except EvidenceError as error:
@@ -868,7 +654,7 @@ def validate_boot_json(report_json: str, trace_jsonl: str) -> str:
 
 def validate_boot_files(report: Path, capture: Path) -> str:
     """Boot decomposition coverage over a lane's lifted report and capture."""
-    report_json = _read(report, "Playwright report")
+    report_json = read(report, "Playwright report")
     if not report_json.strip():
         raise EvidenceError(f"Playwright report {report} is empty")
     try:
@@ -882,34 +668,30 @@ def validate_boot_files(report: Path, capture: Path) -> str:
 # must have run.
 
 
-def _phase_sidecar(document: Any) -> tuple[int, str, str, str, list[Any]]:
-    document = _object(document)
+def _phase_sidecar(document: dict[str, Any]) -> tuple[int, str, str, str, list[Any]]:
     phases = []
-    for phase in map(_object, _array(document, "phases")):
-        name, outcome = _string(phase, "name"), _string(phase, "outcome")
+    for phase in objects(document, "phases"):
+        name = required(phase, "name", STRING)
+        outcome = required(phase, "outcome", STRING)
         if name not in PHASE_NAMES:
             raise EvidenceError(f"unknown phase `{name}`")
         if outcome not in PHASE_OUTCOMES:
             raise EvidenceError(f"unknown phase outcome `{outcome}`")
-        duration = _optional_unsigned(phase, "duration_ms", 128)
-        phases.append((name, duration, outcome, _string(phase, "detail")))
+        duration = optional(phase, "duration_ms", COUNT)
+        phases.append((name, duration, outcome, required(phase, "detail", STRING)))
     return (
-        _unsigned(document, "schema_version", 8),
-        _string(document, "backend"),
-        _string(document, "browser"),
-        _string(document, "lane"),
+        required(document, "schema_version", COUNT),
+        required(document, "backend", STRING),
+        required(document, "browser", STRING),
+        required(document, "lane", STRING),
         phases,
     )
 
 
 def _phase_sidecar_ok(path: Path, backend: str, browser: str, lane: str) -> None:
-    raw = _read(path, "phase sidecar")
-    try:
-        version, sidecar_backend, sidecar_browser, sidecar_lane, phases = _decode(
-            raw, _phase_sidecar
-        )
-    except EvidenceError as error:
-        raise EvidenceError(f"parsing phase sidecar {path}: {error}") from error
+    version, sidecar_backend, sidecar_browser, sidecar_lane, phases = decode(
+        read(path, "phase sidecar"), _phase_sidecar, f"parsing phase sidecar {path}"
+    )
     if (version, sidecar_backend, sidecar_browser, sidecar_lane) != (
         1,
         backend,
@@ -917,16 +699,16 @@ def _phase_sidecar_ok(path: Path, backend: str, browser: str, lane: str) -> None
         lane,
     ):
         raise EvidenceError(f"{lane} phase sidecar: identity mismatch")
-    for required in REQUIRED_PHASES:
-        matches = [phase for phase in phases if phase[0] == required]
+    for wanted in REQUIRED_PHASES:
+        matches = [phase for phase in phases if phase[0] == wanted]
         if len(matches) != 1:
             raise EvidenceError(
-                f"{lane} phase sidecar: requires exactly one {required} phase"
+                f"{lane} phase sidecar: requires exactly one {wanted} phase"
             )
         _, duration, outcome, detail = matches[0]
         if outcome != "success" or duration is None or not detail:
             raise EvidenceError(
-                f"{lane} phase sidecar: {required} phase is incomplete or failed"
+                f"{lane} phase sidecar: {wanted} phase is incomplete or failed"
             )
     if any(phase[2] == "failed" for phase in phases):
         raise EvidenceError(f"{lane} phase sidecar: records a failed phase")
@@ -975,8 +757,8 @@ def verify_lane(identity: str, catalog: Path, root: Path) -> str:
     evidence = lane_evidence(identity, root)
     validate_population(
         lane,
-        _read(evidence.report, "report"),
-        _read(evidence.lane_manifest, "manifest"),
+        read(evidence.report, "report"),
+        read(evidence.lane_manifest, "manifest"),
     )
     validate_duration_files(evidence.report, evidence.duration_manifest)
     validate_boot_files(evidence.report, evidence.capture)
@@ -989,9 +771,9 @@ def _ownership(
     ownership = [
         (
             item.identity,
-            _read(item.census, "expected census"),
-            _read(item.report, "Playwright report"),
-            _read(item.lane_manifest, "lane manifest"),
+            read(item.census, "expected census"),
+            read(item.report, "Playwright report"),
+            read(item.lane_manifest, "lane manifest"),
         )
         for item in evidence
     ]
@@ -1021,12 +803,10 @@ def reconcile(
     if len(supplied) != len(evidence):
         errors.append("duplicate lane evidence")
     _collect(errors, "", _ownership, backend, browser, lanes, evidence)
-    expected = {
-        lane.identity
-        for lane in lanes
-        if lane.backend == backend and lane.browser == browser and lane.enabled
-    }
-    if supplied != expected:
+    # Not redundant with the ownership census: that one is skipped when a lane's
+    # census, report or manifest cannot be read, and this mismatch must still
+    # be reported.
+    if supplied != {lane.identity for lane in pair_lanes(lanes, backend, browser)}:
         errors.append("lane evidence does not exactly match the catalog")
     by_identity = {lane.identity: lane for lane in lanes}
     for item in evidence:
@@ -1068,7 +848,6 @@ def reconciled_lanes(
     lanes = read_catalog(catalog)
     evidence = [
         lane_evidence(lane.identity, root / f"e2e-{lane.identity}")
-        for lane in lanes
-        if lane.enabled and lane.backend == backend and lane.browser == browser
+        for lane in pair_lanes(lanes, backend, browser)
     ]
     return reconcile(backend, browser, lanes, evidence), evidence

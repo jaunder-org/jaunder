@@ -10,7 +10,6 @@ A parsed span keeps its start and end Unix nanoseconds and its span and parent
 ids, which is what a timeline view (such as a Perfetto track) needs.
 """
 
-import json
 import math
 import re
 import tarfile
@@ -20,6 +19,8 @@ from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import IO, Any, cast
+
+from dev.evidence import EvidenceError, finite, loads
 
 # The capture layout `host::capture` writes. Each spelling is paired with its
 # Rust counterpart in the cross-language literal table (ADR-0109), so the two
@@ -31,16 +32,13 @@ TRACE_FILE = "otel-traces.jsonl"
 CAPTURE_ROOT = "capture"
 TRACE_MEMBER = f"{CAPTURE_ROOT}/{TRACE_FILE}"
 
+# The e2e harness's spans: one per test, and one per test-owned page.
+TEST_SPAN = "e2e.test"
+PAGE_SPAN = "e2e.page"
+
 # A timestamp written as text is read within the 128-bit range; one written as
 # a JSON number must fit int64.
 _I128 = 2**127
-
-
-class EvidenceError(Exception):
-    """Evidence that cannot support a verdict: unreadable, malformed or refused.
-
-    The message names what was wrong; callers add where it was found.
-    """
 
 
 class MalformedJsonAttr(EvidenceError):
@@ -191,8 +189,16 @@ def as_f64(value: Any) -> float | None:
 
 def field_f64(value: Any, key: str) -> float | None:
     """A finite number field of a JSON object, else None."""
-    number = as_f64(member(value, key))
-    return number if number is not None and math.isfinite(number) else None
+    return finite(member(value, key))
+
+
+def parse_u64(text: str) -> int | None:
+    """`text` as an unsigned 64-bit decimal, as Rust's `u64::from_str` reads
+    it (an optional `+`, then digits), else None."""
+    if not re.fullmatch(r"\+?[0-9]+", text):
+        return None
+    value = int(text)
+    return value if value < 2**64 else None
 
 
 def get_attr(span: Any, key: str) -> str:
@@ -231,7 +237,7 @@ def parse_json_attr(span: Any, key: str, span_source: str) -> Any | None:
     if not has_attr(span, key):
         return None
     try:
-        return json.loads(get_attr(span, key))
+        return loads(get_attr(span, key))
     except ValueError as error:
         raise MalformedJsonAttr(key, span_source, error) from error
 
@@ -384,7 +390,7 @@ def parse_spans(content: str, filters: Filters, source: str) -> list[Span]:
             continue
         where = f"JSON line {number} in {source}"
         try:
-            record = json.loads(line)
+            record = loads(line)
         except ValueError as error:
             raise EvidenceError(f"failed to parse {where}: {error}") from error
         for resource in _array(record, "resourceSpans", where):
@@ -457,6 +463,25 @@ MOUNT_DONE_SUFFIX = ".boot.mount_done"
 BOOT_INTERVAL_KEY = "boot."
 # The timing schema of a navigation that can be decomposed.
 CURRENT_TIMING_SCHEMA = "direct-init-v1"
+
+
+def marks_by_navigation(marks: Any) -> dict[int, list[Any]]:
+    """Boot marks keyed by navigation id, from their own `e2e.boot_marks_json`
+    attribute: the boot total must come from somewhere other than the segments
+    for the closure check to mean anything. An entry without an integer id or a
+    marks array is left out; a later entry for an id replaces an earlier one."""
+    by_id: dict[int, list[Any]] = {}
+    for entry in marks if isinstance(marks, list) else []:
+        identity, found = as_i64(member(entry, "id")), member(entry, "marks")
+        if identity is not None and isinstance(found, list):
+            by_id[identity] = found
+    return by_id
+
+
+def navigation_marks(navigation: Any, by_id: dict[int, list[Any]]) -> list[Any]:
+    """A navigation's own boot marks, found by its id; none without one."""
+    identity = as_i64(member(navigation, "id"))
+    return [] if identity is None else by_id.get(identity, [])
 
 
 class BootOutcome(Enum):

@@ -9,7 +9,10 @@ from typing import Any
 import pytest
 from conftest import FIXTURES, REPOSITORY, require, write_capture
 
+from dev.evidence import EvidenceError
 from dev.server_fn_coverage import (
+    CRATE_PREFIX,
+    MAX_DEPTH,
     REGENERATE_CMD,
     SNAPSHOT_PATH,
     Coverage,
@@ -23,11 +26,11 @@ from dev.server_fn_coverage import (
     regenerate,
     render,
     span_module,
+    uri_endpoint,
     verify,
 )
 from dev.traces import (
     TRACE_MEMBER,
-    EvidenceError,
     Filters,
     Span,
     instance_diag_member,
@@ -215,6 +218,7 @@ def test_the_inventory_is_read_as_listed() -> None:
     assert parse_inventory(listing) == [
         ServerFn("posts::create", "posts::api", "create", "posts/create")
     ]
+    assert parse_inventory(b"[]") == []
     assert ServerFn(
         "posts::create", "posts::api", "create", None
     ).candidate_span_names() == (
@@ -222,6 +226,15 @@ def test_the_inventory_is_read_as_listed() -> None:
         "__server_create",
         "create",
     )
+
+
+@pytest.mark.parametrize(
+    "listing",
+    [b"", b"{", b'[{"qualified": "posts::create"}]', b"[1]", b'"text"', b"{}x"],
+)
+def test_a_listing_that_is_not_an_inventory_is_refused(listing: bytes) -> None:
+    with pytest.raises(EvidenceError, match="inventory listing is malformed"):
+        parse_inventory(listing)
 
 
 # Span loss (#2029).
@@ -325,6 +338,10 @@ def test_a_stale_snapshot_names_itself_and_the_remedy(tmp_path: Path) -> None:
     snapshot.write_bytes(b"\xff")
     with pytest.raises(EvidenceError, match="out of date"):
         verify(coverage, snapshot)
+    # A checkout that rewrote the line endings is drift too.
+    snapshot.write_bytes(render(coverage).replace("\n", "\r\n").encode())
+    with pytest.raises(EvidenceError, match="out of date"):
+        verify(coverage, snapshot)
 
 
 def test_regeneration_writes_only_the_snapshot(tmp_path: Path) -> None:
@@ -345,6 +362,13 @@ def test_regeneration_writes_only_the_snapshot(tmp_path: Path) -> None:
         "server-fns-evidence.json",
         "server-fns.json",
     ]
+
+
+def test_a_snapshot_that_cannot_be_written_is_refused(tmp_path: Path) -> None:
+    (tmp_path / "docs").write_text("not a directory")
+    snapshot = tmp_path / "docs" / "coverage" / "server-fns.json"
+    with pytest.raises(EvidenceError, match=f"writing {snapshot}: "):
+        regenerate(Coverage(), snapshot)
 
 
 def test_unusable_captures_are_named_failures(tmp_path: Path) -> None:
@@ -428,6 +452,33 @@ def test_the_snapshot_holds_no_titles_and_renders_stably() -> None:
     assert render(Coverage()) == '{\n  "covered": [],\n  "orphans": {}\n}\n'
 
 
+def test_the_snapshot_bytes_sort_every_list_and_keep_unicode() -> None:
+    coverage = Coverage(
+        {"posts::update": {"t"}, "auth::login": {"u"}},
+        {
+            "themes::é": {"unknown-parent:b2", "no-parent"},
+            "media::upload": {"depth-exceeded"},
+        },
+    )
+    assert render(coverage).encode() == (
+        b"{\n"
+        b'  "covered": [\n'
+        b'    "auth::login",\n'
+        b'    "posts::update"\n'
+        b"  ],\n"
+        b'  "orphans": {\n'
+        b'    "media::upload": [\n'
+        b'      "depth-exceeded"\n'
+        b"    ],\n"
+        b'    "themes::\xc3\xa9": [\n'
+        b'      "no-parent",\n'
+        b'      "unknown-parent:b2"\n'
+        b"    ]\n"
+        b"  }\n"
+        b"}\n"
+    )
+
+
 def committed_snapshot() -> Path:
     path = REPOSITORY / SNAPSHOT_PATH
     require(path.is_file(), f"the repository's {SNAPSHOT_PATH}")
@@ -505,3 +556,40 @@ def test_the_seed_covers_every_fn_the_committed_snapshot_does(
     committed: dict[str, Any] = json.loads(committed_snapshot().read_text())
     covered = extract(seed, seed_inventory).covered
     assert [name for name in committed["covered"] if name not in covered] == []
+
+
+# `repository-policy`'s endpoint cross-check (ADR-0120) reads the seed's
+# observed hits from its own fixture, so it needs no trace reader.
+SEED_ENDPOINTS = "tools/repository-policy/src/testdata/server-fn-seed-endpoints.json"
+
+
+def seed_endpoints(spans: list[Span]) -> bytes:
+    """Each hit's `(module, span name, URI path)`, as that fixture's bytes:
+    every span carrying a `web::` module, which is all the cross-check can
+    locate a fn by, with the request path its nearest `uri`-bearing span,
+    itself included, served."""
+    by_id = {span.span_id: span for span in spans if span.span_id}
+    observed = set()
+    for span in spans:
+        module = span_module(span)
+        current: Span | None = span
+        for _ in range(MAX_DEPTH):
+            if current is None or not module.startswith(CRATE_PREFIX):
+                break
+            if current.uri:
+                observed.add((module, span.name, f"/api/{uri_endpoint(current.uri)}"))
+                break
+            current = by_id.get(current.parent_span_id)
+    hits = [
+        {"module": module, "span": name, "uri_path": path}
+        for module, name, path in sorted(observed)
+    ]
+    return (json.dumps(hits, indent=2) + "\n").encode()
+
+
+def test_the_seed_endpoint_fixture_is_derived_from_the_seed(seed: list[Span]) -> None:
+    """To refresh it after re-recording the seed, write `seed_endpoints(seed)`
+    to that fixture."""
+    path = REPOSITORY / SEED_ENDPOINTS
+    require(path.is_file(), f"the repository's {SEED_ENDPOINTS}")
+    assert path.read_bytes() == seed_endpoints(seed)
