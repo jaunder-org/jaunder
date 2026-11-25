@@ -2843,7 +2843,7 @@ de-duplicates by panic location with the scoped record winning. Each E2E server
 instance writes those three files under its own `instance-<i>/` subdirectory
 (`host::capture::instance_directory`), while the shared collector writes
 `otel-traces.jsonl` and `otel-logs.jsonl` at the capture root
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
+([per-worker E2E server instances](adr/0266-per-worker-e2e-server-instances.md)).
 Per lane the E2E harness tars the whole directory out as `capture-<lane>.tar.gz`
 into the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
@@ -4193,7 +4193,7 @@ workers=2 and workers=4 remain package-only measurement controls
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
 [weighted shards](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md); their
 serial lanes for visual, global-state and Theme projects are retired by the
-[per-worker E2E server instances decision](adr/drafts/per-worker-e2e-server-instances.md)).
+[per-worker E2E server instances decision](adr/0266-per-worker-e2e-server-instances.md)).
 Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
 CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
@@ -4259,7 +4259,7 @@ filename carries browser identity but not backend, so SQLite and PostgreSQL
 compare the same expected image. WebKit runs no visual test and has no baseline.
 
 Every Playwright worker owns its own Jaunder server instance and database
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
+([per-worker E2E server instances](adr/0266-per-worker-e2e-server-instances.md)).
 The harness starts one instance per worker, each with its own port, database,
 storage root and capture subdirectory, and describes them in
 `JAUNDER_E2E_INSTANCES`: a JSON array of
@@ -4504,7 +4504,7 @@ Both e2e surfaces invoke `test-support verify-no-panics`, whose Rust
 implementation owns the default-empty allowlist, raw-byte union scan,
 location-based de-duplication, and scoped-record preference. The gate covers
 every server instance
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)):
+([per-worker E2E server instances](adr/0266-per-worker-e2e-server-instances.md)):
 each VM testScript passes each `jaunder-<i>` unit's materialized journal
 (`jaunder-journal-instance-<i>-<lane>.log`) with that instance's capture
 subdirectory, and the host loop passes each instance's drained stderr capture.

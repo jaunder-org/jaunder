@@ -890,7 +890,7 @@ Audience, Media Upload Capability and Site Theme are global to the instance. So:
   `mailbox`, `verifiedUser`) or `seedUserViaTool`.
 
 The decision is recorded in
-[per-worker E2E server instances](docs/adr/drafts/per-worker-e2e-server-instances.md).
+[per-worker E2E server instances](docs/adr/0266-per-worker-e2e-server-instances.md).
 
 ### One boot per page
 
