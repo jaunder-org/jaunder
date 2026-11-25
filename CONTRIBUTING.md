@@ -837,13 +837,13 @@ together with the rendering or test change.
 Visual tests follow the [E2E state rule](#e2e-tests-set-their-own-global-state)
 and need no ordering. Each seeds its own fixed-name user, because usernames
 render in the pixels, and calls `setSeededSiteAppearance`
-(`end2end/tests/visual.ts`) to set the seeded title, tagline, Registration
-Policy, Site Default Audience, Media Upload Capability and Site Theme it
-renders. A visual test therefore passes wherever it runs on an instance other
-tests have used. Visual tests take the run's retry policy like any other test. A
-retry that lands on the instance where its earlier attempt seeded the fixed-name
-user signs in to it with `signInAsVisualUser` instead of seeding it, or its
-Posts, again; `--repeat-each` on a visual test is unsupported.
+(`end2end/tests/visual.ts`) to set the seeded title, tagline, base URL,
+Registration Policy, Site Default Audience, Media Upload Capability and Site
+Theme it renders. A visual test therefore passes wherever it runs on an instance
+other tests have used. Visual tests take the run's retry policy like any other
+test. A retry that lands on the instance where its earlier attempt seeded the
+fixed-name user signs in to it with `signInAsVisualUser` instead of seeding it,
+or its Posts, again; `--repeat-each` on a visual test is unsupported.
 
 `dev e2e-local <spec-or-file:line>` remains the targeted loop. It selects the
 browser's one project with that positional filter; an unrelated spec does not

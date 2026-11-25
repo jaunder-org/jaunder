@@ -93,9 +93,9 @@ below makes that safe.
   precondition, or the incidental assertion goes.
 - `@visual` tests follow the same rule. Each seeds its own fixed-name user,
   because usernames render in the pixels. Each sets the seeded appearance its
-  screenshot renders (title, tagline, Registration Policy, Site Default
-  Audience, Media Upload Capability and no Site Theme selection) before it
-  renders. Visual tests therefore need no fresh database and no ordering.
+  screenshot renders (title, tagline, base URL, Registration Policy, Site
+  Default Audience, Media Upload Capability and no Site Theme selection) before
+  it renders. Visual tests therefore need no fresh database and no ordering.
 - A retried visual test may land on the instance where its earlier attempt
   already seeded the fixed-name user. It then signs in to that user instead of
   seeding it, and seeds none of the user's other state again, so the screenshot
