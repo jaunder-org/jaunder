@@ -67,9 +67,10 @@ let
       # shared VM/host JSONL trace pipeline.
       pkgs.opentelemetry-collector-contrib
       pkgs.prettier
-      # host-proof's executable NixOS-test-script regressions run the generated
-      # Python helper under the same pinned interpreter as CI and developers;
-      # this environment of it also carries `dev`'s libraries and test tools.
+      # Python with `dev`'s libraries and test tools. Its tests run the
+      # generated NixOS test script's helpers (tools/dev/tests/
+      # test_e2e_vm_script.py) under the same pinned interpreter as CI and
+      # developers.
       devPythonCheck
       pkgs.ruff
       pkgs.sqlite

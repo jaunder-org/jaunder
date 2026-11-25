@@ -97,10 +97,9 @@ replacing any inherited value. Host library directories built against a
 different glibc otherwise break the pinned Playwright browsers; re-export after
 entry if you deliberately need extra entries.
 
-The focused regression
-`cargo test --locked --manifest-path tools/Cargo.toml -p host-proof --test dev_shell_tmpdir`
-executes the evaluated hooks for all four shells in child Bash processes; it
-does not realize their complete tool environments.
+The focused regression `pytest tools/dev/tests/test_dev_shells.py` executes the
+evaluated hooks for all four shells in child Bash processes; it does not realize
+their complete tool environments.
 
 The default `.#default` and `.#ci` shells target `x86_64-linux`,
 `aarch64-linux`, and `aarch64-darwin` (Apple Silicon macOS). The pinned nixpkgs

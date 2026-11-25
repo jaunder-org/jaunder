@@ -45,7 +45,3 @@ tabled = "0.22.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 url = "2.5.9"
-
-[dev-dependencies]
-# Maintained YAML-org successor for CI workflow contract tests (#1939).
-serde_yaml = { package = "yaml_serde", version = "0.10.7" }

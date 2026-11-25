@@ -13,13 +13,9 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
-import yaml
-from conftest import REPOSITORY, require
-
-WORKFLOWS = REPOSITORY / ".github" / "workflows"
+from conftest import load_workflow
 
 # Answers `gh release view` from the case's release state and logs every other
 # call, one line of arguments each, for the test to compare exactly.
@@ -56,15 +52,9 @@ if arguments[1] == "download":
 """
 
 
-def load(name: str) -> Any:
-    path = WORKFLOWS / name
-    require(path.is_file(), f"the repository's .github/workflows/{name}")
-    return yaml.safe_load(path.read_text())
-
-
 def step(name: str) -> str:
     """The `run:` block of the release job's step called `name`."""
-    steps = load("theme-repository.yml")["jobs"]["release"]["steps"]
+    steps = load_workflow("theme-repository.yml")["jobs"]["release"]["steps"]
     (block,) = [each["run"] for each in steps if each.get("name") == name]
     assert isinstance(block, str)
     return block
@@ -82,7 +72,7 @@ def run(block: str, **env: str) -> subprocess.CompletedProcess[str]:
 
 def test_the_fixture_workflow_triggers_on_the_semver_fixture_namespace() -> None:
     # YAML 1.1 reads the bare `on` key as true.
-    triggers = load("theme-repository-fixture.yml")[True]
+    triggers = load_workflow("theme-repository-fixture.yml")[True]
     assert "v0.0.0-theme-repository-fixture.[1-9]*" in triggers["push"]["tags"]
 
 

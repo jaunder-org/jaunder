@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 PACKAGE = Path(__file__).resolve().parents[1]
 # The repository this package lives in; absent when the tests run from the
@@ -37,6 +38,14 @@ def require(present: bool, prerequisite: str) -> None:
     if os.environ.get("JAUNDER_DEV_PYTHON_CHECK") == "1":
         pytest.skip(f"needs {prerequisite}")
     pytest.fail(f"missing prerequisite: {prerequisite}")
+
+
+def load_workflow(name: str) -> Any:
+    """A repository GitHub workflow, parsed (see `require`). PyYAML is YAML
+    1.1, so the bare `on` key loads as `True`."""
+    path = REPOSITORY / ".github" / "workflows" / name
+    require(path.is_file(), f"the repository's .github/workflows/{name}")
+    return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
 # How the devShim (nix/packages.nix) starts `dev`: the checkout's tools/dev
