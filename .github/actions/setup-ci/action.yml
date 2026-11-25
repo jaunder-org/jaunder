@@ -28,6 +28,10 @@ runs:
         extra_nix_config: |
           experimental-features = nix-command flakes
         github_access_token: ${{ inputs.github-token }}
+    # Measurement (#2103): the substitution setting Nix actually applies.
+    - name: Show substitution setting
+      shell: bash
+      run: nix config show always-allow-substitutes
     - uses: cachix/cachix-action@v17
       with:
         name: jaunder-org
