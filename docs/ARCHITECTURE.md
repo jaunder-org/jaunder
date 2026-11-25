@@ -5392,10 +5392,13 @@ decision).
 Maintainability chooses the language of infrastructure
 ([infrastructure language by maintainability](adr/0261-tool-language-by-maintainability.md)).
 A tool is Python unless it links product crates it genuinely needs or needs
-Rust-specific parsing. Product facts come from product commands or files rather
-than linked product code. A reader in another language parses data its Rust
-writer has already validated, with no generated schema and no second validation;
-format drift fails loudly at the reader
+Rust-specific parsing, such as `syn`, that no maintained standalone tool already
+provides as consumable output. A thin command over logic a Rust owner keeps for
+itself joins that owner, and repository contract tests are Python. Product facts
+come from product commands or files rather than linked product code. A reader in
+another language parses data its Rust writer has already validated, with no
+generated schema and no second validation; format drift fails loudly at the
+reader
 ([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
 Bash is limited to `scripts/` host scripts that run commands and check their
 results, with traps only for cleanup or failed-step reporting and concurrency
@@ -5406,8 +5409,19 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 `dev perf*`, and `pr-observer` has already become the native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
-[upgrade test](adr/0265-upgrade-test.md). The placements below describe the
-current tree:
+[upgrade test](adr/0265-upgrade-test.md).
+
+`tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
+
+- `e2e-evidence`, `trace-analysis` (on one shared trace core), `wasm-audit`
+  (with `twiggy` for the breakdown) and the cache-safety probe move into `dev`
+  as Python. The probe then runs in `ci-validate-host`.
+- `admit-inputs` joins `repository-policy`.
+- `csr-prerequisite` is retired in favour of the server build's own bundle
+  validation.
+- The repository contract tests become pytest.
+
+Until the remaining moves land, the placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
@@ -5424,15 +5438,16 @@ current tree:
   shared argument parser points fd 1 at stderr and reserves the real stdout for
   that report, so child output goes to stderr; the exit status is the verdict.
   `dev` renders the human view from it (`tools/dev/dev/report.py`).
-- **`tools/host-proof`** — focused host proof (ADR-0246): the direct
-  `trace-analysis` executable behind the matching `dev` command; trace analysis
-  carries its rendered tables in the report's `report` field. Each prints
-  exactly one JSON report on stdout (steps, outcomes, durations, details,
-  verdict) and sends child output to stderr; its exit status is the verdict.
-  `dev` renders the human step view; there is no sidecar, `--json` flag or
-  completion sentinel. Only its `csr-prerequisite` executable joins the calling
-  `dev` run's trace, through `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`,
-  writing its validation phases as span records with the Rust OpenTelemetry SDK
+- **`tools/host-proof`** (retiring; see the pending moves above) — focused host
+  proof (ADR-0246): the direct `trace-analysis` executable behind the matching
+  `dev` command; trace analysis carries its rendered tables in the report's
+  `report` field. Each prints exactly one JSON report on stdout (steps,
+  outcomes, durations, details, verdict) and sends child output to stderr; its
+  exit status is the verdict. `dev` renders the human step view; there is no
+  sidecar, `--json` flag or completion sentinel. Only its `csr-prerequisite`
+  executable joins the calling `dev` run's trace, through
+  `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its validation
+  phases as span records with the Rust OpenTelemetry SDK
   ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Its
   `admit-inputs` and `csr-prerequisite` executables are steps of
   `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR

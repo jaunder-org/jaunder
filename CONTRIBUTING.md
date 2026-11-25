@@ -2536,7 +2536,13 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   will be, not by startup, compile or port cost
   ([docs/adr/0261-tool-language-by-maintainability.md](docs/adr/0261-tool-language-by-maintainability.md)):
   - A tool is Python, unless it links product crates it genuinely needs or needs
-    Rust-specific parsing (`syn`, wasm sections).
+    Rust-specific parsing (`syn`) that no maintained standalone tool provides as
+    consumable output. A tool that only reads such output, such as `twiggy`'s
+    JSON for wasm, is Python.
+  - A thin command over logic that a Rust owner keeps for its own use joins that
+    owner instead of being ported.
+  - Repository contract tests, which check YAML, Nix and shell contracts, are
+    Python. Tests that run a tool's executable live with that tool.
   - A tool that needs a product fact (an inventory, a manifest, a format
     version) gets it from a product command or file, not by linking product
     code. If there is no such interface, add one.
