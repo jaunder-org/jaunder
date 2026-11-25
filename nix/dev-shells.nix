@@ -73,6 +73,9 @@ let
       devPythonCheck
       pkgs.ruff
       pkgs.sqlite
+      # `dev wasm-audit report --breakdown` attributes code to crates from
+      # twiggy's JSON; `dev`'s host pytest runs it on a fixture module.
+      pkgs.twiggy
       pkgs.typescript
       # Theme-package export assertions use this pinned ZIP reader on the host.
       pkgs.unzip

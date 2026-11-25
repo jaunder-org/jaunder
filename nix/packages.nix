@@ -507,7 +507,6 @@ let
       "e2e-evidence"
       "source-diagnostics"
       "trace-analysis"
-      "wasm-audit"
     ];
   };
   coverageCheckBin = mkHostTool {
@@ -1564,9 +1563,10 @@ in
     jaunder = jaunderBin;
     site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
-    # `dev wasm-audit report --breakdown` has an artifact that still
-    # carries a name section: `wasm-opt` strips names from the shipped
-    # bundle, so the shipped file cannot be attributed to crates (#836).
+    # `dev wasm-audit report --breakdown` (`tools/dev/dev/wasm_audit.py`) can
+    # hand twiggy an artifact that still carries a name section: `wasm-opt`
+    # strips names from the shipped bundle, so the shipped file cannot be
+    # attributed to crates (#836).
     inherit csrWasm;
     csrBundle = csrWasmBundle;
     csr-vite-node-modules = csrViteNodeModules;

@@ -9,7 +9,7 @@ from dev import report
 
 # Reports and their exact rendering.
 REPORT = {
-    "command": "wasm-audit",
+    "command": "trace-analysis",
     "ok": False,
     "duration_ms": 2042,
     "steps": [
@@ -44,16 +44,18 @@ RENDERED = (
     "line two — ü\n"
 )
 PLAIN = {
-    "command": "wasm-audit",
+    "command": "trace-analysis",
     "ok": True,
     "duration_ms": 5,
-    "steps": [{"name": "wasm-audit", "ok": True, "skipped": False, "duration_ms": 5}],
+    "steps": [
+        {"name": "trace-analysis", "ok": True, "skipped": False, "duration_ms": 5}
+    ],
 }
 
 
 @pytest.mark.parametrize(
     ("document", "rendered"),
-    [(REPORT, RENDERED), (PLAIN, "[ ok ] wasm-audit\n")],
+    [(REPORT, RENDERED), (PLAIN, "[ ok ] trace-analysis\n")],
 )
 def test_a_report_renders_its_table_then_one_line_per_step(
     document: dict[str, object], rendered: str
@@ -69,7 +71,7 @@ NOT_REPORTS = [
     b"1\n",
     b'"text"\n',
     b"[]\n",
-    b'{"command": "wasm-audit"}\n',
+    b'{"command": "trace-analysis"}\n',
     b'{"steps": 5}\n',
     b'{"steps": [{"name": "no outcome"}]}\n',
 ]
@@ -83,8 +85,8 @@ def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
 def test_a_failed_tool_keeps_its_own_status_without_a_report(
     workflow: Workflow,
 ) -> None:
-    workflow.checkout.built("wasm-audit", "print('not a report'); sys.exit(3)")
-    result = workflow.dev("wasm-audit", "report")
+    workflow.checkout.built("trace-analysis", "print('not a report'); sys.exit(3)")
+    result = workflow.dev("trace-analysis", "analyze")
     assert result.returncode == 3
     assert result.stdout == b"not a report\n"
     assert result.stderr == b""

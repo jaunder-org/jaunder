@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-16
 - Issue: [#1965](https://github.com/jaunder-org/jaunder/issues/1965)
+- Amended: 2026-11-25 — the wasm budget runs in-process in `dev` (#2101)
 
 ## Context
 
@@ -59,7 +60,10 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
 - The wasm budget builds `.#csrBundle` as its own Nix step, with its cache state
   (the same `csr-bundle` step and GC root `dev test-local` uses), and passes
   that output to `wasm-audit budget --site-path`. The budget requires the path
-  and never runs Nix itself.
+  and never runs Nix itself. _Amended by #2101:_ the budget is now `dev`'s own
+  Python (`tools/dev/dev/wasm_audit.py`). After the `csr-bundle` step it
+  measures that output in-process as the `wasm-budget` phase, and still runs no
+  Nix.
 - Every Nix check `dev` requests goes through one definition of its build flags,
   the shared `static-docs` verdict of precommit and prepush included; that
   request also leaves `flake.lock` exactly as committed.

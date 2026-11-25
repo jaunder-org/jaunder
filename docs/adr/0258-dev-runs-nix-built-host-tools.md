@@ -4,6 +4,7 @@
 - Date: 2026-11-20
 - Issue: [#1968](https://github.com/jaunder-org/jaunder/issues/1968)
 - Amended: 2026-11-24 — `host-proof` no longer ships `e2e-local` (#2066)
+- Amended: 2026-11-25 — `host-proof` no longer ships `wasm-audit` (#2101)
 
 ## Context
 
@@ -35,7 +36,9 @@ packages:
   scoped-leptosfmt
 - `host-proof`: every host-proof binary. _Amended by #2066:_ `e2e-local` is no
   longer one. It runs inside `dev`, and only its admission step reaches
-  host-proof (`admit-inputs`).
+  host-proof (`admit-inputs`). _Amended by #2101:_ nor is `wasm-audit`, which is
+  now `dev`'s own Python. Its breakdown runs `twiggy` from the devShell rather
+  than a Nix-built host tool.
 - `coverage-check` (the `coverage` crate with its `host` feature)
 - `perf-data`
 - `pr-observer`

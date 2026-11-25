@@ -17,11 +17,10 @@ import dataclasses
 import json
 import os
 import secrets
-import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, NamedTuple, NoReturn
+from typing import Any, NamedTuple
 
 from dev import steps
 
@@ -64,11 +63,6 @@ class Retained(NamedTuple):
     envelope: dict[str, Any]
 
 
-def _refuse(message: str) -> NoReturn:
-    print(message, file=sys.stderr)
-    raise steps.StepFailed(1, signalled=False)
-
-
 def _compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
@@ -103,12 +97,12 @@ def _check(name: str, selected: dict[str, Any], retained: Path) -> dict[str, Any
     """The producer's fragment, once its status and slot are known good."""
     status = _read(retained / "producer-status-v1.json")
     if status["schema_version"] != SCHEMA_VERSION:
-        _refuse(f"{name}: producer status schema is unsupported")
+        steps.refuse(f"{name}: producer status schema is unsupported")
     if not status["ok"]:
-        _refuse(f"{name}: producer reported failure: {status['detail']}")
+        steps.refuse(f"{name}: producer reported failure: {status['detail']}")
     path = retained / "fragments" / _fragment_name(selected)
     if not path.is_file():
-        _refuse(f"{name}: producer fragment is missing: {path}")
+        steps.refuse(f"{name}: producer fragment is missing: {path}")
     envelope: dict[str, Any] = _read(path)
     # The VM validated the fragment against what it declares; nothing there
     # ties that declaration to the slot Nix selected.
@@ -122,7 +116,7 @@ def _check(name: str, selected: dict[str, Any], retained: Path) -> dict[str, Any
             for item in fragment["result"]["workloads"]
         )
     ):
-        _refuse(f"{name}: producer fragment does not fill its selected slot")
+        steps.refuse(f"{name}: producer fragment does not fill its selected slot")
     return envelope
 
 
@@ -180,7 +174,7 @@ def _canonical(selection: dict[str, Any]) -> bool:
 def _required(name: str) -> str:
     value = os.environ.get(name)
     if not value:
-        _refuse(f"CI performance provenance requires {name}")
+        steps.refuse(f"CI performance provenance requires {name}")
     return value
 
 
@@ -211,7 +205,7 @@ def _assemble(
     """Joins the checked fragments, in selection order, into one result."""
     manifest = built[0].envelope["manifest"]
     if any(producer.envelope["manifest"] != manifest for producer in built):
-        _refuse("producer fragments describe different datasets")
+        steps.refuse("producer fragments describe different datasets")
     canonical = _canonical(selection)
     results = [producer.envelope["fragment"]["result"] for producer in built]
     result = {
@@ -266,7 +260,7 @@ def measure(request: Request) -> None:
 def _versioned(path: Path) -> dict[str, Any]:
     document: dict[str, Any] = _read(path)
     if document.get("schema_version") != SCHEMA_VERSION:
-        _refuse(f"{path}: performance schema is unsupported")
+        steps.refuse(f"{path}: performance schema is unsupported")
     return document
 
 
@@ -300,9 +294,9 @@ def compare(result: str) -> None:
         candidate = _versioned(Path(result))
         baseline = _versioned(BASELINE)["run"]
         if candidate["manifest"]["plan"] != baseline["manifest"]["plan"]:
-            _refuse("candidate dataset plan differs from baseline")
+            steps.refuse("candidate dataset plan differs from baseline")
         if _keys(candidate) != _keys(baseline):
-            _refuse("candidate compatibility keys differ from baseline")
+            steps.refuse("candidate compatibility keys differ from baseline")
         reference = {_key(item): item["summary"] for item in baseline["workloads"]}
         print("advisory only")
         for item in candidate["workloads"]:
@@ -321,7 +315,7 @@ def compare(result: str) -> None:
 def _github(name: str, path: str) -> Any:
     body = json.loads(steps.output(name, ["gh", "api", path]))
     if body.get("errors"):
-        _refuse(f"GitHub API response contains errors: {path}")
+        steps.refuse(f"GitHub API response contains errors: {path}")
     return body
 
 
@@ -334,26 +328,28 @@ def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, 
     """The run's head SHA and attempt, once the run, its job and its artifact
     are the trusted ones; nothing is downloaded before this."""
     if metadata.get("id") != run_id:
-        _refuse("Actions run ID mismatch")
+        steps.refuse("Actions run ID mismatch")
     if (metadata.get("repository") or {}).get("full_name") != TRUSTED_REPOSITORY or (
         metadata.get("head_repository") or {}
     ).get("full_name") != TRUSTED_REPOSITORY:
-        _refuse("Actions run belongs to another repository")
+        steps.refuse("Actions run belongs to another repository")
     if (
         metadata.get("path") != TRUSTED_WORKFLOW_PATH
         or metadata.get("name") != TRUSTED_WORKFLOW
     ):
-        _refuse("Actions run did not use the approved performance workflow")
+        steps.refuse("Actions run did not use the approved performance workflow")
     if metadata.get("event") not in ("workflow_dispatch", "schedule"):
-        _refuse("pull-request and unapproved workflow events cannot become a baseline")
+        steps.refuse(
+            "pull-request and unapproved workflow events cannot become a baseline"
+        )
     if (metadata.get("status"), metadata.get("conclusion")) != ("completed", "success"):
-        _refuse("baseline import requires a completed successful run")
+        steps.refuse("baseline import requires a completed successful run")
     if metadata.get("head_branch") != "main":
-        _refuse("baseline import requires main")
+        steps.refuse("baseline import requires main")
     head_sha = metadata.get("head_sha")
     attempt = metadata.get("run_attempt")
     if not isinstance(head_sha, str) or not head_sha.strip() or not _positive(attempt):
-        _refuse("Actions run has no head SHA or attempt")
+        steps.refuse("Actions run has no head SHA or attempt")
     if not any(
         job.get("name") == TRUSTED_JOB
         and job.get("status") == "completed"
@@ -362,7 +358,7 @@ def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, 
         and job.get("run_attempt") == attempt
         for job in jobs.get("jobs", [])
     ):
-        _refuse("approved performance job is absent or unsuccessful")
+        steps.refuse("approved performance job is absent or unsuccessful")
     if not any(
         artifact.get("name") == ARTIFACT
         and artifact.get("expired") is False
@@ -373,7 +369,7 @@ def _admit(run_id: int, metadata: Any, jobs: Any, artifacts: Any) -> tuple[str, 
         and (artifact.get("workflow_run") or {}).get("head_sha") == head_sha
         for artifact in artifacts.get("artifacts", [])
     ):
-        _refuse(
+        steps.refuse(
             "successful canonical run lacks the complete performance-result artifact"
         )
     return head_sha, attempt
@@ -395,12 +391,12 @@ def import_baseline(run_id: int) -> None:
         with steps.phase("perf-import"):
             path = Path(staging, RESULT)
             if not path.is_file():
-                _refuse(f"run artifact lacks {RESULT}")
+                steps.refuse(f"run artifact lacks {RESULT}")
             run = _versioned(path)
             if run["manifest"]["plan"]["profile"] != "medium":
-                _refuse("canonical baseline requires the medium profile")
+                steps.refuse("canonical baseline requires the medium profile")
             if not run["canonical_selection"]:
-                _refuse("baseline import rejects noncanonical selection")
+                steps.refuse("baseline import rejects noncanonical selection")
             provenance = run["provenance"]
             expected = {
                 "repository": TRUSTED_REPOSITORY,
@@ -412,9 +408,11 @@ def import_baseline(run_id: int) -> None:
                 "attempt": attempt,
             }
             if provenance["source"] != "github" or provenance["details"] != expected:
-                _refuse("artifact provenance does not match the approved Actions run")
+                steps.refuse(
+                    "artifact provenance does not match the approved Actions run"
+                )
             if BASELINE.is_file() and _keys(run) != _keys(_versioned(BASELINE)["run"]):
-                _refuse(
+                steps.refuse(
                     "imported run compatibility keys differ from the committed baseline"
                 )
             _publish(BASELINE, {"schema_version": SCHEMA_VERSION, "run": run})

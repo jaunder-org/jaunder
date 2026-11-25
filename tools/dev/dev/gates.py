@@ -15,7 +15,7 @@ from pathlib import Path
 
 from opentelemetry.trace import Span
 
-from dev import e2e, index, report, static, steps, trace
+from dev import e2e, index, report, static, steps, trace, wasm_audit
 from dev.checkout import clean_tree
 from dev.commands import (
     COVERAGE_CHECK,
@@ -258,12 +258,7 @@ def static_checks() -> None:
 
 def wasm_budget() -> None:
     """Builds the CSR bundle as its own step, then measures that output."""
-    bundle = Path(csr_bundle()).resolve()
-    steps.run(
-        "wasm-budget",
-        [*steps.tool(host_proof("wasm-audit")), "budget", "--site-path", str(bundle)],
-        report.render,
-    )
+    wasm_audit.budget(csr_bundle())
 
 
 def wasm_tests() -> None:

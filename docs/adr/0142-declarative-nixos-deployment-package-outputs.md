@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-14
 - Issue: [#938](https://github.com/jaunder-org/jaunder/issues/938)
+- Amended: 2026-11-25 — no tool reads `packages.site` any longer (#2101)
 
 ## Context
 
@@ -65,9 +66,11 @@ and database values. The module does not configure TLS; the ADR-0008 external
 reverse-proxy boundary remains in force.
 
 `packages.site` is not a deployment artifact. It is retained only as the wasm
-bundle tree used by `cargo xtask audit-wasm` for bundle-size analysis. The
-interactive and PostgreSQL NixOS configurations are development/test VMs, not
-supported deployment presets.
+bundle tree used by `cargo xtask audit-wasm` for bundle-size analysis. _Amended
+by #2101:_ that reason no longer holds. Size analysis (`dev wasm-audit`) reads
+`.#csrBundle` and `.#csrWasm`, and no tool reads `packages.site`. Retiring the
+output is follow-up work. The interactive and PostgreSQL NixOS configurations
+are development/test VMs, not supported deployment presets.
 
 ## Consequences
 

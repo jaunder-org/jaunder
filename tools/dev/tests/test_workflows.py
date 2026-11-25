@@ -70,7 +70,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             [*build("host-proof"), [binary, "--flag", SHELL_SYNTAX]],
         )
         for binary in [
-            "wasm-audit",
             "source-diagnostics",
             "trace-analysis",
         ]
@@ -359,13 +358,13 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
 
 
 @pytest.mark.parametrize("output", [b"not a report\n", b"", b" \n"])
-@pytest.mark.parametrize("command", ["wasm-audit", "coverage-check"])
+@pytest.mark.parametrize("command", ["trace-analysis", "coverage-check"])
 def test_report_tools_fail_closed_without_a_report(
     checkout: Checkout, command: str, output: bytes
 ) -> None:
     checkout.tool("nix", store_nix())
     checkout.built(command, f"sys.stdout.buffer.write({output!r})")
-    result = checkout.dev(command, "budget")
+    result = checkout.dev(command, "analyze")
     assert result.returncode == 1
     assert result.stdout == output
     assert result.stderr == f"dev: {command}: output is not a step report\n".encode()
@@ -375,7 +374,6 @@ def test_report_tools_fail_closed_without_a_report(
 @pytest.mark.parametrize(
     "command",
     [
-        "wasm-audit",
         "source-diagnostics",
         "trace-analysis",
         "coverage-check",

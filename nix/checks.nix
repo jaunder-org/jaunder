@@ -3845,6 +3845,8 @@ dev-python = pkgs.runCommand "dev-python"
       pkgs.ruff
       # The CLI tests run `dev` inside throwaway Git checkouts.
       pkgs.git
+      # `dev wasm-audit`'s crate rollup is tested against real twiggy output.
+      pkgs.twiggy
     ];
     # Only here may tests skip for the repository scripts, jq or Nix that
     # this filtered source and sandbox lack; elsewhere their absence fails.
