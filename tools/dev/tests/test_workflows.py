@@ -4,13 +4,22 @@ Expected commands are literal, not derived from `dev`'s own tables.
 """
 
 import json
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
-from conftest import PACKAGE, REGISTERED_LONG_AGO, TOOL_PACKAGES, Checkout, Workflow
+from conftest import (
+    FIXTURES,
+    PACKAGE,
+    REGISTERED_LONG_AGO,
+    TOOL_PACKAGES,
+    Checkout,
+    Workflow,
+    lift_lanes,
+)
 
 SHELL_SYNTAX = "a b ; touch pwned $(touch pwned)"
 
@@ -102,13 +111,13 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 ]
 
 
-SELECTED = "/nix/store/0000-selected"
-VERIFIER_NIX = r"""#!/bin/sh
+# Answers `nix path-info` for the selected lane output: built here unless
+# ULTIMATE says otherwise, with no registration time, so no cache source is
+# recorded.
+BUILT_NIX = r"""#!/bin/sh
 case "$1 $2" in
   'path-info --derivation') ;;
   path-info*)
-    # Built here unless ULTIMATE says otherwise, with no registration time: no
-    # cache source is recorded.
     for path; do :; done
     printf '{"%s":{"ultimate":%s}}\n' "$path" "${ULTIMATE:-true}"
     exit 0 ;;
@@ -116,67 +125,59 @@ case "$1 $2" in
 esac
 printf '%s\037' nix "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
-case "$*" in
-  'path-info --derivation '*) printf '/nix/store/fake-host-proof.drv\n' ;;
-  *'.#host-proof') printf '%s\n' "$VERIFIER_OUT" ;;
-esac
 """
-VERIFIER = r"""#!/bin/sh
-printf '%s\037' e2e-evidence "$@" >> "$FAKE_LOG"
-printf '\036' >> "$FAKE_LOG"
-printf '{"steps":[]}\n'
-"""
-
-
-LANE = "sqlite-chromium-1-of-3"
-
-
-def _selected_lane(workflow: Workflow) -> Path:
-    """A lane whose build record selects SELECTED; returns the verifier output."""
-    root = workflow.root
-    record = root / ".xtask" / "diagnostics" / f"e2e-{LANE}" / "build.json"
-    record.parent.mkdir(parents=True)
-    record.write_text(json.dumps([{"outputs": {"out": SELECTED}}]))
-    workflow.checkout.executable("nix", VERIFIER_NIX)
-    verifier = root.parent / "verifier"
-    (verifier / "bin").mkdir(parents=True)
-    workflow.checkout.executable("e2e-evidence", VERIFIER)
-    (verifier / "bin" / "e2e-evidence").symlink_to(
-        workflow.checkout.bin / "e2e-evidence"
-    )
-    return verifier
 
 
 def test_a_lane_this_machine_did_not_build_fails_before_verification(
     workflow: Workflow,
 ) -> None:
-    verifier = _selected_lane(workflow)
-    result = workflow.dev(
-        "e2e-producer", LANE, VERIFIER_OUT=str(verifier), ULTIMATE="false"
-    )
+    lane = "sqlite-chromium-1-of-3"
+    record = workflow.root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.json"
+    record.parent.mkdir(parents=True)
+    record.write_text(json.dumps([{"outputs": {"out": "/nix/store/0000-selected"}}]))
+    workflow.checkout.executable("nix", BUILT_NIX)
+    result = workflow.dev("e2e-producer", lane, ULTIMATE="false")
     assert result.returncode == 1, result
     assert b"dev: e2e-producer: verdict not executed here" in result.stderr
-    assert workflow.commands() == [["bash", "scripts/e2e-workflow", "producer", LANE]]
+    assert workflow.commands() == [["bash", "scripts/e2e-workflow", "producer", lane]]
+    assert b"e2e-evidence" not in result.stdout
 
 
-def test_a_producer_builds_then_verifies_the_output_its_build_selected(
-    workflow: Workflow,
+def catalog(root: Path) -> None:
+    """The lane catalog the verdicts read, at its checkout path."""
+    path = root / "end2end" / "e2e-lanes.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(FIXTURES / "e2e-lanes.json", path)
+
+
+@pytest.mark.parametrize("passing", [True, False])
+def test_a_producer_then_verifies_the_output_its_build_selected_in_process(
+    workflow: Workflow, passing: bool
 ) -> None:
-    lane = LANE
-    verifier = _selected_lane(workflow)
-    result = workflow.dev("e2e-producer", lane, VERIFIER_OUT=str(verifier))
-    assert result.returncode == 0, result
-    assert workflow.commands() == [
-        ["bash", "scripts/e2e-workflow", "producer", lane],
-        words("nix path-info --derivation --accept-flake-config .#host-proof"),
-        words(
-            "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
-        ),
-        words(
-            f"e2e-evidence verify --lane {lane} --catalog end2end/e2e-lanes.json"
-            f" --artifacts {SELECTED}"
-        ),
-    ]
+    lane = "sqlite-firefox-1-of-5"
+    root = workflow.root
+    catalog(root)
+    selected = root.parent / "selected"
+    if passing:
+        lift_lanes(selected)
+    record = root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.json"
+    record.parent.mkdir(parents=True)
+    output = selected / f"e2e-{lane}"
+    record.write_text(json.dumps([{"outputs": {"out": str(output)}}]))
+    workflow.checkout.executable("nix", BUILT_NIX)
+    result = workflow.dev("e2e-producer", lane)
+    assert result.returncode == (0 if passing else 1), result
+    # Verification builds and runs no tool.
+    assert workflow.commands() == [["bash", "scripts/e2e-workflow", "producer", lane]]
+    shown = result.stdout.decode()
+    if passing:
+        assert shown.startswith("[ ok ] e2e-evidence"), shown
+        assert shown.endswith(
+            f" — {lane}: population, retry-duration and boot evidence verified\n"
+        )
+    else:
+        assert shown.startswith("[FAIL] e2e-evidence ("), shown
+        assert f"reading report {output}/playwright-report-{lane}.json" in shown
 
 
 # The longest measured phase; the fake producer sleeps this long before
@@ -444,64 +445,121 @@ def store_nix(output: str = "/nix/store/fake-out") -> str:
     )
 
 
-# The verifier: records its arguments in $EVENTS and reports one passing step.
-EVIDENCE = """\
+# This checkout's server-fn inventory, as `source-contracts` lists it: one fn
+# the fixture lanes never drive.
+INVENTORY = """\
 import json
-with open(os.environ["EVENTS"], "a") as events:
-    events.write(" ".join(sys.argv[1:]) + "\\n")
-print(json.dumps({"steps": [{"name": sys.argv[1], "ok": True, "duration_ms": 1}]}))
+print(json.dumps([{"qualified": "posts::create", "module": "posts::api",
+                   "ident": "create", "endpoint": "posts/create"}]))
 """
+# The snapshot coverage of those lanes renders.
+UNCOVERED = '{\n  "covered": [],\n  "orphans": {}\n}\n'
 
 
-def test_e2e_reconcile_runs_the_built_verifier_on_artifacts_only(
-    checkout: Checkout,
-) -> None:
-    checkout.built("e2e-evidence", EVIDENCE)
+def verdict_lines(result: subprocess.CompletedProcess[bytes]) -> list[str]:
+    """The shown verdicts' lines, each step's timing dropped."""
+    return re.sub(r" \(\d+ ms\) —", " —", result.stdout.decode()).splitlines()
+
+
+def test_e2e_reconcile_verifies_artifacts_in_process(checkout: Checkout) -> None:
+    checkout.built("source-contracts", INVENTORY)
     checkout.tool("nix", store_nix())
-    tail = "--catalog end2end/e2e-lanes.json --diagnostics-root"
-    for browser, args, artifacts in [
-        ("firefox", [], ".xtask/diagnostics"),
-        ("firefox", ["downloaded artifacts"], "downloaded artifacts"),
-        ("chromium", [], ".xtask/diagnostics"),
+    catalog(checkout.root)
+    lift_lanes(checkout.root / ".xtask" / "diagnostics")
+    lift_lanes(checkout.root / "downloaded artifacts")
+    lift_lanes(checkout.root / ".xtask" / "diagnostics", "chromium")
+    snapshot = checkout.root / "docs" / "coverage" / "server-fns.json"
+    snapshot.parent.mkdir(parents=True)
+    snapshot.write_text(UNCOVERED)
+    for browser, args, lanes in [
+        ("firefox", [], 5),
+        ("firefox", ["downloaded artifacts"], 5),
+        ("chromium", [], 3),
     ]:
-        events = checkout.root / "events"
-        events.unlink(missing_ok=True)
-        result = checkout.dev(
-            "e2e-reconcile", "sqlite", browser, *args, EVENTS=str(events)
-        )
+        result = checkout.dev("e2e-reconcile", "sqlite", browser, *args)
         assert result.returncode == 0, result
-        expected = [f"reconcile sqlite {browser} {tail} {artifacts}"]
-        rendered = b"[ ok ] reconcile\n"
+        expected = [
+            (
+                f"[ ok ] e2e-reconcile — sqlite/{browser}: reconciled {lanes} "
+                "lane-qualified evidence sets"
+            )
+        ]
         # The SQLite/Chromium verdict includes coverage over the same artifacts.
         if browser == "chromium":
-            expected.append(f"server-fn-coverage verify {tail} {artifacts}")
-            rendered += b"[ ok ] server-fn-coverage\n"
-        assert events.read_text().splitlines() == expected
-        assert result.stdout == rendered
-        step = checkout.merged()["host-proof-build"]["args"]
-        assert step["jaunder.cache"] == "reused"
+            expected.append(
+                "[ ok ] server-fn-coverage-verify — 0 covered; snapshot current"
+            )
+            step = checkout.merged()["repository-policy-build"]["args"]
+            assert step["jaunder.cache"] == "reused"
+        assert verdict_lines(result) == expected
         shutil.rmtree(checkout.root / ".xtask" / "run")
+    # Only coverage runs a tool: the inventory, from this checkout's own build.
+    assert [line for line in checkout.order().splitlines() if "nix" not in line] == [
+        "source-contracts server-fn-inventory"
+    ]
     assert [line for line in checkout.order().splitlines() if " build " in line] == [
-        "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof"
-    ] * 3
+        " ".join(build("repository-policy")[-1])
+    ]
+
+
+def test_e2e_reconcile_refuses_drift_and_unreconciled_lanes(checkout: Checkout) -> None:
+    checkout.built("source-contracts", INVENTORY)
+    checkout.tool("nix", store_nix())
+    catalog(checkout.root)
+    result = checkout.dev("e2e-reconcile", "sqlite", "chromium", "missing")
+    assert result.returncode == 1, result
+    shown = verdict_lines(result)
+    assert shown[0].startswith(
+        "[FAIL] e2e-reconcile — reading expected census missing/"
+    )
+    assert "server-fn-coverage" not in "\n".join(shown)
+    assert checkout.order() == "", "an unreconciled pair never reaches coverage"
+    lift_lanes(checkout.root / "lifted", "chromium")
+    result = checkout.dev("e2e-reconcile", "sqlite", "chromium", "lifted")
+    assert result.returncode == 1, result
+    assert verdict_lines(result)[1] == (
+        "[FAIL] server-fn-coverage-verify — docs/coverage/server-fns.json is out of "
+        "date with this run's traces — regenerate it with "
+        "`dev e2e-regenerate-coverage` and commit the result"
+    )
 
 
 def test_e2e_regenerate_coverage_produces_the_pair_then_regenerates(
     checkout: Checkout,
 ) -> None:
-    checkout.built("e2e-evidence", EVIDENCE)
+    checkout.built("source-contracts", INVENTORY)
     checkout.tool("nix", store_nix())
-    # The pair's producers are recorded, not run.
+    catalog(checkout.root)
+    # The pair's producers are recorded, not run; their lanes are already lifted.
     checkout.tool("bash", "")
-    events = checkout.root / "events"
-    result = checkout.dev("e2e-regenerate-coverage", EVENTS=str(events))
+    lift_lanes(checkout.root / ".xtask" / "diagnostics", "chromium")
+    result = checkout.dev("e2e-regenerate-coverage")
     assert result.returncode == 0, result
     order = checkout.order().splitlines()
     pair = order.index("bash scripts/e2e-workflow pair sqlite chromium")
-    build = next(i for i, line in enumerate(order) if ".#host-proof" in line)
+    build = next(i for i, line in enumerate(order) if ".#repository-policy" in line)
     assert pair < build, order
-    tail = "--catalog end2end/e2e-lanes.json --diagnostics-root .xtask/diagnostics"
-    assert events.read_text().splitlines() == [f"server-fn-coverage regenerate {tail}"]
+    snapshot = checkout.root / "docs" / "coverage" / "server-fns.json"
+    assert snapshot.read_text() == UNCOVERED
+    assert verdict_lines(result) == [
+        (
+            "[ ok ] server-fn-coverage-regenerate — 0 covered, 0 fn(s) with "
+            "unattributed hits → docs/coverage/server-fns.json"
+        )
+    ]
+
+
+def test_e2e_regenerate_coverage_refuses_unreconciled_lanes(checkout: Checkout) -> None:
+    checkout.tool("nix", store_nix())
+    catalog(checkout.root)
+    checkout.tool("bash", "")
+    result = checkout.dev("e2e-regenerate-coverage")
+    assert result.returncode == 1, result
+    assert verdict_lines(result)[0].startswith(
+        "[FAIL] server-fn-coverage-regenerate — the SQLite/Chromium lanes must "
+        "reconcile before flow coverage: reading expected census"
+    )
+    assert not (checkout.root / "docs" / "coverage").exists()
 
 
 STATIC_ALL = [

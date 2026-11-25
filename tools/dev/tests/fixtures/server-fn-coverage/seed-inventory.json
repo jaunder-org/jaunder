@@ -1,0 +1,644 @@
+[
+  {
+    "endpoint": "audiences/add_subscriber",
+    "ident": "add_subscriber",
+    "module": "audiences::api",
+    "qualified": "audiences::add_subscriber"
+  },
+  {
+    "endpoint": "audiences/create",
+    "ident": "create",
+    "module": "audiences::api",
+    "qualified": "audiences::create"
+  },
+  {
+    "endpoint": "audiences/delete",
+    "ident": "delete",
+    "module": "audiences::api",
+    "qualified": "audiences::delete"
+  },
+  {
+    "endpoint": "audiences/list_members",
+    "ident": "list_members",
+    "module": "audiences::api",
+    "qualified": "audiences::list_members"
+  },
+  {
+    "endpoint": "audiences/list_mine",
+    "ident": "list_mine",
+    "module": "audiences::api",
+    "qualified": "audiences::list_mine"
+  },
+  {
+    "endpoint": "audiences/list_my_subscribers",
+    "ident": "list_my_subscribers",
+    "module": "audiences::api",
+    "qualified": "audiences::list_my_subscribers"
+  },
+  {
+    "endpoint": "audiences/remove_subscriber",
+    "ident": "remove_subscriber",
+    "module": "audiences::api",
+    "qualified": "audiences::remove_subscriber"
+  },
+  {
+    "endpoint": "audiences/rename",
+    "ident": "rename",
+    "module": "audiences::api",
+    "qualified": "audiences::rename"
+  },
+  {
+    "endpoint": "auth/get_session",
+    "ident": "get_session",
+    "module": "auth::api",
+    "qualified": "auth::get_session"
+  },
+  {
+    "endpoint": "auth/login",
+    "ident": "login",
+    "module": "auth::api",
+    "qualified": "auth::login"
+  },
+  {
+    "endpoint": "auth/logout",
+    "ident": "logout",
+    "module": "auth::api",
+    "qualified": "auth::logout"
+  },
+  {
+    "endpoint": "backup/back_up_now",
+    "ident": "back_up_now",
+    "module": "backup::api",
+    "qualified": "backup::back_up_now"
+  },
+  {
+    "endpoint": "backup/get_settings",
+    "ident": "get_settings",
+    "module": "backup::api",
+    "qualified": "backup::get_settings"
+  },
+  {
+    "endpoint": "backup/is_warning_visible",
+    "ident": "is_warning_visible",
+    "module": "backup::api",
+    "qualified": "backup::is_warning_visible"
+  },
+  {
+    "endpoint": "backup/update_settings",
+    "ident": "update_settings",
+    "module": "backup::api",
+    "qualified": "backup::update_settings"
+  },
+  {
+    "endpoint": "email/request_verification",
+    "ident": "request_verification",
+    "module": "email::api",
+    "qualified": "email::request_verification"
+  },
+  {
+    "endpoint": "email/verify",
+    "ident": "verify",
+    "module": "email::api",
+    "qualified": "email::verify"
+  },
+  {
+    "endpoint": "invites/create",
+    "ident": "create",
+    "module": "invites::api",
+    "qualified": "invites::create"
+  },
+  {
+    "endpoint": "invites/list",
+    "ident": "list",
+    "module": "invites::api",
+    "qualified": "invites::list"
+  },
+  {
+    "endpoint": "media/delete",
+    "ident": "delete",
+    "module": "media::api",
+    "qualified": "media::delete"
+  },
+  {
+    "endpoint": "media/get_uploads_enabled",
+    "ident": "get_uploads_enabled",
+    "module": "media::api",
+    "qualified": "media::get_uploads_enabled"
+  },
+  {
+    "endpoint": "media/get_usage",
+    "ident": "get_usage",
+    "module": "media::api",
+    "qualified": "media::get_usage"
+  },
+  {
+    "endpoint": "media/list_mine",
+    "ident": "list_mine",
+    "module": "media::api",
+    "qualified": "media::list_mine"
+  },
+  {
+    "endpoint": "media/upload",
+    "ident": "upload",
+    "module": "media::api",
+    "qualified": "media::upload"
+  },
+  {
+    "endpoint": "passkeys/availability",
+    "ident": "availability",
+    "module": "passkeys::api",
+    "qualified": "passkeys::availability"
+  },
+  {
+    "endpoint": "passkeys/delete",
+    "ident": "delete",
+    "module": "passkeys::api",
+    "qualified": "passkeys::delete"
+  },
+  {
+    "endpoint": "passkeys/finish_authentication",
+    "ident": "finish_authentication",
+    "module": "passkeys::api",
+    "qualified": "passkeys::finish_authentication"
+  },
+  {
+    "endpoint": "passkeys/finish_registration",
+    "ident": "finish_registration",
+    "module": "passkeys::api",
+    "qualified": "passkeys::finish_registration"
+  },
+  {
+    "endpoint": "passkeys/list",
+    "ident": "list",
+    "module": "passkeys::api",
+    "qualified": "passkeys::list"
+  },
+  {
+    "endpoint": "passkeys/start_authentication",
+    "ident": "start_authentication",
+    "module": "passkeys::api",
+    "qualified": "passkeys::start_authentication"
+  },
+  {
+    "endpoint": "passkeys/start_registration",
+    "ident": "start_registration",
+    "module": "passkeys::api",
+    "qualified": "passkeys::start_registration"
+  },
+  {
+    "endpoint": "password_reset/confirm",
+    "ident": "confirm",
+    "module": "password_reset::api",
+    "qualified": "password_reset::confirm"
+  },
+  {
+    "endpoint": "password_reset/request",
+    "ident": "request",
+    "module": "password_reset::api",
+    "qualified": "password_reset::request"
+  },
+  {
+    "endpoint": "posts/create",
+    "ident": "create",
+    "module": "posts::api",
+    "qualified": "posts::create"
+  },
+  {
+    "endpoint": "posts/delete",
+    "ident": "delete",
+    "module": "posts::api",
+    "qualified": "posts::delete"
+  },
+  {
+    "endpoint": "posts/execute_management_operation",
+    "ident": "execute_management_operation",
+    "module": "posts::api",
+    "qualified": "posts::execute_management_operation"
+  },
+  {
+    "endpoint": "posts/get",
+    "ident": "get",
+    "module": "posts::api",
+    "qualified": "posts::get"
+  },
+  {
+    "endpoint": "posts/get_audience_selection",
+    "ident": "get_audience_selection",
+    "module": "posts::api",
+    "qualified": "posts::get_audience_selection"
+  },
+  {
+    "endpoint": "posts/get_default_audience_selection",
+    "ident": "get_default_audience_selection",
+    "module": "posts::api",
+    "qualified": "posts::get_default_audience_selection"
+  },
+  {
+    "endpoint": "posts/get_post_history",
+    "ident": "get_post_history",
+    "module": "posts::api",
+    "qualified": "posts::get_post_history"
+  },
+  {
+    "endpoint": "posts/get_preview",
+    "ident": "get_preview",
+    "module": "posts::api",
+    "qualified": "posts::get_preview"
+  },
+  {
+    "endpoint": "posts/get_revision_history_detail",
+    "ident": "get_revision_history_detail",
+    "module": "posts::api",
+    "qualified": "posts::get_revision_history_detail"
+  },
+  {
+    "endpoint": "posts/list_drafts",
+    "ident": "list_drafts",
+    "module": "posts::api",
+    "qualified": "posts::list_drafts"
+  },
+  {
+    "endpoint": "posts/list_history",
+    "ident": "list_history",
+    "module": "posts::api",
+    "qualified": "posts::list_history"
+  },
+  {
+    "endpoint": "posts/list_managed_posts",
+    "ident": "list_managed_posts",
+    "module": "posts::api",
+    "qualified": "posts::list_managed_posts"
+  },
+  {
+    "endpoint": "posts/list_scheduled",
+    "ident": "list_scheduled",
+    "module": "posts::api",
+    "qualified": "posts::list_scheduled"
+  },
+  {
+    "endpoint": "posts/publish",
+    "ident": "publish",
+    "module": "posts::api",
+    "qualified": "posts::publish"
+  },
+  {
+    "endpoint": "posts/resolve_management_selection",
+    "ident": "resolve_management_selection",
+    "module": "posts::api",
+    "qualified": "posts::resolve_management_selection"
+  },
+  {
+    "endpoint": "posts/unpublish",
+    "ident": "unpublish",
+    "module": "posts::api",
+    "qualified": "posts::unpublish"
+  },
+  {
+    "endpoint": "posts/update",
+    "ident": "update",
+    "module": "posts::api",
+    "qualified": "posts::update"
+  },
+  {
+    "endpoint": "profile/get",
+    "ident": "get",
+    "module": "profile::api",
+    "qualified": "profile::get"
+  },
+  {
+    "endpoint": "profile/get_content_license",
+    "ident": "get_content_license",
+    "module": "profile::api",
+    "qualified": "profile::get_content_license"
+  },
+  {
+    "endpoint": "profile/get_default_audience",
+    "ident": "get_default_audience",
+    "module": "profile::api",
+    "qualified": "profile::get_default_audience"
+  },
+  {
+    "endpoint": "profile/get_default_post_format",
+    "ident": "get_default_post_format",
+    "module": "profile::api",
+    "qualified": "profile::get_default_post_format"
+  },
+  {
+    "endpoint": "profile/set_content_license",
+    "ident": "set_content_license",
+    "module": "profile::api",
+    "qualified": "profile::set_content_license"
+  },
+  {
+    "endpoint": "profile/set_default_audience",
+    "ident": "set_default_audience",
+    "module": "profile::api",
+    "qualified": "profile::set_default_audience"
+  },
+  {
+    "endpoint": "profile/set_default_post_format",
+    "ident": "set_default_post_format",
+    "module": "profile::api",
+    "qualified": "profile::set_default_post_format"
+  },
+  {
+    "endpoint": "profile/update",
+    "ident": "update",
+    "module": "profile::api",
+    "qualified": "profile::update"
+  },
+  {
+    "endpoint": "registration/get_policy",
+    "ident": "get_policy",
+    "module": "registration::api",
+    "qualified": "registration::get_policy"
+  },
+  {
+    "endpoint": "registration/register",
+    "ident": "register",
+    "module": "registration::api",
+    "qualified": "registration::register"
+  },
+  {
+    "endpoint": "sessions/create_app_password",
+    "ident": "create_app_password",
+    "module": "sessions::api",
+    "qualified": "sessions::create_app_password"
+  },
+  {
+    "endpoint": "sessions/list",
+    "ident": "list",
+    "module": "sessions::api",
+    "qualified": "sessions::list"
+  },
+  {
+    "endpoint": "sessions/revoke",
+    "ident": "revoke",
+    "module": "sessions::api",
+    "qualified": "sessions::revoke"
+  },
+  {
+    "endpoint": "site/get_default_audience",
+    "ident": "get_default_audience",
+    "module": "site::api",
+    "qualified": "site::get_default_audience"
+  },
+  {
+    "endpoint": "site/get_identity",
+    "ident": "get_identity",
+    "module": "site::api",
+    "qualified": "site::get_identity"
+  },
+  {
+    "endpoint": "site/get_media_uploads_enabled",
+    "ident": "get_media_uploads_enabled",
+    "module": "site::api",
+    "qualified": "site::get_media_uploads_enabled"
+  },
+  {
+    "endpoint": "site/is_base_url_warning_visible",
+    "ident": "is_base_url_warning_visible",
+    "module": "site::api",
+    "qualified": "site::is_base_url_warning_visible"
+  },
+  {
+    "endpoint": "site/update_default_audience",
+    "ident": "update_default_audience",
+    "module": "site::api",
+    "qualified": "site::update_default_audience"
+  },
+  {
+    "endpoint": "site/update_identity",
+    "ident": "update_identity",
+    "module": "site::api",
+    "qualified": "site::update_identity"
+  },
+  {
+    "endpoint": "site/update_media_uploads_enabled",
+    "ident": "update_media_uploads_enabled",
+    "module": "site::api",
+    "qualified": "site::update_media_uploads_enabled"
+  },
+  {
+    "endpoint": "smtp/get_settings",
+    "ident": "get_settings",
+    "module": "smtp::api",
+    "qualified": "smtp::get_settings"
+  },
+  {
+    "endpoint": "smtp/update_settings",
+    "ident": "update_settings",
+    "module": "smtp::api",
+    "qualified": "smtp::update_settings"
+  },
+  {
+    "endpoint": "subscriptions/is_subscribed",
+    "ident": "is_subscribed",
+    "module": "subscriptions::api",
+    "qualified": "subscriptions::is_subscribed"
+  },
+  {
+    "endpoint": "subscriptions/subscribe",
+    "ident": "subscribe",
+    "module": "subscriptions::api",
+    "qualified": "subscriptions::subscribe"
+  },
+  {
+    "endpoint": "subscriptions/unsubscribe",
+    "ident": "unsubscribe",
+    "module": "subscriptions::api",
+    "qualified": "subscriptions::unsubscribe"
+  },
+  {
+    "endpoint": "tags/list",
+    "ident": "list",
+    "module": "tags::api",
+    "qualified": "tags::list"
+  },
+  {
+    "endpoint": "themes/copy_theme",
+    "ident": "copy_theme",
+    "module": "themes::api",
+    "qualified": "themes::copy_theme"
+  },
+  {
+    "endpoint": "themes/create",
+    "ident": "create",
+    "module": "themes::api",
+    "qualified": "themes::create"
+  },
+  {
+    "endpoint": "themes/export",
+    "ident": "export",
+    "module": "themes::api",
+    "qualified": "themes::export"
+  },
+  {
+    "endpoint": "themes/get_draft",
+    "ident": "get_draft",
+    "module": "themes::api",
+    "qualified": "themes::get_draft"
+  },
+  {
+    "endpoint": "themes/get_presentation",
+    "ident": "get_presentation",
+    "module": "themes::api",
+    "qualified": "themes::get_presentation"
+  },
+  {
+    "endpoint": "themes/get_selection",
+    "ident": "get_selection",
+    "module": "themes::api",
+    "qualified": "themes::get_selection"
+  },
+  {
+    "endpoint": "themes/import_css",
+    "ident": "import_css",
+    "module": "themes::api",
+    "qualified": "themes::import_css"
+  },
+  {
+    "endpoint": "themes/import_package",
+    "ident": "import_package",
+    "module": "themes::api",
+    "qualified": "themes::import_package"
+  },
+  {
+    "endpoint": "themes/import_zip",
+    "ident": "import_zip",
+    "module": "themes::api",
+    "qualified": "themes::import_zip"
+  },
+  {
+    "endpoint": "themes/list",
+    "ident": "list",
+    "module": "themes::api",
+    "qualified": "themes::list"
+  },
+  {
+    "endpoint": "themes/preview",
+    "ident": "preview",
+    "module": "themes::api",
+    "qualified": "themes::preview"
+  },
+  {
+    "endpoint": "themes/preview_editor",
+    "ident": "preview_editor",
+    "module": "themes::api",
+    "qualified": "themes::preview_editor"
+  },
+  {
+    "endpoint": "themes/preview_installed",
+    "ident": "preview_installed",
+    "module": "themes::api",
+    "qualified": "themes::preview_installed"
+  },
+  {
+    "endpoint": "themes/publish",
+    "ident": "publish",
+    "module": "themes::api",
+    "qualified": "themes::publish"
+  },
+  {
+    "endpoint": "themes/remove",
+    "ident": "remove",
+    "module": "themes::api",
+    "qualified": "themes::remove"
+  },
+  {
+    "endpoint": "themes/rename",
+    "ident": "rename",
+    "module": "themes::api",
+    "qualified": "themes::rename"
+  },
+  {
+    "endpoint": "themes/replace_binding",
+    "ident": "replace_binding",
+    "module": "themes::api",
+    "qualified": "themes::replace_binding"
+  },
+  {
+    "endpoint": "themes/replace_css",
+    "ident": "replace_css",
+    "module": "themes::api",
+    "qualified": "themes::replace_css"
+  },
+  {
+    "endpoint": "themes/replace_pool",
+    "ident": "replace_pool",
+    "module": "themes::api",
+    "qualified": "themes::replace_pool"
+  },
+  {
+    "endpoint": "themes/save_editor",
+    "ident": "save_editor",
+    "module": "themes::api",
+    "qualified": "themes::save_editor"
+  },
+  {
+    "endpoint": "themes/select",
+    "ident": "select",
+    "module": "themes::api",
+    "qualified": "themes::select"
+  },
+  {
+    "endpoint": "themes/shuffle",
+    "ident": "shuffle",
+    "module": "themes::api",
+    "qualified": "themes::shuffle"
+  },
+  {
+    "endpoint": "timeline/list_by_tag",
+    "ident": "list_by_tag",
+    "module": "timeline::api",
+    "qualified": "timeline::list_by_tag"
+  },
+  {
+    "endpoint": "timeline/list_by_user",
+    "ident": "list_by_user",
+    "module": "timeline::api",
+    "qualified": "timeline::list_by_user"
+  },
+  {
+    "endpoint": "timeline/list_by_user_and_tag",
+    "ident": "list_by_user_and_tag",
+    "module": "timeline::api",
+    "qualified": "timeline::list_by_user_and_tag"
+  },
+  {
+    "endpoint": "timeline/list_home_timeline",
+    "ident": "list_home_timeline",
+    "module": "timeline::api",
+    "qualified": "timeline::list_home_timeline"
+  },
+  {
+    "endpoint": "timeline/list_local_timeline",
+    "ident": "list_local_timeline",
+    "module": "timeline::api",
+    "qualified": "timeline::list_local_timeline"
+  },
+  {
+    "endpoint": "websub/get_websub_settings",
+    "ident": "get_websub_settings",
+    "module": "websub::api",
+    "qualified": "websub::get_websub_settings"
+  },
+  {
+    "endpoint": "websub/list_dead_letters",
+    "ident": "list_dead_letters",
+    "module": "websub::api",
+    "qualified": "websub::list_dead_letters"
+  },
+  {
+    "endpoint": "websub/redrive_dead_letters",
+    "ident": "redrive_dead_letters",
+    "module": "websub::api",
+    "qualified": "websub::redrive_dead_letters"
+  },
+  {
+    "endpoint": "websub/update_websub_hub",
+    "ident": "update_websub_hub",
+    "module": "websub::api",
+    "qualified": "websub::update_websub_hub"
+  }
+]

@@ -35,6 +35,24 @@ pub fn inventory(root: &Path) -> Result<Vec<ServerFn>> {
     Ok(out)
 }
 
+/// The inventory as `source-contracts server-fn-inventory` prints it: one object
+/// per fn, in [`inventory`]'s order, with the facts `dev`'s trace-derived flow
+/// coverage matches spans on. `dev` reads it rather than linking this crate, so
+/// the `syn` inventory stays the one source of every fn's module and endpoint.
+pub fn inventory_listing(root: &Path) -> Result<serde_json::Value> {
+    Ok(inventory(root)?
+        .iter()
+        .map(|f| {
+            serde_json::json!({
+                "qualified": f.qualified(),
+                "module": f.module,
+                "ident": f.ident,
+                "endpoint": f.endpoint,
+            })
+        })
+        .collect())
+}
+
 /// Read the generated coverage snapshot or fail naming the remedy.
 ///
 /// Missing or unparseable input is an error, never an empty value: static
@@ -266,6 +284,126 @@ mod verdict_tests {
         assert!(
             !v.iter().any(|m| m.starts_with("posts::create:")),
             "posts::create IS covered and must not be reported: {v:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    /// One server-fn hit observed in the recorded seed capture: the module and
+    /// span name the instrument span carried, and the path of the URI its nearest
+    /// request ancestor served.
+    #[derive(Deserialize)]
+    struct Observed {
+        module: String,
+        span: String,
+        uri_path: String,
+    }
+
+    /// Every such hit in `dev`'s seed capture
+    /// (`tools/dev/tests/fixtures/server-fn-coverage/otel-traces-seed.jsonl`),
+    /// extracted once and committed so this check needs no trace reader.
+    const SEED_ENDPOINTS: &str = include_str!("testdata/server-fn-seed-endpoints.json");
+
+    /// The derived endpoint matches the URI a real run requested (ADR-0120).
+    ///
+    /// This is the only live check that the inventory's derivation agrees with
+    /// what the macro's real expansion serves: the tools workspace has no `web`
+    /// dependency, so it can never read `ServerFn::PATH`, but it can compare its
+    /// computed value with URIs a browser actually requested.
+    ///
+    /// **A fn is located by span name and module, never by the endpoint under
+    /// test.** Looking a computed endpoint up among the observed URIs and skipping
+    /// misses would make drift identical to a skip, so a wrong derivation would
+    /// pass in silence. The names are the forms `dev`'s extractor matches
+    /// (`web.<vertical>.<ident>`, `__server_<ident>`, `<ident>`); any of them
+    /// locates a fn independently of its URI. The matched count is asserted too,
+    /// so the check cannot quietly shrink to nothing and keep passing.
+    #[test]
+    fn the_derived_endpoint_matches_the_uri_a_real_run_requested() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let inventory = inventory(&root.join(WEB_SRC)).expect("inventory enumerates");
+        let observed: Vec<Observed> =
+            serde_json::from_str(SEED_ENDPOINTS).expect("the seed endpoints parse");
+
+        let mut matched = 0usize;
+        let mut mismatches = Vec::new();
+        for hit in &observed {
+            let relative = hit.module.strip_prefix("web::").unwrap_or(&hit.module);
+            let Some(f) = inventory.iter().find(|f| {
+                relative == f.module
+                    && [
+                        format!("web.{}.{}", f.vertical(), f.ident),
+                        format!("__server_{}", f.ident),
+                        f.ident.clone(),
+                    ]
+                    .contains(&hit.span)
+            }) else {
+                continue;
+            };
+            let expected = format!("/api/{}", f.endpoint.as_deref().unwrap_or_default());
+            if hit.uri_path != expected {
+                mismatches.push(format!(
+                    "{}: derived `{expected}` but a real run requested `{}`",
+                    f.qualified(),
+                    hit.uri_path
+                ));
+            }
+            matched += 1;
+        }
+
+        assert!(
+            mismatches.is_empty(),
+            "the computed endpoint disagrees with the captured traffic: {mismatches:?}"
+        );
+        assert!(
+            matched >= 50,
+            "only {matched} observed hit(s) were located by name+module — the \
+             cross-check has gone nearly vacuous, which is how it would silently stop \
+             verifying anything"
+        );
+    }
+
+    #[test]
+    fn the_listing_carries_each_fns_qualified_name_module_ident_and_endpoint() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let vertical = tmp.path().join("posts");
+        std::fs::create_dir_all(&vertical).expect("create the vertical's dir");
+        std::fs::write(
+            vertical.join("api.rs"),
+            "#[macros::server]\npub async fn update() {}\n#[macros::server]\npub async fn create() {}\n",
+        )
+        .expect("write source");
+
+        let listing = inventory_listing(tmp.path()).expect("lists");
+        assert_eq!(
+            listing,
+            serde_json::json!([
+                {
+                    "qualified": "posts::create",
+                    "module": "posts::api",
+                    "ident": "create",
+                    "endpoint": "posts/create",
+                },
+                {
+                    "qualified": "posts::update",
+                    "module": "posts::api",
+                    "ident": "update",
+                    "endpoint": "posts/update",
+                },
+            ])
+        );
+    }
+
+    #[test]
+    fn an_unscannable_root_is_an_error_not_an_empty_listing() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let error = inventory_listing(&tmp.path().join("missing")).unwrap_err();
+        assert!(
+            format!("{error:#}").contains("#[macros::server]"),
+            "{error:#}"
         );
     }
 }

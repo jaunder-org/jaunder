@@ -116,7 +116,9 @@ impl CaptureDirectory {
     pub fn path(&self, stream: Stream) -> PathBuf {
         let directory = match stream {
             Stream::Otel | Stream::OtelLogs => self.collector_root(),
-            Stream::Mail | Stream::WebSub | Stream::Diag => &self.0,
+            // Diag leads this arm so `filename`'s arm is its only `=>` spelling,
+            // the anchor the cross-language literal table (ADR-0109) locates.
+            Stream::Diag | Stream::Mail | Stream::WebSub => &self.0,
         };
         directory.join(stream.filename())
     }
@@ -135,18 +137,24 @@ impl CaptureDirectory {
     }
 }
 
+/// The prefix naming each server instance's capture subdirectory, spelled once so
+/// [`instance_directory`] and [`instance_index`] cannot disagree. `dev`'s Python
+/// capture reader spells it too; the cross-language literal table (ADR-0109)
+/// holds the two together.
+pub const INSTANCE_PREFIX: &str = "instance-";
+
 /// The subdirectory of the shared collector capture that e2e server instance `index`
 /// (one per Playwright worker, #2076) writes its own streams to.
 #[must_use]
 pub fn instance_directory(index: usize) -> String {
-    format!("instance-{index}")
+    format!("{INSTANCE_PREFIX}{index}")
 }
 
 /// The instance index a capture subdirectory name denotes, the inverse of
 /// [`instance_directory`].
 #[must_use]
 pub fn instance_index(name: &str) -> Option<usize> {
-    let digits = name.strip_prefix("instance-")?;
+    let digits = name.strip_prefix(INSTANCE_PREFIX)?;
     if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }

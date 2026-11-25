@@ -29,6 +29,5 @@ def host_proof(binary: str) -> Tool:
 ADMIT_INPUTS = Tool("host-tool", "admit-inputs")
 SOURCE_CONTRACT = repository_policy("source-contracts")
 SCOPED_LEPTOSFMT = repository_policy("scoped-leptosfmt")
-E2E_EVIDENCE = host_proof("e2e-evidence")
 COVERAGE_CHECK = Tool("coverage-check", "coverage-check")
 SYSTEM_ARTIFACTS = Tool("system-artifacts", "system-artifacts")

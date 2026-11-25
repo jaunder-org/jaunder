@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "complete": true,
+  "lane": "sqlite-firefox-3-of-5",
+  "backend": "sqlite",
+  "browser": "firefox",
+  "shard_index": 3,
+  "shard_count": 5,
+  "tests": [
+    {
+      "project_id": "firefox",
+      "project_name": "firefox",
+      "test_id": "visual"
+    }
+  ]
+}

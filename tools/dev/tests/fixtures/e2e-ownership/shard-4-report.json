@@ -1,0 +1,23 @@
+{
+  "suites": [
+    {
+      "suites": [],
+      "specs": [
+        {
+          "id": "four",
+          "title": "ordinary shard four",
+          "file": "tests/ordinary.spec.ts",
+          "line": 4,
+          "tests": [
+            {
+              "projectId": "firefox",
+              "projectName": "firefox",
+              "status": "expected",
+              "results": [{ "retry": 0, "duration": 12 }]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

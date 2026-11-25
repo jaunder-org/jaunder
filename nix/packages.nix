@@ -838,7 +838,10 @@ let
     root = ../tools/dev;
     fileset = pkgs.lib.fileset.unions [
       devPackageFiles
-      (pkgs.lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "jsonl") ../tools/dev/tests)
+      # Tests and their JSON and JSONL fixtures (the e2e evidence and traces).
+      (pkgs.lib.fileset.fileFilter (
+        file: file.hasExt "py" || file.hasExt "json" || file.hasExt "jsonl"
+      ) ../tools/dev/tests)
     ];
   };
   # Sandbox callers run this build of `dev`; `checks.dev-python` runs its tests.
