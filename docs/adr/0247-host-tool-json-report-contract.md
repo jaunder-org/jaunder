@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-12
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
+- Amended: 2026-11-24 — `e2e-local` is no longer a JSON-report tool (#2066)
 
 ## Context
 
@@ -28,6 +29,14 @@ an optional `report` string for rendered tables, and an optional `evidence`
 value for a versioned machine payload. There is no sidecar, `--json` flag or
 completion sentinel. A refusal or top-level error is still one report: a single
 failed step with status 2.
+
+_Amended by #2066._ `e2e-local` has left this list and the host-proof list
+below. It now runs inside `dev` (`tools/dev/dev/e2e_local.py`), which keeps the
+same step list but prints only its rendered summary on stdout, records each step
+as a span, and uses its exit status as the verdict. That status is 1 for a
+failed lifecycle step and 128+n on a signal. Its admission and Nix build are
+ordinary `dev` steps, which end the run with their own status and no summary. No
+JSON report is written.
 
 The shared argument parser sends help and usage text to stderr and then points
 the process's stdout descriptor at stderr, reserving the real stdout for the

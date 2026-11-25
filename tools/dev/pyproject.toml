@@ -8,7 +8,13 @@ version = "0.1.0"
 description = "Jaunder developer, hook, CI and sandbox workflows with step tracing"
 requires-python = ">=3.14"
 # Versions come from the pinned nixpkgs (nix/packages.nix `devPythonDeps`).
-dependencies = ["click", "opentelemetry-api", "opentelemetry-sdk", "pyyaml"]
+dependencies = [
+    "click",
+    "opentelemetry-api",
+    "opentelemetry-sdk",
+    "psutil",
+    "pyyaml",
+]
 
 [project.scripts]
 dev = "dev.__main__:main"

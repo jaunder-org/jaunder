@@ -94,15 +94,7 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             "wasm-audit",
             "source-diagnostics",
             "trace-analysis",
-            "e2e-local",
         ]
-    ),
-    (
-        ["e2e-local", "--browser", "firefox", "end2end/tests/auth.spec.ts:12"],
-        [
-            *build("host-proof"),
-            words("e2e-local --browser firefox end2end/tests/auth.spec.ts:12"),
-        ],
     ),
     (
         ["org-timezone-manifest", "a.org", SHELL_SYNTAX],
@@ -406,7 +398,7 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
 
 
 @pytest.mark.parametrize("output", [b"not a report\n", b"", b" \n"])
-@pytest.mark.parametrize("command", ["wasm-audit", "coverage-check", "e2e-local"])
+@pytest.mark.parametrize("command", ["wasm-audit", "coverage-check"])
 def test_report_tools_fail_closed_without_a_report(
     checkout: Checkout, command: str, output: bytes
 ) -> None:
@@ -425,7 +417,6 @@ def test_report_tools_fail_closed_without_a_report(
         "wasm-audit",
         "source-diagnostics",
         "trace-analysis",
-        "e2e-local",
         "coverage-check",
     ],
 )

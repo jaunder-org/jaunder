@@ -32,12 +32,12 @@ pub fn validate(root: &Path) -> anyhow::Result<PathBuf> {
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use std::fs;
 
     use super::*;
     // Sanitized Vite contract fixture; it is not runnable wasm or a startup proof.
-    pub(crate) fn write_bundle(root: &Path) -> host::vite_manifest::CsrViteOutputs {
+    fn write_bundle(root: &Path) -> host::vite_manifest::CsrViteOutputs {
         let inventory = host::system_theme::compile_system_artifact_inventory().unwrap();
         host::system_theme::stage_system_artifact_inventory(
             &inventory,

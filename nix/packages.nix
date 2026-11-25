@@ -505,7 +505,6 @@ let
       "admit-inputs"
       "csr-prerequisite"
       "e2e-evidence"
-      "e2e-local"
       "source-diagnostics"
       "trace-analysis"
       "wasm-audit"
@@ -805,6 +804,8 @@ let
     ps.opentelemetry-sdk
     # `dev pr-watch` reads workflow files for check membership.
     ps.pyyaml
+    # `dev e2e-local` stops each child's descendants, as well as its group.
+    ps.psutil
   ];
   devPython = pkgs.python3.withPackages devPythonDeps;
   devPythonCheck = pkgs.python3.withPackages (
@@ -813,6 +814,7 @@ let
     ++ [
       ps.coverage
       ps.mypy
+      ps.types-psutil
       ps.types-pyyaml
       ps.pytest
       # Tests that read GitHub workflows find their steps by YAML structure.

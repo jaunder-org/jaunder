@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-11-20
 - Issue: [#1968](https://github.com/jaunder-org/jaunder/issues/1968)
+- Amended: 2026-11-24 — `host-proof` no longer ships `e2e-local` (#2066)
 
 ## Context
 
@@ -32,7 +33,9 @@ packages:
 
 - `repository-policy`: source-contracts, repository-docs, org-timezone-manifest,
   scoped-leptosfmt
-- `host-proof`: every host-proof binary
+- `host-proof`: every host-proof binary. _Amended by #2066:_ `e2e-local` is no
+  longer one. It runs inside `dev`, and only its admission step reaches
+  host-proof (`admit-inputs`).
 - `coverage-check` (the `coverage` crate with its `host` feature)
 - `perf-data`
 - `pr-observer`

@@ -4,8 +4,8 @@ let
   postgresTestingVmSystem = "x86_64-linux";
   # Part of the canonical e2e-server env-var set that the VM systemd unit and
   # the host `dev e2e-local` driver both source (names shared, values
-  # per-environment). The full documented list lives in
-  # `tools/host-proof/src/steps/e2e_local.rs` (module docs). See issue #249.
+  # per-environment). The host's full list is the environment
+  # `tools/dev/dev/e2e_local.py` gives each `jaunder serve`. See issue #249.
   captureEnv = {
     # The single capture-dir contract (#227): the server writes mail.jsonl,
     # websub.jsonl, and diag.log into this dir, and the e2e otel-collector writes

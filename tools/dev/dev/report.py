@@ -1,4 +1,4 @@
-"""The human view of a host-proof JSON report.
+"""The human view of a step report: a host-proof tool's JSON, or `dev`'s own.
 
 A diagnostic's rendered `report` (trace tables) comes first, verbatim, then one
 line per step. The producing executable's exit status remains the verdict.
@@ -8,7 +8,8 @@ import json
 from typing import Any
 
 
-def _render(report: Any) -> str:
+def render_report(report: Any) -> str:
+    """A report already in hand, as a dict, rendered."""
     lines = []
     if report.get("report"):
         lines.append(report["report"])
@@ -30,6 +31,6 @@ def render(document: bytes) -> str | None:
     so empty output is not a report either.
     """
     try:
-        return _render(json.loads(document))
+        return render_report(json.loads(document))
     except ValueError, LookupError, TypeError, AttributeError:
         return None

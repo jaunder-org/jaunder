@@ -4304,18 +4304,26 @@ timestamp is the sole dynamic mask.
 Normal host/VM differences are invocation flags set by the host driver —
 `--reporter=html,line`, `PLAYWRIGHT_HTML_OPEN=never`, and a default of
 `JAUNDER_E2E_WORKERS=1` (the host serves a debug CSR build; the VM keeps the
-config default of 2). The host loop is `dev e2e-local` (host-proof's
-`e2e-local`, `tools/host-proof/src/steps/e2e_local.rs`), which owns build, spawn
-of one `HostServerSession` per worker on its own ephemeral port and SQLite
+config default of 2). The host loop is `dev e2e-local`
+(`tools/dev/dev/e2e_local.py`, Python inside `dev` since #2066), which owns the
+build, one `jaunder serve` per worker on its own ephemeral port and SQLite
 database, seeding each, Playwright, stop/reap, and per-instance diagnostics
-verification. A positional filter applies to the browser's one project, with no
-prerequisite ordering. The driver drains Playwright's output while it runs, so a
-large report cannot block it on a full pipe. Its `--update-visual-snapshots`
-mode builds release CSR once, then gives Chromium and Firefox separate complete
-server/database/capture lifecycles. Each instance's stderr is streamed unchanged
-to the live terminal and a file in its capture subdirectory; stopping the child
-closes the pipe so the driver can drain that journal-equivalent input before
-invoking the shared zero-panic verifier for that instance.
+verification. Every child runs in its own process group (`dev/supervision.py`).
+A stop sends TERM to the group, waits ten seconds, then KILLs the group and the
+descendants a `psutil` snapshot found, so Playwright's detached browsers are
+included. A first INT/TERM/HUP stops the running consumer and runs teardown in
+full. A further signal, or any signal during a server stop, escalates that stop.
+The run exits 128+n. Readiness matches `runtime.json`'s pid against the child,
+which `dev` holds unreaped until teardown. Each step is printed in the summary
+on stdout and recorded as a span. A positional filter applies to the browser's
+one project, with no prerequisite ordering. The driver drains Playwright's
+output while it runs, so a large report cannot block it on a full pipe. Its
+`--update-visual-snapshots` mode builds release CSR once, then gives Chromium
+and Firefox separate complete server/database/capture lifecycles. Each
+instance's stderr is streamed unchanged to the live terminal and a file in its
+capture subdirectory; stopping the child closes the pipe so the driver can drain
+that journal-equivalent input before invoking the shared zero-panic verifier for
+that instance.
 
 Ordinary host E2E selects `.#sandboxArtifacts`: a source-consistent immutable
 set with debug-profile server and seed executables and the selected debug CSR
@@ -4345,9 +4353,8 @@ sandboxes. It builds the focused root-workspace `ux-sandbox` binary and forwards
 exact argv. One Tokio runtime directly owns async processkit children/groups;
 the helper has COTS-only dependencies, with no host-tool, host or test-support
 Rust dependency and no shared-runtime crate. The former host-driver sandbox CLI,
-dispatch and result/report path are retired. Host-proof's `host_server`,
-`host_signals`, and `process` modules serve `e2e-local`; they are not a shared
-sandbox runtime.
+dispatch and result/report path are retired. `dev e2e-local`'s Python process
+supervision is not a shared sandbox runtime.
 
 The helper builds current debug host artifacts, starts on an ephemeral loopback
 port, prints the discovered URL, and owns foreground signal handling. Omitted
@@ -4404,11 +4411,10 @@ existing `server/build.rs` build staging remains in use. Profile seeding stays
 an out-of-process `test-support seed-sandbox-profile` operation under ADR-0046;
 its stdout is captured and withheld from operational command output while stderr
 and exact child status are retained. The helper owns its narrow runtime-info
-identity/address parser and HTTP readiness probe rather than exposing the e2e
-host driver's private session adapters. Once ready, it prints the URL and, for a
-nonempty profile (including a named resume's recorded profile), the seeded
-`user` and `operator` development credentials. Empty profiles do not print
-credential hints.
+identity/address parser and HTTP readiness probe rather than sharing
+`dev e2e-local`'s. Once ready, it prints the URL and, for a nonempty profile
+(including a named resume's recorded profile), the seeded `user` and `operator`
+development credentials. Empty profiles do not print credential hints.
 
 First SIGINT/SIGTERM initiates graceful drain; ProcessKit owns the ten-second
 automatic group-stop escalation. A subsequent SIGINT may force earlier; repeated
@@ -4446,9 +4452,9 @@ bridges reduces ownership indirection and cross-package coupling. The focused
 package, manifest, separately filtered Nix helper bootstrap, application
 artifact composition and duplicate readiness adapter are retained costs.
 Lifecycle and storage responsibility stays in the helper; independent e2e
-orchestration stays in host-proof's `e2e-local`. Neither responsibility is
-eliminated. This is a structural simplification, not a performance-improvement
-or cache-hit claim.
+orchestration stays in `dev e2e-local`. Neither responsibility is eliminated.
+This is a structural simplification, not a performance-improvement or cache-hit
+claim.
 
 Specs are parallel-safe by construction. Per-test identity fixtures in
 `end2end/tests/provisioning.ts`, composed only by `end2end/tests/fixtures.ts`
@@ -5353,9 +5359,9 @@ is limited to `scripts/` host scripts that run commands and check their results,
 with traps only for cleanup or failed-step reporting and concurrency only from
 standard tools; signal forwarding, supervising long-lived children, or data
 shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
-steps is outside the rule. Under that decision `e2e-local` and `perf-data` move
-to Python, each in its own follow-up; `pr-observer` has already become the
-native `dev pr-watch`
+steps is outside the rule. Under that decision `perf-data` moves to Python in
+its own follow-up; `e2e-local` has already moved into `dev` (#2066), and
+`pr-observer` has already become the native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
 [upgrade test](adr/0265-upgrade-test.md). Until the remaining moves land the
@@ -5376,10 +5382,10 @@ placements below describe the current tree:
   shared argument parser points fd 1 at stderr and reserves the real stdout for
   that report, so child output goes to stderr; the exit status is the verdict.
   `dev` renders the human view from it (`tools/dev/dev/report.py`).
-- **`tools/host-proof`** — focused host proof (ADR-0246): direct `e2e-local` and
-  `trace-analysis` executables behind the matching `dev` commands; trace
-  analysis carries its rendered tables in the report's `report` field. Each
-  prints exactly one JSON report on stdout (steps, outcomes, durations, details,
+- **`tools/host-proof`** — focused host proof (ADR-0246): the direct
+  `trace-analysis` executable behind the matching `dev` command; trace analysis
+  carries its rendered tables in the report's `report` field. Each prints
+  exactly one JSON report on stdout (steps, outcomes, durations, details,
   verdict) and sends child output to stderr; its exit status is the verdict.
   `dev` renders the human step view; there is no sidecar, `--json` flag or
   completion sentinel. Only its `csr-prerequisite` executable joins the calling
@@ -5716,10 +5722,10 @@ checker registry, runner, supervisor or replacement omnibus:
   interfaces, shared checkout admission and best-effort `core.hooksPath`
   preparation (every host tool calls it before its workload).
 - `tools/host-tool` — the shared host-tool report contract.
-- `tools/host-proof` — focused proof (`e2e-local`, and `test-local`'s
-  `admit-inputs` and `csr-prerequisite` steps), artifact-only e2e verdicts
-  (`e2e-evidence`) and host diagnostics (`trace-analysis`, `wasm-audit`,
-  `source-diagnostics`).
+- `tools/host-proof` — focused proof (`admit-inputs`, which `test-local` and
+  `e2e-local` admit through, and `test-local`'s `csr-prerequisite` step),
+  artifact-only e2e verdicts (`e2e-evidence`) and host diagnostics
+  (`trace-analysis`, `wasm-audit`, `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

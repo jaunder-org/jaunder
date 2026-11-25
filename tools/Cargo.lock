@@ -1524,10 +1524,8 @@ dependencies = [
  "flate2",
  "host",
  "host-tool",
- "jiff",
  "opentelemetry",
  "opentelemetry_sdk",
- "processkit",
  "regex",
  "repository-policy",
  "rustc-demangle",
@@ -1537,11 +1535,9 @@ dependencies = [
  "tabled",
  "tar",
  "tempfile",
- "tokio",
  "url",
  "wasm-encoder",
  "wasmparser",
- "xshell",
  "yaml_serde",
 ]
 

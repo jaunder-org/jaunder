@@ -478,6 +478,7 @@ def nix_build(
     keep: bool = True,
     refusal: Callable[[str], str | None] | None = None,
     finished: Callable[[Span, int], None] | None = None,
+    link: str | None = None,
 ) -> str:
     """Builds one installable as the step `name`; returns its output path.
 
@@ -485,7 +486,8 @@ def nix_build(
     leaves the evaluation cached for the child step `build`: the flake is
     evaluated once, and the evaluation is timed. A derivation path (one that
     starts with `/`) has nothing to evaluate. `keep` holds the output as the GC
-    root GCROOTS/`name`; `refusal`, if given, judges the printed output as
+    root `link`, by default GCROOTS/`name`: a caller that may run concurrently
+    with itself names its own. `refusal`, if given, judges the printed output as
     `text` judges its text.
 
     For the one output path a build printed, the step then records it, where it
@@ -497,10 +499,11 @@ def nix_build(
     `finished` is as for `run`, for the `build` step: what the builder timed
     itself belongs under it.
     """
+    root = link or f"{GCROOTS}/{name}"
     if keep:
-        Path(GCROOTS).mkdir(parents=True, exist_ok=True)
-    link = ["--out-link", f"{GCROOTS}/{name}"] if keep else ["--no-link"]
-    argv = ["nix", "build", "-L", *flags, "--print-out-paths", *link, installable]
+        Path(root).parent.mkdir(parents=True, exist_ok=True)
+    out_link = ["--out-link", root] if keep else ["--no-link"]
+    argv = ["nix", "build", "-L", *flags, "--print-out-paths", *out_link, installable]
     with trace.tracer().start_as_current_span(name) as span:
         try:
             if installable.startswith("/"):
