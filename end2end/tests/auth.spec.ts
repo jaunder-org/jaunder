@@ -1,3 +1,4 @@
+import type { Request } from "@playwright/test";
 import { test, expect } from "./fixtures";
 import { createPerfProbe } from "./perf";
 import {
@@ -455,6 +456,65 @@ test("logout page logs out", async ({ page, user }) => {
   // The header drops the Account control, and the footer shows no sign-in link.
   await expect(page.locator(SEL.accountControl)).toHaveCount(0);
   await expect(page.locator(".j-sb-foot a[href='/login']")).toHaveCount(0);
+});
+
+test("a session check sent before sign-out does not restore the session after it", async ({
+  page,
+  user,
+}) => {
+  // #2114: the check `/logout` starts goes out with the still-valid cookie. Its
+  // signed-in answer must not land after sign-out has already reached Local.
+  const title = "Signed-out landing";
+  const masthead = `${SEL.topbarHeading}:has-text("${title}")`;
+  await seedConfigViaTool("site.title", title);
+  await signInAs(page, user.username);
+  await goto(page, "/app");
+  // The Account page renders only once its own session check has settled.
+  await openArea(page, "/account", SEL.signOutLink);
+
+  let staleCheck: Request | undefined;
+  let staleBody = "";
+  let markAnswered!: () => void;
+  const answered = new Promise<void>((resolve) => {
+    markAnswered = resolve;
+  });
+  const releaseLogout = await stallServerFn(page, "auth/logout");
+  const releaseCheck = await stallServerFn(
+    page,
+    "auth/get_session",
+    (request) => {
+      if (staleCheck) return false;
+      staleCheck = request;
+      return true;
+    },
+    async (response) => {
+      staleBody = await response.text();
+      markAnswered();
+    },
+  );
+
+  await navigateInApp(
+    page,
+    async () => {
+      await click(page, SEL.signOutLink);
+      // The server answers the check before it sees the logout.
+      await answered;
+      releaseLogout();
+    },
+    { url: "/", ready: masthead },
+  );
+  expect(staleBody).toContain(user.username);
+
+  const nextCheck = page.waitForResponse(
+    (response) =>
+      response.url().endsWith("/api/auth/get_session") &&
+      response.request() !== staleCheck,
+  );
+  releaseCheck();
+  expect(await (await nextCheck).json()).toBeNull();
+  await expect(page).toHaveURL(`${BASE_URL}/`);
+  await expect(page.locator(masthead)).toBeVisible();
+  await expect(page.locator(SEL.accountControl)).toHaveCount(0);
 });
 
 test("sidebar reverts to signed-out state after logout", async ({

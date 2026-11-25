@@ -19,7 +19,9 @@ pub struct SessionContext {
     /// Synchronously readable for chrome.
     pub current: RwSignal<Option<SessionUser>>,
     /// Per-navigation server confirmation. Awaiting it yields the authoritative
-    /// (cookie-checked) session for gates that must not trust a stale marker.
+    /// (cookie-checked) session for gates that must not trust a stale marker. The
+    /// one client-written value is sign-out's anonymous answer (`clear_session`),
+    /// which can only deny.
     pub reconcile: Resource<WebResult<Option<SessionUser>>>,
 }
 impl SessionContext {
@@ -90,9 +92,14 @@ pub fn set_session(user: SessionUser) {
     use_session().set(user);
 }
 
-/// Optimistically clear the session (logout) — `current` signal + marker.
+/// Optimistically clear the session (logout) — `current` signal + marker — and
+/// record the sign-out as the reconcile's answer. A check sent before the logout
+/// (the one `/logout`'s own navigation starts) carried the still-valid cookie;
+/// writing the Resource drops it when it completes, so its signed-in answer
+/// cannot restore the session or trigger the `/` → `/app` recovery (#2114).
 pub fn clear_session() {
     let ctx = use_session();
     marker_storage::remove();
     ctx.current.set(None);
+    ctx.reconcile.set(Some(Ok(None)));
 }
