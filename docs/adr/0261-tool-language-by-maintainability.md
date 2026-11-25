@@ -32,23 +32,27 @@ does not decide a verdict. A development or CI tool is Python unless it:
 
 - links product crates it genuinely needs, such as a storage benchmark driving
   `storage`; or
-- needs Rust-specific parsing, such as `syn` over Rust source or wasm section
-  parsing.
+- needs Rust-specific parsing, such as `syn` over Rust source, that no
+  maintained standalone tool already provides as consumable output. _Amended by
+  #1974._ This bullet previously also named "wasm section parsing" as an
+  example; `twiggy` now provides that.
 
 Process sequencing, subprocess calls (`gh`, `git`, `nix`), JSON and YAML
 shaping, statistics and state machines are Python's ground.
 
-_Clarified by #1974._
+_Amended by #1974._
 
-- **Specialized parsing only counts when no maintained tool already does it.**
-  The Rust-specific parsing exception holds only when no maintained tool already
-  does the parsing. For example, `twiggy` reads wasm sections and names and
-  demangles Rust symbols. A tool that only consumes its output is Python.
+- **A maintained standalone tool supersedes the parsing exception.** A
+  maintained standalone tool can do the specialized parsing and emit output
+  another program consumes. For example, `twiggy` reads wasm names and demangles
+  Rust symbols into JSON. A tool that only reads such output is Python. `syn` is
+  a library rather than a standalone tool, so linking it still qualifies.
 - **A thin command-line wrapper joins its Rust owner.** If a tool is a thin
   command-line wrapper over logic that a Rust owner keeps for its own use, it
   joins that owner rather than being ported.
 - **Repository contract tests are Python.** These are tests that check YAML, Nix
-  and shell contracts rather than a Rust interface.
+  and shell contracts rather than a Rust interface. Tests that run a tool's own
+  executable move with that tool.
 
 **Product facts come from product interfaces.** A host tool that links product
 code only to learn a fact, such as an inventory, a manifest or a format version,
@@ -59,7 +63,9 @@ instead of linking.
 language does not make the reader Rust. The writer publishes a JSON Schema
 generated from its own types, committed with a drift check
 ([ADR-0109](0109-cross-language-literal-agreement.md)), and every reader
-validates against it.
+validates against it. _Amended by #1974._ A single shared literal, such as a
+file name or a manifest key, needs no schema. Each side defines it as a named
+constant, and ADR-0109's literal agreement pins the two together.
 
 **Shell** is allowed only for host scripts in `scripts/`. Shell inside Nix
 builders and `run:` steps in GitHub workflows is out of scope. A bash script
@@ -116,10 +122,12 @@ fixed indentation, which is data shaping beyond `jq`. It moves to Python
   ([ADR-0239](0239-qualification-workflow-ownership.md)) are dropped. Their
   rules are already tested in ordinary CI on both backends.
 
-**`tools/host-proof` verdicts** (_added by #1974_). Each of the crate's
-executables and its contract tests gets a verdict. The crate's original split
-(#1974) is dropped: once these moves land, the crate and `packages.host-proof`
-are retired.
+**`tools/host-proof` verdicts.** _Amended by #1974._ Each of the crate's
+executables and its tests gets a verdict. #1974 first proposed splitting the
+crate by domain, so that edits to one domain would stop rebuilding CI's E2E
+evidence verifier. These verdicts overtake that proposal: once the moves land,
+the crate and `packages.host-proof` no longer exist, and the Python tools need
+no Nix build.
 
 - **`e2e-evidence` and `trace-analysis` move into `tools/dev` as Python.**
   - _What they are:_ the E2E verdict (lane completeness, duration budget, boot
@@ -129,16 +137,21 @@ are retired.
     serve both. The `trace-analysis` commands are ported on top of that core and
     kept for wider use; they are separate from `dev`'s own Perfetto trace.
   - _Product facts:_
-    - The capture archive layout from `host::capture` is pinned under
-      [ADR-0109](0109-cross-language-literal-agreement.md).
-    - The `syn` inventory of server functions stays in `repository-policy`,
-      which emits it as JSON against a schema generated from its types.
+    - The capture archive layout from `host::capture` (instance directory and
+      stream file names) is pinned under
+      [ADR-0109](0109-cross-language-literal-agreement.md). This requires new
+      named constants on the Rust side, because today the layout is built with
+      `format!`.
+    - The `syn` inventory of server functions stays in `repository-policy`. That
+      package gains a command that emits it as JSON, validated against a schema
+      generated from its types.
 - **`wasm-audit` moves into `tools/dev` as Python.**
   - _The CI budget_ is the raw size of the selected wasm file.
-  - _The manual breakdown_ delegates parsing and demangling to `twiggy`. The
-    #1974 probe showed that `twiggy top -f json` attributes every byte of the
-    unstripped `csrWasm`. Python rolls its items up by crate and walks the
-    section table.
+  - _The manual breakdown_ takes function names, sizes and demangling from
+    `twiggy`'s JSON. Python rolls the items up by crate. It also reads only the
+    section headers (an id and a length) to keep the per-section table and the
+    check that the sections account for the whole file. It interprets no section
+    contents.
   - _Product fact:_ the Vite manifest key that selects the wasm is pinned under
     ADR-0109.
 - **`csr-prerequisite` is retired.** `server/build.rs` runs the same
@@ -149,12 +162,23 @@ are retired.
   `repository_policy::checkout`, which that package keeps for its own source
   admission.
 - **`source-diagnostics` (the cache-safety probe) moves into `tools/dev` as
-  Python and runs in `ci-validate-host`.** It is
-  [ADR-0252](0252-substitutable-static-verdicts.md)'s guard that final verdicts
-  stay out of Cachix. No gate ran it before, so it guarded nothing.
-- **The repository contract tests in `tools/host-proof/tests` become pytest.**
-  These are the devShell, e2e VM script, hook, workflow and matrix-topology
-  tests. None of them tests a host-proof executable.
+  Python and runs in `ci-validate-host`.** Its work is `nix eval`, JSON and
+  regex. It is [ADR-0252](0252-substitutable-static-verdicts.md)'s guard that
+  final verdicts stay out of Cachix. No gate ran it before, so it guarded
+  nothing.
+- **Tests in `tools/host-proof/tests` follow their subject.**
+  - Tests that run a host-proof executable move with that executable's
+    follow-up:
+    - `e2e_workflow.rs` (`e2e-evidence`);
+    - `admit_inputs.rs` (`admit-inputs`);
+    - `checkout_admission.rs` (the probe).
+  - `span_records.rs` retires with `csr-prerequisite`.
+  - The repository contract tests become pytest:
+    - `dev_shell_tmpdir.rs`;
+    - `e2e_vm_contract.rs`;
+    - `workflow_callers.rs`;
+    - `e2e_topology.rs`;
+    - `performance_workflow.rs`.
 
 ## Consequences
 
@@ -171,14 +195,16 @@ are retired.
 - The `tools/host-proof` verdicts are follow-ups under #1859, each amending the
   ADRs it touches:
 
-  | Issue                                                       | Move                                                            | ADRs it amends                                                         |
-  | ----------------------------------------------------------- | --------------------------------------------------------------- | ---------------------------------------------------------------------- |
-  | [#2100](https://github.com/jaunder-org/jaunder/issues/2100) | `e2e-evidence` and `trace-analysis`                             | ADR-0246, ADR-0247, ADR-0258                                           |
-  | [#2101](https://github.com/jaunder-org/jaunder/issues/2101) | `wasm-audit`                                                    | [ADR-0106](0106-wasm-raw-size-budget.md), ADR-0246, ADR-0247, ADR-0258 |
-  | [#2102](https://github.com/jaunder-org/jaunder/issues/2102) | `admit-inputs`, `csr-prerequisite` and the OpenTelemetry writer | [ADR-0251](0251-dev-runner-replaces-just.md), ADR-0258                 |
-  | [#2103](https://github.com/jaunder-org/jaunder/issues/2103) | cache-safety probe                                              | ADR-0252, ADR-0258                                                     |
-  | [#2104](https://github.com/jaunder-org/jaunder/issues/2104) | contract tests                                                  | none                                                                   |
-  | [#2105](https://github.com/jaunder-org/jaunder/issues/2105) | retire the crate                                                | ADR-0246's "focused host proof" concern                                |
+  | Issue                                                       | Move                                                            | ADRs it amends                                                                                                                  |
+  | ----------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+  | Issue                                                       | Move                                                            | ADRs it amends                                                                                                                  |
+  | ---                                                         | ---                                                             | ---                                                                                                                             |
+  | [#2100](https://github.com/jaunder-org/jaunder/issues/2100) | `e2e-evidence` and `trace-analysis`                             | ADR-0246, ADR-0247, ADR-0258; [ADR-0165](0165-playwright-report-defines-trace-gate-population.md) if its tool references change |
+  | [#2101](https://github.com/jaunder-org/jaunder/issues/2101) | `wasm-audit`                                                    | [ADR-0106](0106-wasm-raw-size-budget.md), ADR-0246, ADR-0247, ADR-0251, ADR-0258                                                |
+  | [#2102](https://github.com/jaunder-org/jaunder/issues/2102) | `admit-inputs`, `csr-prerequisite` and the OpenTelemetry writer | ADR-0246, ADR-0247, ADR-0251, ADR-0258                                                                                          |
+  | [#2103](https://github.com/jaunder-org/jaunder/issues/2103) | the cache-safety probe                                          | ADR-0246, ADR-0247, ADR-0252, ADR-0258                                                                                          |
+  | [#2104](https://github.com/jaunder-org/jaunder/issues/2104) | the repository contract tests                                   | none                                                                                                                            |
+  | [#2105](https://github.com/jaunder-org/jaunder/issues/2105) | retiring the crate                                              | ADR-0246 (ends the "focused host proof" concern), ADR-0247, ADR-0258                                                            |
 
 - Accepted losses from the host-proof verdicts:
   - `csr-prerequisite`'s separately named early failure; the server build fails
@@ -186,7 +212,8 @@ are retired.
   - Its two sub-phase spans.
   - Any Rust process joining a `dev` trace.
   - The one-JSON-stdout report form of the moved tools. Their verdicts, exit
-    codes and committed snapshots are kept.
+    codes and fail-closed order are kept, and regeneration of the committed
+    server-function snapshot stays byte-identical.
 - Until each follow-up lands, the current tool stays in place.
 - `e2e-local` in Python loses the Rust aarch64-darwin start-time token from
   `libproc`, and must otherwise preserve the readiness, signal, cleanup and

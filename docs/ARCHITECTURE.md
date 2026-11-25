@@ -5387,9 +5387,10 @@ decision).
 Maintainability chooses the language of infrastructure
 ([infrastructure language by maintainability](adr/0261-tool-language-by-maintainability.md)).
 A tool is Python unless it links product crates it genuinely needs or needs
-Rust-specific parsing that no maintained tool already provides. A thin command
-over logic a Rust owner keeps for itself joins that owner. Product facts come
-from product commands or files rather than linked product code. A reader in
+Rust-specific parsing, such as `syn`, that no maintained standalone tool already
+provides as consumable output. A thin command over logic a Rust owner keeps for
+itself joins that owner, and repository contract tests are Python. Product facts
+come from product commands or files rather than linked product code. A reader in
 another language parses data its Rust writer has already validated, with no
 generated schema and no second validation; format drift fails loudly at the
 reader
@@ -5405,7 +5406,7 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 `qualification` has been retired for the
 [upgrade test](adr/0265-upgrade-test.md).
 
-`tools/host-proof` is retired across its own follow-ups (#1974):
+`tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
 
 - `e2e-evidence`, `trace-analysis` (on one shared trace core), `wasm-audit`
   (with `twiggy` for the breakdown) and the cache-safety probe move into `dev`
@@ -5432,15 +5433,16 @@ Until the remaining moves land, the placements below describe the current tree:
   shared argument parser points fd 1 at stderr and reserves the real stdout for
   that report, so child output goes to stderr; the exit status is the verdict.
   `dev` renders the human view from it (`tools/dev/dev/report.py`).
-- **`tools/host-proof`** — focused host proof (ADR-0246): the direct
-  `trace-analysis` executable behind the matching `dev` command; trace analysis
-  carries its rendered tables in the report's `report` field. Each prints
-  exactly one JSON report on stdout (steps, outcomes, durations, details,
-  verdict) and sends child output to stderr; its exit status is the verdict.
-  `dev` renders the human step view; there is no sidecar, `--json` flag or
-  completion sentinel. Only its `csr-prerequisite` executable joins the calling
-  `dev` run's trace, through `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`,
-  writing its validation phases as span records with the Rust OpenTelemetry SDK
+- **`tools/host-proof`** (retiring; see the pending moves above) — focused host
+  proof (ADR-0246): the direct `trace-analysis` executable behind the matching
+  `dev` command; trace analysis carries its rendered tables in the report's
+  `report` field. Each prints exactly one JSON report on stdout (steps,
+  outcomes, durations, details, verdict) and sends child output to stderr; its
+  exit status is the verdict. `dev` renders the human step view; there is no
+  sidecar, `--json` flag or completion sentinel. Only its `csr-prerequisite`
+  executable joins the calling `dev` run's trace, through
+  `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its validation
+  phases as span records with the Rust OpenTelemetry SDK
   ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Its
   `admit-inputs` and `csr-prerequisite` executables are steps of
   `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR
