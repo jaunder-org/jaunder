@@ -235,7 +235,10 @@ mod tests {
             assert!(!state.loading.get());
 
             state.finish_list_load(superseded, Ok(list_page(1)));
+            state.finish_list_load(superseded, Err("stale failure".to_owned()));
             assert_eq!(state.page.get(), Some(list_page(2)));
+            assert!(state.error.get().is_none());
+            assert!(!state.loading.get());
 
             let failing = state.begin_list_load();
             assert!(state.loading.get());
