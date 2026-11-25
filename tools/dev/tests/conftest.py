@@ -193,7 +193,6 @@ TOOL_PACKAGES = {
         "admit-inputs",
         "csr-prerequisite",
         "e2e-evidence",
-        "e2e-local",
         "source-diagnostics",
         "trace-analysis",
         "wasm-audit",
@@ -299,7 +298,7 @@ case "$name $*" in
   'csr-prerequisite '*)
     for root; do :; done
     printf '/verified%s\n' "$root" ;;
-  'admit-inputs '*|'e2e-evidence '*|'e2e-local '*|'source-diagnostics '*|\
+  'admit-inputs '*|'e2e-evidence '*|'source-diagnostics '*|\
   'trace-analysis '*|'wasm-audit '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac

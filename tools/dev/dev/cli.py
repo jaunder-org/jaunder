@@ -13,6 +13,7 @@ from dev import (
     checkout,
     csr,
     e2e,
+    e2e_local,
     forwarding,
     gates,
     issues,
@@ -241,8 +242,6 @@ for _binary, _summary in {
     "source-diagnostics": "Eval-only Nix guard: cache-safety-probe.",
     "trace-analysis": "Manual OTel trace diagnostics: analyze <files> | "
     "run [--single-worker] | boot-phases <files>.",
-    "e2e-local": "Focused browser proof: [--browser B] [spec-or-file:line] or "
-    "--update-visual-snapshots.",
 }.items():
     _forwarding(
         _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
@@ -320,6 +319,43 @@ def perf_import_baseline(run_id: str) -> None:
 def e2e_command(jobs: str) -> None:
     """Every E2E producer, at most JOBS at once, then every reconciliation."""
     _gate(lambda: e2e.run_all(jobs))
+
+
+@cli.command("e2e-local")
+@click.option(
+    "--browser",
+    type=click.Choice(e2e_local.BROWSERS),
+    help="Run this browser's one Playwright project (default chromium).",
+)
+@click.argument("test", required=False)
+@click.option(
+    "--update-visual-snapshots",
+    is_flag=True,
+    help="Update every Chromium and Firefox visual baseline using release CSR.",
+)
+def e2e_local_command(
+    browser: str | None, test: str | None, update_visual_snapshots: bool
+) -> None:
+    """Focused browser proof: use a spec or file:line TEST while iterating.
+
+    Rerun the same focused command after a fix. Use representative hermetic
+    `dev e2e-producer <identity>` proof when backend/browser parity,
+    release-build behavior or the hermetic environment is load-bearing; local
+    proof does not replace CI/full validation.
+
+    Each browser gets its own lifecycle: build the CSR bundle and server, start
+    one `jaunder serve` per Playwright worker on an ephemeral port with the VM's
+    capture environment and a fresh database, seed each with `test-support
+    seed-e2e`, run Playwright against them and stop everything on every exit
+    path. Visual update mode builds release CSR and updates Chromium and then
+    Firefox baselines. The step summary is on stdout; child output goes to
+    stderr.
+    """
+    if update_visual_snapshots and browser is not None:
+        raise click.UsageError("--update-visual-snapshots conflicts with --browser")
+    if update_visual_snapshots and test is not None:
+        raise click.UsageError("--update-visual-snapshots conflicts with TEST")
+    _gate(lambda: e2e_local.run(browser, test, update_visual_snapshots))
 
 
 @cli.command("e2e-producer")
