@@ -13,7 +13,7 @@ use common::{MutationOutcome, password::PasswordShape, username::Username};
 use leptos::prelude::*;
 use leptos_router::{
     NavigateOptions,
-    hooks::{use_location, use_navigate, use_query_map},
+    hooks::{use_navigate, use_query_map},
 };
 
 /// Login page.
@@ -295,32 +295,26 @@ async fn authenticate_passkey() -> PasskeyAuthentication {
 #[component]
 pub fn LogoutPage() -> impl IntoView {
     let logout_action = ServerAction::<Logout>::new();
-    let location = use_location();
-
-    // Sign out only at the Logout route: the redirect to `/` briefly mounts this
-    // page again, and that copy must not send a second logout (#2003).
     Effect::new(move |_| {
-        if crate::app::is_logout_route(&location.pathname.get_untracked()) {
-            logout_action.dispatch(Logout {});
-        }
+        logout_action.dispatch(Logout {});
     });
 
     // On logout, clear the shared session (#591): resets the reactive signal (chrome
     // goes anonymous without a reload) and removes the advisory marker (#181,
-    // ADR-0044). The server clears the real cookie.
-    Effect::new(move |_| {
-        if let Some(Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()))) =
-            logout_action.value().get()
-        {
-            super::clear_session();
-            super::use_session().reconcile.refetch();
-        }
+    // ADR-0044). The server clears the real cookie. Every successful logout carries
+    // the redirect to "/", whose navigation re-checks the session, so only a failed
+    // logout asks the server itself: the sign-out may have taken effect even
+    // though its response was lost (#2013).
+    Effect::new(move |_| match logout_action.value().get() {
+        Some(Ok(_)) => super::clear_session(),
+        Some(Err(_)) => super::use_session().reconcile.refetch(),
+        None => {}
     });
 
     // What actually paints: a "Logging out…" transient during the round-trip, then on
     // success leptos_router's redirect->pushState navigates to "/" (no full reload,
-    // #591) on the same resolution that fills the action value — so a logout
-    // *failure* (no redirect) is the only case the resolution block below can show (#649).
+    // #591) one frame after the action value fills — so a logout *failure* (no
+    // redirect) is the only case the resolution block below can show (#649).
     view! {
         <Topbar title="Logout".to_string() />
         <div class="j-scroll">

@@ -397,11 +397,37 @@ test("login with wrong password shows error", async ({ page }) => {
   await expect(page.locator(SEL.error)).toBeVisible();
 });
 
+test("a failed logout reports the error and re-checks the session", async ({
+  page,
+  user,
+}) => {
+  // A failed logout carries no redirect, so no navigation re-checks the session;
+  // the page must ask the server itself in case the sign-out took effect (#2013).
+  await signInAs(page, user.username);
+  await goto(page, "/app");
+  await failServerFn(page, "auth/logout");
+  let failed = false;
+  let sessionChecksAfterFailure = 0;
+  page.on("response", (response) => {
+    if (new URL(response.url()).pathname === "/api/auth/logout") failed = true;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/auth/get_session" && failed) {
+      sessionChecksAfterFailure += 1;
+    }
+  });
+
+  await signOutViaAccount(page);
+  await waitForSelector(page, SEL.error);
+  await expect(page).toHaveURL(`${BASE_URL}/logout`);
+  await expect.poll(() => sessionChecksAfterFailure).toBe(1);
+});
+
 test("logout page logs out", async ({ page, user }) => {
-  // #649: /logout is a pure redirect trigger — leptos_router's redirect->pushState
-  // navigates to "/" on the same resolution that would render a success message, so
-  // there is no perceivable "You have been logged out." page. This test pins that the
-  // flow ends signed-out at "/"; the LogoutPage render carries no success branch.
+  // #649: /logout is a pure redirect trigger — leptos_router fills the logout
+  // action and then navigates to "/" by pushState a frame later, so there is no
+  // perceivable "You have been logged out." page. This test pins that the flow
+  // ends signed-out at "/"; the LogoutPage render carries no success branch.
   // Seeded session (login-as-setup); the logout itself is the subject.
   await signInAs(page, user.username);
   await goto(page, "/app");

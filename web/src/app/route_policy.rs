@@ -110,16 +110,6 @@ fn private_route_matches(path: &str) -> bool {
         .any(|route| pattern_matches(route.pattern, path))
 }
 
-/// Whether `path` is the catalog's Logout route. `LogoutPage` signs out only
-/// there: the redirect to `/` switches the app shell layout, which briefly mounts
-/// the page again at `/` (#2003, #2013).
-#[must_use]
-pub fn is_logout_route(path: &str) -> bool {
-    route_catalog()
-        .iter()
-        .any(|route| route.name == "Logout" && pattern_matches(route.pattern, path))
-}
-
 fn pattern_matches(pattern: &str, path: &str) -> bool {
     let pattern_segments = pattern.trim_start_matches('/').split('/');
     let path_segments = path.trim_start_matches('/').split('/');
@@ -248,17 +238,7 @@ fn route_catalog() -> &'static [RouteDeclaration] {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        Access, PrivateDestination, is_logout_route, private_inventory_conforms, route_catalog,
-    };
-
-    #[test]
-    fn only_the_logout_path_is_the_logout_route() {
-        assert!(is_logout_route("/logout"));
-        for path in ["/", "/login", "/logout/again", "/app", ""] {
-            assert!(!is_logout_route(path), "{path:?} is not the Logout route");
-        }
-    }
+    use super::{Access, PrivateDestination, private_inventory_conforms, route_catalog};
 
     #[test]
     fn route_catalog_conforms_to_the_approved_private_inventory() {

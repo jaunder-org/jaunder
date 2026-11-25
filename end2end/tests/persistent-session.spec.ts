@@ -65,11 +65,21 @@ test("browser receives and uses a persistent Session cookie and logout clears it
     // the coverage snapshot (#2003), so the page closes only once all settle.
     const pendingApi = new Set<Request>();
     let logouts = 0;
+    let loggedOut = false;
+    let sessionChecksAfterLogout = 0;
     nextPage.on("request", (request) => {
       const path = new URL(request.url()).pathname;
       if (!path.startsWith("/api/")) return;
       pendingApi.add(request);
       if (path === "/api/auth/logout") logouts += 1;
+      if (path === "/api/auth/get_session" && loggedOut) {
+        sessionChecksAfterLogout += 1;
+      }
+    });
+    nextPage.on("response", (response) => {
+      if (new URL(response.url()).pathname === "/api/auth/logout") {
+        loggedOut = true;
+      }
     });
     const settle = (request: Request) => pendingApi.delete(request);
     nextPage.on("requestfinished", settle);
@@ -79,8 +89,11 @@ test("browser receives and uses a persistent Session cookie and logout clears it
       ready: '.j-topbar h1:has-text("Jaunder")',
     });
     await expect.poll(() => pendingApi.size).toBe(0);
-    // One sign-out is one logout, not a second dispatch after the redirect.
+    // One sign-out is one logout, not a second dispatch after the redirect, and
+    // the redirect's own session reconcile is the only check that follows it
+    // (#2013).
     expect(logouts).toBe(1);
+    expect(sessionChecksAfterLogout).toBe(1);
     await expect
       .poll(async () =>
         (await page.context().cookies(BASE_URL)).some(
