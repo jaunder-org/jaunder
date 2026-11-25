@@ -6,8 +6,8 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 
 use super::{crap, exempt, gate, report};
+use host_tool::git;
 use host_tool::report::StepResult;
-use repository_policy::git;
 
 /// Apply only host source policy to realized text + CRAP reports. The `dev`
 /// workflow must pass the hard Nix producer-status gate before invoking this leaf.
@@ -361,7 +361,7 @@ mod tests {
     #[test]
     fn run_rejects_zero_executable_lines_before_crap_evaluation() {
         let out = tempfile::tempdir().unwrap();
-        let repo_root = repository_policy::git::toplevel(std::path::Path::new(".")).unwrap();
+        let repo_root = host_tool::git::toplevel(std::path::Path::new(".")).unwrap();
         write_reports(
             out.path(),
             &format!("{repo_root}/tools/coverage/src/host/policy/run.rs:\n"),
@@ -444,7 +444,7 @@ mod tests {
     #[test]
     fn policy_leaf_accepts_complete_reports_without_producer_status() {
         let out = tempfile::tempdir().unwrap();
-        let repo_root = repository_policy::git::toplevel(std::path::Path::new(".")).unwrap();
+        let repo_root = host_tool::git::toplevel(std::path::Path::new(".")).unwrap();
         write_reports(
             out.path(),
             &format!(

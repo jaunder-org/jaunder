@@ -25,8 +25,8 @@ use std::process::Stdio;
 use anyhow::{Context, Result};
 
 use crate::host::nix;
+use host_tool::git;
 use host_tool::report::StepResult;
-use repository_policy::git;
 
 /// The ways the coverage source closure or producer boundary can drift.
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -186,7 +186,6 @@ TOOL_PACKAGES = {
     "repository-policy": (
         "source-contracts",
         "repository-docs",
-        "org-timezone-manifest",
         "scoped-leptosfmt",
     ),
     "host-proof": (

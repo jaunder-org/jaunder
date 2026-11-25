@@ -202,7 +202,7 @@ fn run_with(
 /// Scan all tracked TypeScript, TSX, and Rust source. A failed repository-root lookup or
 /// tracked-file census is a failed gate: treating either as an empty population would disable it.
 pub fn run() -> std::result::Result<Option<String>, String> {
-    let top = match crate::git::toplevel(Path::new(".")) {
+    let top = match host_tool::git::toplevel(Path::new(".")) {
         Ok(top) => top,
         Err(error) => {
             return Err(format!("cannot enumerate tracked sources: {error}"));
@@ -211,7 +211,7 @@ pub fn run() -> std::result::Result<Option<String>, String> {
     let top = Path::new(&top);
     let mut tracked = Vec::new();
     for glob in ["*.ts", "*.tsx", "*.rs"] {
-        match crate::git::tracked_files(top, glob) {
+        match host_tool::git::tracked_files(top, glob) {
             Ok(files) => tracked.extend(files),
             Err(error) => {
                 return Err(format!("cannot enumerate tracked sources: {error}"));

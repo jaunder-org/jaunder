@@ -17,7 +17,7 @@ struct Cli {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    match repository_policy::checkout::admit_untracked_inputs(Path::new("."), &cli.source_admits) {
+    match host_tool::checkout::admit_untracked_inputs(Path::new("."), &cli.source_admits) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("admit-inputs: {error:#}");

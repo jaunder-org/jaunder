@@ -13,7 +13,7 @@ struct Workflow {
 impl Workflow {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let git = repository_policy::git::at(root.path())
+        let git = host_tool::git::at(root.path())
             .args(["init", "--quiet"])
             .output()
             .unwrap();

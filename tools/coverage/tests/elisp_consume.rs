@@ -5,7 +5,7 @@ use std::path::Path;
 use std::process::{Command, Output};
 
 fn git(dir: &Path, args: &[&str]) -> Output {
-    let output = repository_policy::git::at(dir)
+    let output = host_tool::git::at(dir)
         .args(args)
         .env("GIT_EDITOR", "true")
         .output()

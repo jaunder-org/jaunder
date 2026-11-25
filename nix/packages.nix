@@ -893,6 +893,8 @@ let
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
+      # Host-run Git/checkout admission and reports; no in-derivation producer links it.
+      && !(pkgs.lib.hasPrefix "tools/host-tool/" relative && relative != "tools/host-tool/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
       && !(pkgs.lib.hasPrefix "tools/coverage/tests/" relative)
       && !(pkgs.lib.hasPrefix "tools/doctests/tests/" relative)
@@ -943,6 +945,7 @@ let
       ];
     assert toolsSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-MIT" "regular";
     assert toolsSourceFilter "${toString (craneLib.path ../.)}/vendor/LICENSE-APACHE" "regular";
+    assert !(toolsSourceFilter "${toString (craneLib.path ../.)}/tools/host-tool/src/git.rs" "regular");
     withWorkspacePlaceholders "jaunder-tools-cargo-source"
       (pkgs.lib.cleanSourceWith {
         src = craneLib.path ../.;
@@ -956,6 +959,7 @@ let
         "web"
         "tools/repository-policy"
         "tools/host-proof"
+        "tools/host-tool"
       ];
   # `checks.tools-doctests` documents every tools member, so the members toolsSrc
   # carries as placeholders are real here, with the files their libraries compile
@@ -965,6 +969,7 @@ let
       hostRunMembers = [
         "tools/repository-policy"
         "tools/host-proof"
+        "tools/host-tool"
       ];
     in
     withWorkspacePlaceholders "jaunder-tools-doctests-source"

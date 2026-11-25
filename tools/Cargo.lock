@@ -1545,10 +1545,12 @@ dependencies = [
 name = "host-tool"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "clap",
  "rustix",
  "serde",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
@@ -3346,14 +3348,13 @@ name = "repository-policy"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "common",
  "glob",
+ "host-tool",
  "oxc_allocator",
  "oxc_ast",
  "oxc_ast_visit",
  "oxc_parser",
  "oxc_span",
- "oxc_syntax",
  "proc-macro2",
  "quote",
  "serde",
@@ -3361,7 +3362,6 @@ dependencies = [
  "sha2 0.10.9",
  "syn 2.0.119",
  "tempfile",
- "url",
  "xshell",
  "yaml_serde",
 ]

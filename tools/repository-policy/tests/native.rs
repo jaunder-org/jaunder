@@ -179,10 +179,9 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
           && !(builtins.pathExists (p.jaunder.src + "/${relative}"))
           && !(builtins.pathExists (p.csrWasm.src + "/${relative}"))
           && !(builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/${relative}"))
-        ) [ "tools/repository-policy/src/scoped_leptosfmt.rs" "tools/repository-policy/src/bin/scoped-leptosfmt.rs"
-            "tools/repository-policy/src/org_timezone_manifest.rs" "tools/repository-policy/src/bin/org-timezone-manifest.rs" ];
-        common = tool.cargoSourceAdmits "common/src/org.rs" "regular" && builtins.pathExists (tool.src + "/common/src/org.rs");
-        macros = tool.cargoSourceAdmits "macros/src/lib.rs" "regular" && builtins.pathExists (tool.src + "/macros/src/lib.rs");
+        ) [ "tools/repository-policy/src/scoped_leptosfmt.rs" "tools/repository-policy/src/bin/scoped-leptosfmt.rs" ];
+        common = tool.cargoSourceAdmits "common/src/org.rs" "regular";
+        macros = tool.cargoSourceAdmits "macros/src/lib.rs" "regular";
         native = tool.sourceAdmits "tools/repository-policy/src/checkout.rs" "regular";
         dependency = tool.sourceAdmits "tools/repository-policy/Cargo.toml" "regular";
         test = tool.sourceAdmits "tools/repository-policy/tests/native.rs" "regular";
@@ -197,6 +196,14 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
         nativeInProduct = builtins.pathExists (p.jaunder.src + "/tools/repository-policy/src/checkout.rs");
         nativeInCsr = builtins.pathExists (p.csrWasm.src + "/tools/repository-policy/src/checkout.rs");
         nativeInWasm = builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/tools/repository-policy/src/checkout.rs");
+        hostTool = builtins.all (relative:
+          tool.cargoSourceAdmits relative "regular"
+          && builtins.pathExists (tool.src + "/${relative}")
+          && !(builtins.pathExists (p.system-artifacts.src + "/${relative}"))
+          && !(builtins.pathExists (p.jaunder.src + "/${relative}"))
+          && !(builtins.pathExists (p.csrWasm.src + "/${relative}"))
+          && !(builtins.pathExists (f.checks.${builtins.currentSystem}.wasm-tests.src + "/${relative}"))
+        ) [ "tools/host-tool/src/git.rs" "tools/host-tool/src/checkout.rs" ];
       }"#;
     let output = Command::new("nix")
         .args([
@@ -219,7 +226,7 @@ fn selected_native_source_excludes_product_and_other_tool_implementations() {
     let actual: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         actual,
-        serde_json::json!({"task2Inputs":true,"common":true,"macros":true,"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"toolsInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInTools":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false})
+        serde_json::json!({"task2Inputs":true,"common":false,"macros":false,"native":true,"dependency":true,"test":true,"evaluation":true,"evaluationInCargo":false,"productInNative":false,"toolsInNative":false,"csrInNative":false,"nativeInCsrAdmission":false,"nativeFile":true,"nativeInTools":false,"nativeInProduct":false,"nativeInCsr":false,"nativeInWasm":false,"hostTool":true})
     );
 }
 #[test]

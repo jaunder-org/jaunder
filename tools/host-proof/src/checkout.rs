@@ -2,23 +2,23 @@
 
 /// Select the caller's Jaunder checkout root as the working directory.
 pub fn prepare() -> anyhow::Result<()> {
-    repository_policy::checkout::prepare_checkout("tools/Cargo.toml", None)
+    host_tool::checkout::prepare_checkout("tools/Cargo.toml", None)
 }
 
 /// Best-effort hook preparation follows checkout admission.
 pub fn ensure_hooks_installed() {
-    repository_policy::checkout::ensure_hooks_installed("host-proof");
+    host_tool::checkout::ensure_hooks_installed("host-proof");
 }
 
 #[cfg(test)]
-use repository_policy::checkout::{ADMIT_INPUTS, Candidate};
+use host_tool::checkout::{ADMIT_INPUTS, Candidate};
 #[cfg(test)]
 use std::{path::Path, process::Command};
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use repository_policy::checkout::admit_untracked_inputs;
+    use host_tool::checkout::admit_untracked_inputs;
 
     #[test]
     fn git_flake_admission_refuses_only_omitted_relevant_inputs() {

@@ -1,7 +1,7 @@
 //! Actual native policy boundaries: independent verdicts and non-green read failures.
 use std::{
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     process::{Command, Output},
 };
 
@@ -11,10 +11,7 @@ fn write(root: &Path, path: &str, body: impl AsRef<[u8]>) {
     fs::write(path, body).unwrap();
 }
 fn git(root: &Path, args: &[&str]) {
-    let output = repository_policy::git::at(root)
-        .args(args)
-        .output()
-        .unwrap();
+    let output = host_tool::git::at(root).args(args).output().unwrap();
     assert!(
         output.status.success(),
         "{}",
@@ -357,115 +354,4 @@ fn unreadable_readme_is_not_an_empty_passing_population() {
     let output = run(temp.path(), false, "adr-readme-parity");
     assert!(String::from_utf8_lossy(&output.stderr).contains("docs/README.md"));
     verdict(output, 1, "reading");
-}
-
-// Census retains its controlled analyzer population and domain-specific assertions.
-fn census_fixture() -> tempfile::TempDir {
-    let temp = checkout();
-    let root = temp.path();
-    git(root, &["config", "user.name", "census fixture"]);
-    git(root, &["config", "user.email", "fixture@example.invalid"]);
-    fs::create_dir_all(root.join("common/src")).unwrap();
-    fs::write(root.join("common/src/a.rs"), "use serde::Serialize;\n").unwrap();
-    fs::write(root.join("common/src/b.rs"), "use serde::Deserialize;\n").unwrap();
-    for backend in ["sqlite", "postgres"] {
-        let directory = root.join(format!("storage/src/{backend}"));
-        fs::create_dir_all(&directory).unwrap();
-        fs::write(directory.join("pair.rs"), "fn adapter() {}\n").unwrap();
-    }
-    git(root, &["add", "common", "storage"]);
-    git(
-        root,
-        &["-c", "core.hooksPath=/dev/null", "commit", "-qm", "fixture"],
-    );
-    // A controlled capability population uses real Git but no optional analyzers.
-    // This makes unavailable independent of the developer machine's tool inventory.
-    let git_path: PathBuf = std::env::split_paths(&std::env::var_os("PATH").unwrap())
-        .map(|directory| directory.join("git"))
-        .find(|path| path.is_file())
-        .unwrap();
-    fs::create_dir(root.join("bin")).unwrap();
-    std::os::unix::fs::symlink(git_path.canonicalize().unwrap(), root.join("bin/git")).unwrap();
-    temp
-}
-fn census(root: &Path, json: bool) -> Output {
-    let mut command = Command::new(env!("CARGO_BIN_EXE_source-contracts"));
-    command
-        .arg("census")
-        .current_dir(root)
-        .env("PATH", root.join("bin"));
-    if json {
-        command.arg("--json");
-    }
-    command.output().unwrap()
-}
-#[test]
-fn candidates_and_unavailable_cells_are_not_a_gate_and_both_outputs_agree() {
-    let temp = census_fixture();
-    let output = census(temp.path(), true);
-    assert_eq!(
-        output.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let sections = report["sections"].as_array().unwrap();
-    assert_eq!(sections.len(), 7);
-    assert_eq!(
-        sections
-            .iter()
-            .map(|section| section["cells"].as_array().unwrap().len())
-            .sum::<usize>(),
-        17
-    );
-    let json = String::from_utf8(output.stdout).unwrap();
-    assert!(json.contains("candidates"));
-    assert!(json.contains("unavailable"));
-    assert!(json.contains("rust-dependency:serde"));
-    let human = census(temp.path(), false);
-    assert_eq!(human.status.code(), Some(0));
-    let text = String::from_utf8(human.stdout).unwrap();
-    assert!(text.contains("rust-dependency:serde"), "{text}");
-    assert!(text.contains("unavailable"), "{text}");
-    let repeated = census(temp.path(), true);
-    assert_eq!(json.as_bytes(), repeated.stdout);
-}
-#[test]
-fn malformed_source_fails_collection_but_retains_completed_cells() {
-    let temp = census_fixture();
-    fs::write(temp.path().join("common/src/a.rs"), "fn broken( {").unwrap();
-    let output = census(temp.path(), true);
-    assert_eq!(output.status.code(), Some(1));
-    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
-    let json = report.to_string();
-    assert!(json.contains("failed"));
-    assert!(json.contains("unavailable"));
-    assert_eq!(report["sections"].as_array().unwrap().len(), 7);
-    let completed = report["sections"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .flat_map(|section| section["cells"].as_array().unwrap())
-        .find(|cell| cell["collector"]["identity"] == "census-storage-adapter-paths")
-        .expect("independent adapter collector retained");
-    assert_eq!(completed["state"], "candidates");
-    assert_eq!(completed["total_candidates"], 1);
-    assert_eq!(
-        completed["candidates"][0]["identity"],
-        "adapter-pair:pair.rs"
-    );
-    assert_eq!(
-        completed["candidates"][0]["paths"],
-        serde_json::json!(["storage/src/postgres/pair.rs", "storage/src/sqlite/pair.rs"])
-    );
-}
-#[test]
-fn unreadable_tracked_input_is_not_reported_as_an_empty_clean_census() {
-    let temp = census_fixture();
-    fs::write(temp.path().join("common/src/a.rs"), [0xff]).unwrap();
-    let output = census(temp.path(), true);
-    assert_eq!(output.status.code(), Some(1));
-    assert!(output.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&output.stderr).contains("a.rs"));
 }

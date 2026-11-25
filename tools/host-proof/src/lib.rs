@@ -11,7 +11,7 @@ pub mod e2e;
 pub mod e2e_evidence;
 mod e2e_ownership;
 pub mod git {
-    pub use repository_policy::git::{at, toplevel};
+    pub use host_tool::git::{at, toplevel};
 }
 pub mod nix_build;
 pub mod playwright_report;

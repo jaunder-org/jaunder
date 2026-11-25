@@ -137,10 +137,10 @@ fn run(command: Command) -> CommandResult {
 
 fn main() {
     let cli = parse_args::<Cli>();
-    if let Err(error) = repository_policy::checkout::prepare_checkout("tools/Cargo.toml", None) {
+    if let Err(error) = host_tool::checkout::prepare_checkout("tools/Cargo.toml", None) {
         std::process::exit(CommandResult::refused("coverage-check", format!("{error:#}")).emit());
     }
-    repository_policy::checkout::ensure_hooks_installed("coverage-check");
+    host_tool::checkout::ensure_hooks_installed("coverage-check");
     std::process::exit(run(cli.command).emit());
 }
 

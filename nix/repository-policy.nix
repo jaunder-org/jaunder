@@ -1,5 +1,5 @@
-# Native repository policy admits only its real Cargo path closure (including
-# common/macros for Org parsing), never the product or other host tool owners.
+# Native repository policy admits only its real Cargo path closure (itself and
+# the shared host-tool library), never the product or other host tool owners.
 {
   pkgs,
   craneLib,
@@ -45,7 +45,6 @@ mkToolsWorkspacePackage {
   bins = [
     "repository-docs"
     "source-contracts"
-    "org-timezone-manifest"
     "scoped-leptosfmt"
   ];
   package = {
