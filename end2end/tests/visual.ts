@@ -30,6 +30,8 @@ export async function setSeededSiteAppearance(
 ): Promise<void> {
   await seedConfigViaTool("site.title", "Jaunder");
   await seedConfigViaTool("site.tagline", "");
+  // Passkey sign-in and the base-URL warning both render from this setting.
+  await seedConfigViaTool("site.base_url", "https://example.com");
   await seedConfigViaTool("site.registration_policy", "open");
   await seedConfigViaTool("posts.default_audience", "private");
   await seedConfigViaTool("media.uploads_enabled", "true");

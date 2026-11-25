@@ -298,6 +298,9 @@ test("login submits with Enter", async ({ page, user }) => {
 });
 
 test("login invalid fields do not dispatch", async ({ page }) => {
+  // The only errors on the page must be the two field errors, so passkey
+  // sign-in must be available: it needs the site base URL.
+  await seedConfigViaTool("site.base_url", "https://example.com");
   let requests = 0;
   page.on("request", (request) => {
     if (request.url().includes("/api/auth/login")) requests += 1;
