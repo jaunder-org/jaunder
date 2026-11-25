@@ -4687,20 +4687,23 @@ status or output. This replaces traced-run's custom span mechanism
 (`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding). Product
 telemetry is unchanged.
 
-The auxiliary repository-policy package owns the fixed documentation policies
-(`repository-docs`), fixed Rust/TypeScript source contracts and informational
-17-cell census (`source-contracts`). The single-process Git/index safety owner
-is `dev precommit`/`dev prepush` itself (`tools/dev/dev/index.py`), not this
-package. `dev` retains their independent verdicts and order; the binaries do not
-select a workflow or emit an omnibus result envelope. Shared source inventory,
-marker and server-function contracts have one canonical home, reused by the
-remaining runtime coverage consumer rather than cloned. `dev census [--json]` is
-informational: candidates and unavailable capabilities are not gate failures;
-failed collection remains nonzero with completed cells retained. The
-explicit-file `dev org-timezone-manifest` artifact command reuses common
-Org/timezone types and bypasses checkout/hook bootstrap. The narrow
-scoped-Leptosfmt adapter is the formatter exception, not a general process
-runner.
+The auxiliary repository-policy package owns only the fixed documentation
+policies (`repository-docs`) and the fixed Rust/TypeScript source contracts
+(`source-contracts`)
+([narrowed repository-policy](adr/drafts/narrow-repository-policy.md)). The
+single-process Git/index safety owner is `dev precommit`/`dev prepush` itself
+(`tools/dev/dev/index.py`), not this package. `dev` retains their independent
+verdicts and order; the binaries do not select a workflow or emit an omnibus
+result envelope. Shared source inventory, marker and server-function contracts
+have one canonical home, reused by the remaining runtime coverage consumer
+rather than cloned. Git and checkout admission (caller checkout selection,
+untracked-input admission and `core.hooksPath` repair) live in the shared
+`tools/host-tool` library beside the host-tool report contract;
+repository-policy keeps only the wrapper that passes its compiled source
+predicate. No in-derivation producer links host-tool, so `toolsSrc` excludes its
+sources. The informational repository census and the Org timezone extractor are
+retired. The narrow scoped-Leptosfmt adapter is the formatter exception, not a
+general process runner.
 
 Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).
@@ -4841,10 +4844,10 @@ exceptions to its otherwise host-only gate
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md) amends the #1117
 supplement). Every repository-policy host tool self-heals `core.hooksPath` to
 the tracked, relative `.githooks` before its workload
-(`tools/repository-policy/src/checkout.rs`: `ensure_hooks_installed`, the one
-owner of that repair); `dev` itself, precommit and test-local included, does not
-touch it. `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes;
-CI is the non-bypassable authority.
+(`tools/host-tool/src/checkout.rs`: `ensure_hooks_installed`, the one owner of
+that repair); `dev` itself, precommit and test-local included, does not touch
+it. `SKIP_PRE_COMMIT=1` / `SKIP_PRE_PUSH=1` are deliberate local escapes; CI is
+the non-bypassable authority.
 
 #### Prepush parity by failure surface
 
