@@ -15,7 +15,8 @@ from conftest import FAKE, REAL_GIT, Workflow
 from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
 
 from dev import index
-from dev.index import PathStatus, Reason, Refused, Snapshot
+from dev.index import PathStatus, Refused, Snapshot
+from dev.rawdiff import Reason
 
 shared_docs = pytest.mark.skipif(
     not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"
@@ -380,6 +381,22 @@ def test_a_markdown_change_checks_markdown_then_requests_the_docs_verdict(
 
 
 @shared_docs
+def test_a_markdown_rename_checks_markdown_then_requests_the_docs_verdict(
+    repo: Repo,
+) -> None:
+    repo.git("mv", "guide.md", "renamed.md")
+    result = repo.dev("precommit")
+    assert result.returncode == 0, result
+    assert result.stdout.startswith(
+        b"precommit-routing: class=staged-markdown-only "
+        b"reason=isolated-staged-markdown\n"
+    )
+    assert "shared-static-docs-state: unchanged\n" in stderr(result)
+    assert repo.workflow.commands() == [*MARKDOWN_HOST, *STATIC_DOCS]
+    assert repo.status() == b"R  guide.md -> renamed.md\n"
+
+
+@shared_docs
 def test_a_formatted_markdown_change_is_restaged_before_the_request(
     repo: Repo,
 ) -> None:
@@ -621,8 +638,8 @@ def test_deletes_and_renames_are_marked_unsafe() -> None:
     assert taken.paths["old.rs"].delete_or_rename
 
 
-def test_regular_markdown_additions_and_modifications_route_narrowly() -> None:
-    for status in ["A", "M"]:
+def test_regular_markdown_additions_modifications_and_deletes_route_narrowly() -> None:
+    for status in ["A", "M", "D"]:
         taken = index.parse(
             f"{status}  guide.md\0".encode(), raw("100644", status, "guide.md")
         )
@@ -639,7 +656,12 @@ def test_regular_markdown_additions_and_modifications_route_narrowly() -> None:
         (b"", b"", Reason.EMPTY_STATE),
         (b"?? scratch.md\0", b"", Reason.UNTRACKED_PATH),
         (b" M guide.md\0", b"", Reason.UNSTAGED_PATH),
-        (b"D  guide.md\0", raw("100644", "D", "guide.md"), Reason.DELETE_OR_RENAME),
+        (b"D  guide.txt\0", raw("100644", "D", "guide.txt"), Reason.NON_MARKDOWN_PATH),
+        (
+            b"D  guide.md\0",
+            raw("120000", "D", "guide.md"),
+            Reason.UNSUPPORTED_INDEX_MODE,
+        ),
         (
             b"T  guide.md\0",
             raw_modes("100644", "120000", "T", "guide.md"),
@@ -1039,10 +1061,13 @@ def test_the_markdown_admission_needs_byte_identical_staged_markdown(
     cwd_repo.git("add", "guide.txt")
     with pytest.raises(
         Refused,
-        match="^post-reconciliation index is outside staged regular Markdown "
-        "admission: guide.txt$",
+        match="^post-reconciliation index is no longer Markdown-only: "
+        "non-markdown-path$",
     ):
         index.markdown_admission()
+    cwd_repo.git("restore", "--staged", "--worktree", "guide.txt")
+    cwd_repo.git("rm", "-qf", "guide.md")
+    assert "guide.md" in index.markdown_admission().paths
 
 
 @pytest.mark.parametrize(

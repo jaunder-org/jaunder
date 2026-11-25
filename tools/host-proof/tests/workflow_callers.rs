@@ -46,6 +46,7 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     // Only the host lane runs host tools beyond Nix and `dev`; the others take
     // the lean shell.
     for (lane, shell, gate) in [
+        ("docs", "ci", "ci-validate-docs"),
         ("host", "ci", "ci-validate-host"),
         ("hermetic", "ci-nix", "ci-validate-hermetic"),
         ("test-checks", "ci-nix", "ci-validate-test-checks"),
@@ -81,13 +82,25 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         assert!(!encoded.contains("last-result.json"));
         assert!(!encoded.contains(&format!("{lane}-result.json")));
     }
-    // The aggregates keep always(): otherwise a failed lane would skip a
-    // required check, which branch protection accepts. Only a push of a
+    // A new pull-request commit cancels the superseded run; every other run is
+    // its own group, so merge-queue and push runs are never cancelled.
+    assert_eq!(
+        workflow["concurrency"]["group"],
+        "ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}"
+    );
+    assert_eq!(workflow["concurrency"]["cancel-in-progress"], true);
+    // The aggregates keep a status function: otherwise a failed lane would
+    // skip a required check, which branch protection accepts. !cancelled()
+    // rather than always(), so a superseded run stops. Only a push of a
     // merge-queue-tested commit skips them.
-    let aggregate_if = "always() && needs.merge-queue-verdict.outputs.tested != 'true'";
-    for name in ["validate-no-e2e", "e2e-reconcile", "e2e-gate"] {
+    let aggregate_if = "${{ !cancelled() && needs.merge-queue-verdict.outputs.tested != 'true' }}";
+    for name in ["validate-no-e2e", "e2e-gate"] {
         assert_eq!(jobs[name]["if"], aggregate_if, "{name}");
     }
+    assert_eq!(
+        jobs["e2e-reconcile"]["if"],
+        "${{ !cancelled() && needs.merge-queue-verdict.result == 'success' && needs.merge-queue-verdict.outputs.tested != 'true' && needs.merge-queue-verdict.outputs.docs_only != 'true' }}"
+    );
     // Pull-request and merge-queue runs can never skip, whatever the script does.
     let verdict_job = &jobs["merge-queue-verdict"];
     assert!(
@@ -103,7 +116,47 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         let display = jobs[name]["name"].as_str().unwrap();
         assert!(script.contains(&format!("\"{display}\"")), "{display}");
     }
-    let lane_if = "needs.merge-queue-verdict.outputs.tested != 'true'";
+    // The verdict job also decides the documentation-only scope, from the
+    // pull request's or queue entry's base, with the image's own Python; a
+    // push has no base.
+    assert_eq!(
+        verdict_job["outputs"]["docs_only"],
+        "${{ steps.scope.outputs.docs_only }}"
+    );
+    let decide = verdict_job["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"] == "scope")
+        .unwrap();
+    assert_eq!(
+        decide["env"]["BASE"],
+        "${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}"
+    );
+    assert_eq!(decide["env"]["PYTHONPATH"], "tools/dev");
+    assert_eq!(
+        decide["run"],
+        "python3 -m dev.scope --base \"$BASE\" >> \"$GITHUB_OUTPUT\""
+    );
+    let sparse = verdict_job["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find_map(|step| step["with"]["sparse-checkout"].as_str())
+        .unwrap();
+    for path in [
+        "tools/dev/dev/__init__.py",
+        "tools/dev/dev/rawdiff.py",
+        "tools/dev/dev/scope.py",
+    ] {
+        assert!(sparse.lines().any(|line| line.trim() == path), "{path}");
+    }
+    // A documentation-only change runs the docs lane and nothing else.
+    assert_eq!(
+        jobs["validate-docs"]["if"],
+        "needs.merge-queue-verdict.outputs.docs_only == 'true'"
+    );
+    let lane_if = "needs.merge-queue-verdict.outputs.tested != 'true' && needs.merge-queue-verdict.outputs.docs_only != 'true'";
     for name in [
         "validate-hermetic",
         "validate-test-checks",
@@ -112,16 +165,23 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     ] {
         assert_eq!(jobs[name]["if"], lane_if, "{name}");
     }
-    // The host lane is main's only kache writer, so it never waits on or skips
-    // for the verdict.
-    assert!(jobs["validate-host"]["needs"].is_null());
-    assert!(jobs["validate-host"]["if"].is_null());
+    // The host lane is main's only kache writer, so it still runs for a
+    // merge-queue-tested push, and even when the verdict job fails.
+    assert_eq!(
+        jobs["validate-host"]["needs"],
+        serde_yaml::to_value(["merge-queue-verdict"]).unwrap()
+    );
+    assert_eq!(
+        jobs["validate-host"]["if"],
+        "${{ !cancelled() && needs.merge-queue-verdict.outputs.docs_only != 'true' }}"
+    );
     let aggregate = &jobs["validate-no-e2e"];
     assert_eq!(aggregate["name"], "Validate (no e2e)");
     assert_eq!(
         aggregate["needs"],
         serde_yaml::to_value([
             "merge-queue-verdict",
+            "validate-docs",
             "validate-host",
             "validate-hermetic",
             "validate-test-checks",
@@ -130,7 +190,9 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         .unwrap()
     );
     let verdict = aggregate["steps"][0]["run"].as_str().unwrap();
+    assert!(verdict.contains("test \"$verdict\" = \"success\""));
     for (lane, variable) in [
+        ("docs", "docs"),
         ("host", "host"),
         ("hermetic", "hermetic"),
         ("test-checks", "test_checks"),
@@ -139,6 +201,38 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         assert!(verdict.contains(&format!("needs.validate-{lane}.result")));
         assert!(verdict.contains(&format!("test \"${variable}\" = \"success\"")));
     }
+    assert_verdicts(
+        "validate-no-e2e",
+        verdict,
+        &[
+            ("success", true, &["docs=success"], true),
+            ("success", true, &["docs=failure"], false),
+            ("success", true, &["docs=skipped"], false),
+            (
+                "success",
+                false,
+                &[
+                    "host=success",
+                    "hermetic=success",
+                    "test-checks=success",
+                    "coverage=success",
+                ],
+                true,
+            ),
+            (
+                "success",
+                false,
+                &[
+                    "host=success",
+                    "hermetic=skipped",
+                    "test-checks=success",
+                    "coverage=success",
+                ],
+                false,
+            ),
+            ("failure", false, &["host=success"], false),
+        ],
+    );
     assert!(source.contains(".xtask/gcroots/coverage/status.json"));
     assert!(source.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
     assert_eq!(
@@ -177,10 +271,85 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from([
             "test \"${{ needs.merge-queue-verdict.result }}\" = \"success\"",
+            "test \"$lanes\" = \"skipped\"",
+            "test \"$reconcile\" = \"skipped\"",
             "test \"$lanes\" = \"success\"",
             "test \"$reconcile\" = \"success\"",
         ])
     );
+    let gate = jobs["e2e-gate"]["steps"][0]["run"].as_str().unwrap();
+    assert_verdicts(
+        "e2e-gate",
+        gate,
+        &[
+            (
+                "success",
+                true,
+                &["e2e-lane=skipped", "e2e-reconcile=skipped"],
+                true,
+            ),
+            (
+                "success",
+                true,
+                &["e2e-lane=success", "e2e-reconcile=skipped"],
+                false,
+            ),
+            (
+                "success",
+                false,
+                &["e2e-lane=success", "e2e-reconcile=success"],
+                true,
+            ),
+            (
+                "success",
+                false,
+                &["e2e-lane=skipped", "e2e-reconcile=skipped"],
+                false,
+            ),
+            ("failure", false, &[], false),
+        ],
+    );
+}
+
+/// Runs an aggregate's script under bash as the runner does, substituting the
+/// verdict job's result and `docs_only` output and the other jobs' results.
+/// Each case is the verdict job's result, `docs_only`, the other jobs' results
+/// (`job=result`, unlisted ones skipped), and whether the aggregate passes.
+fn assert_verdicts(name: &str, script: &str, cases: &[(&str, bool, &[&str], bool)]) {
+    for (verdict, docs_only, results, passes) in cases {
+        let mut run = script
+            .replace("${{ needs.merge-queue-verdict.result }}", verdict)
+            .replace(
+                "${{ needs.merge-queue-verdict.outputs.docs_only }}",
+                if *docs_only { "true" } else { "false" },
+            );
+        for job in [
+            "validate-docs",
+            "validate-host",
+            "validate-hermetic",
+            "validate-test-checks",
+            "validate-coverage",
+            "e2e-lane",
+            "e2e-reconcile",
+        ] {
+            let short = job.trim_start_matches("validate-");
+            let result = results
+                .iter()
+                .find_map(|entry| entry.strip_prefix(&format!("{short}=")))
+                .unwrap_or("skipped");
+            run = run.replace(&format!("${{{{ needs.{job}.result }}}}"), result);
+        }
+        assert!(!run.contains("${{"), "{name}: unsubstituted: {run}");
+        let output = Command::new("bash")
+            .args(["-e", "-c", &run])
+            .output()
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            *passes,
+            "{name}: verdict={verdict} docs_only={docs_only} {results:?}: {output:?}"
+        );
+    }
 }
 
 /// Each named job runs a `dev` workflow, then summarises its trace into the step
@@ -325,6 +494,7 @@ fn every_validation_and_e2e_job_keeps_its_trace_and_summarises_it_without_a_verd
     assert_jobs_keep_and_summarise_their_trace(
         include_str!("../../../.github/workflows/ci.yml"),
         &[
+            "validate-docs",
             "validate-host",
             "validate-hermetic",
             "validate-test-checks",

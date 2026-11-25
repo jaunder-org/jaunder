@@ -93,6 +93,14 @@ _workflow(
     gates.ci_validate_test_checks,
     "CI test-checks lane: clean tree, wasm tests, doctests and Elisp coverage.",
 )
+_workflow(
+    "ci-validate-docs",
+    gates.ci_validate_docs,
+    "CI docs lane, for a Markdown-only change: clean tree, Verify Markdown "
+    "Prettier and the documentation-shape checks.",
+)
+
+
 _workflow("coverage", gates.coverage, "Clean tree, then Rust coverage and CRAP policy.")
 _workflow(
     "doctests", gates.doctests, "Clean tree, then the doctests producer and gate."

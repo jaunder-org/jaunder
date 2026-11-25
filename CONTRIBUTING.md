@@ -66,13 +66,13 @@ nix develop
 ```
 
 The flake has five shells. `default` is the complete interactive shell. `ci` is
-`default` without the interactive-only tools; the CI host validation lane and
-the performance job enter it. `mutants` is `ci` plus `cargo-mutants`, for the
-scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`, `git`,
-`dev`, `traced-run`, `jq`, basic shell utilities and the OpenSSL/dav1d libraries
-for `LD_LIBRARY_PATH`, with no Rust toolchain and no C compiler. The CI jobs
-that only run Nix builds and Nix-built tools enter `ci-nix`: the hermetic,
-test-checks and coverage validation lanes and the e2e catalog, lane and
+`default` without the interactive-only tools; the CI host and docs validation
+lanes and the performance job enter it. `mutants` is `ci` plus `cargo-mutants`,
+for the scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`,
+`git`, `dev`, `traced-run`, `jq`, basic shell utilities and the OpenSSL/dav1d
+libraries for `LD_LIBRARY_PATH`, with no Rust toolchain and no C compiler. The
+CI jobs that only run Nix builds and Nix-built tools enter `ci-nix`: the
+hermetic, test-checks and coverage validation lanes and the e2e lane and
 reconcile jobs. `theme-thumbnail` is described in [themes](docs/themes.md).
 
 Enter the default, CI, mutants or `ci-nix` shell from the intended Git checkout.
@@ -183,16 +183,16 @@ git config core.hooksPath .githooks
 
 **`pre-commit`** runs **`dev precommit`**. Before gate work, it classifies the
 complete pre-run dirty tree. `staged-markdown-only` is the sole narrow class: a
-nonempty tree containing only staged-only, regular, case-sensitive `.md`
-additions or modifications. Any unstaged, untracked, delete/rename,
-type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
-evidence uses the broad route. `dev precommit` classifies before selecting the
-host checks as either
-`class=staged-markdown-only reason=isolated-staged-markdown` or
+nonempty tree with nothing unstaged or untracked whose staged diff is
+Markdown-only — every path a regular, case-sensitive `.md` file being added,
+modified or deleted (so a Markdown rename qualifies). CI uses the same rule for
+its documentation-only scope. Any unstaged, untracked, type-changing,
+non-Markdown, malformed, unparseable, or otherwise unsupported evidence uses the
+broad route. `dev precommit` classifies before selecting the host checks as
+either `class=staged-markdown-only reason=isolated-staged-markdown` or
 `class=broad reason=<stable-kebab-case-reason>`; broad reason precedence is
 `uncertain-status`, `empty-state`, `untracked-path`, `unstaged-path`,
-`delete-or-rename`, `unsupported-change`, `unsupported-index-mode`, then
-`non-markdown-path`.
+`unsupported-change`, `unsupported-index-mode`, then `non-markdown-path`.
 
 For `staged-markdown-only`, the fixed ordered Markdown-sensitive surface is
 Prettier, sequence/identifier collision checks, the ADR bundle, documentation
@@ -1190,8 +1190,22 @@ stable `Validate (no e2e)` result-only job. The coverage source-filter probe
 (`dev coverage-check probe-source`) is an on-demand diagnostic, not an automatic
 CI step.
 
+A pull request or merge-queue entry that changes only Markdown, by the
+precommit's own rule, runs none of those lanes and no E2E. The
+`Merge-queue verdict` job decides it with the slim image's own `python3`,
+running `PYTHONPATH=tools/dev python3 -m dev.scope --base <sha>` against the
+pull request's or queue entry's base; `dev.scope` and the rule it shares with
+the precommit (`dev.rawdiff`) import only the standard library. When it prints
+`docs_only=true`, only `Validation docs` runs (`dev ci-validate-docs`: clean
+tree, Markdown Prettier and `docs-shape` in Verify mode); `Validate (no e2e)`
+requires that lane and `e2e gate` passes with the E2E jobs skipped. A push, or
+anything `dev.scope` cannot establish, runs everything. A new commit on a pull
+request cancels that pull request's superseded run; merge-queue and push runs
+are never cancelled
+([documentation-only CI scope](docs/adr/drafts/ci-documentation-only-scope.md)).
+
 E2E uses one catalog-derived matrix of sixteen isolated producers
-(`dev e2e-producer <identity>`), four per backend/browser pair. An `always()`
+(`dev e2e-producer <identity>`), four per backend/browser pair. A `!cancelled()`
 reconciliation job per pair waits for the complete producer matrix, downloads
 that pair's four artifacts and runs `dev e2e-reconcile` even if downloads fail;
 the SQLite/Chromium job also verifies server-function coverage. Stable

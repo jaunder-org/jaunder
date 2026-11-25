@@ -22,15 +22,18 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import NoReturn
 
 from dev import steps
-
-# Index modes of regular files, the only ones auto-staging and the narrow
-# route accept.
-REGULAR = (0o100644, 0o100755)
-_KNOWN_MODES = (*REGULAR, 0o120000, 0o160000)
+from dev.rawdiff import (
+    REGULAR,
+    Change,
+    Reason,
+    markdown_only,
+    nul_records,
+    raw_changes,
+    utf8,
+)
 
 
 class Refused(Exception):
@@ -57,7 +60,7 @@ class PathStatus:
 
 @dataclass
 class Snapshot:
-    """The complete dirty tree, its staged raw diff and any uncertain evidence.
+    """The complete dirty tree, its staged changes and any uncertain evidence.
 
     Uncertain evidence leaves the snapshot deliberately incomplete, so routing
     and reconciliation both fail closed.
@@ -65,36 +68,13 @@ class Snapshot:
 
     paths: dict[str, PathStatus] = field(default_factory=dict)
     uncertainty: list[str] = field(default_factory=list)
-    staged_raw_diff: bytes = b""
-
-
-class Reason(StrEnum):
-    """Why the precommit takes its route; only the first is narrow.
-
-    The broad reasons are listed in their stable precedence.
-    """
-
-    ISOLATED_STAGED_MARKDOWN = "isolated-staged-markdown"
-    UNCERTAIN_STATUS = "uncertain-status"
-    EMPTY_STATE = "empty-state"
-    UNTRACKED_PATH = "untracked-path"
-    UNSTAGED_PATH = "unstaged-path"
-    DELETE_OR_RENAME = "delete-or-rename"
-    UNSUPPORTED_CHANGE = "unsupported-change"
-    UNSUPPORTED_INDEX_MODE = "unsupported-index-mode"
-    NON_MARKDOWN_PATH = "non-markdown-path"
+    staged_changes: list[Change] = field(default_factory=list)
 
 
 @dataclass
 class StagePlan:
     stage: list[str]
     failures: list[str]
-
-
-@dataclass(frozen=True)
-class _RawHeader:
-    new_mode: int
-    status: str
 
 
 @dataclass(frozen=True)
@@ -121,110 +101,13 @@ def _stderr(done: subprocess.CompletedProcess[bytes]) -> str:
     return done.stderr.decode(errors="replace").strip()
 
 
-def _utf8(path: bytes) -> str | None:
-    """`path` as text, or None when it is empty or not UTF-8."""
-    try:
-        return path.decode() or None
-    except UnicodeDecodeError:
-        return None
-
-
 # Parsing.
-
-
-def _nul_records(data: bytes, uncertainty: set[str], label: str) -> list[bytes]:
-    if not data:
-        return []
-    records = data.split(b"\0")
-    if data.endswith(b"\0"):
-        records.pop()
-    else:
-        uncertainty.add(f"unterminated-{label}-record")
-    if not all(records):
-        uncertainty.add(f"interior-empty-{label}-record")
-    return [record for record in records if record]
 
 
 def _valid_status_pair(index: str, worktree: str) -> bool:
     if (index, worktree) == ("?", "?"):
         return True
     return index in " MADRCUT" and worktree in " MADUT"
-
-
-def _mode(text: str) -> int | None:
-    if len(text) == 6 and all(digit in "01234567" for digit in text):
-        return int(text, 8)
-    return None
-
-
-def _object_id(text: str) -> bool:
-    return len(text) in (40, 64) and all(
-        digit in "0123456789abcdefABCDEF" for digit in text
-    )
-
-
-def _object_type(mode: int) -> int:
-    return {0o100644: 1, 0o100755: 1, 0o120000: 2, 0o160000: 3}.get(mode, 0)
-
-
-def _valid_transition(
-    old_mode: int, new_mode: int, old_object: str, new_object: str, status: str
-) -> bool:
-    if len(old_object) != len(new_object):
-        return False
-    old_zero = set(old_object) == {"0"}
-    new_zero = set(new_object) == {"0"}
-    known = old_mode in _KNOWN_MODES and new_mode in _KNOWN_MODES
-    match status:
-        case "A":
-            return (
-                old_mode == 0 and new_mode in _KNOWN_MODES and old_zero and not new_zero
-            )
-        case "D":
-            return (
-                old_mode in _KNOWN_MODES and new_mode == 0 and not old_zero and new_zero
-            )
-        case "M":
-            return (
-                known
-                and _object_type(old_mode) == _object_type(new_mode)
-                and not old_zero
-                and not new_zero
-                and (old_mode != new_mode or old_object != new_object)
-            )
-        case "T":
-            return (
-                known
-                and _object_type(old_mode) != _object_type(new_mode)
-                and not old_zero
-                and not new_zero
-            )
-        case _:
-            # "U", the only other status a header admits.
-            return known and not old_zero and not new_zero
-
-
-def _raw_header(header: bytes) -> _RawHeader | None:
-    """A cached raw diff header, or None for anything this custody cannot vouch for.
-
-    A rename or copy (which `--no-renames` never reports) is not vouched for.
-    """
-    try:
-        text = header.decode()
-    except UnicodeDecodeError:
-        return None
-    fields = text.removeprefix(":").split(" ")
-    if not text.startswith(":") or len(fields) != 5:
-        return None
-    old_mode, new_mode = _mode(fields[0]), _mode(fields[1])
-    old_object, new_object, status = fields[2], fields[3], fields[4]
-    if old_mode is None or new_mode is None or status not in ("A", "M", "D", "T", "U"):
-        return None
-    if not _object_id(old_object) or not _object_id(new_object):
-        return None
-    if not _valid_transition(old_mode, new_mode, old_object, new_object, status):
-        return None
-    return _RawHeader(new_mode, status)
 
 
 def parse(status: bytes, raw: bytes) -> Snapshot:
@@ -255,7 +138,7 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
         if entry.staged:
             staged_from_status.add(path)
 
-    records = iter(_nul_records(status, uncertainty, "status"))
+    records = iter(nul_records(status, uncertainty, "status"))
     for record in records:
         if len(record) < 4 or record[2:3] != b" ":
             uncertainty.add("malformed-status-record")
@@ -264,14 +147,14 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
         if not _valid_status_pair(index, worktree):
             uncertainty.add("unknown-status-pair")
             continue
-        path = _utf8(record[3:])
+        path = utf8(record[3:])
         if path is None:
             uncertainty.add("non-utf8-or-empty-status-path")
             continue
         add(path, index, worktree)
         if index in ("R", "C"):
             old = next(records, None)
-            old_path = None if old is None else _utf8(old)
+            old_path = None if old is None else utf8(old)
             if old is None:
                 uncertainty.add("missing-rename-path")
             elif old_path is None:
@@ -279,31 +162,14 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
             else:
                 add(old_path, index, worktree)
 
-    staged_from_raw: set[str] = set()
-    seen_raw: set[str] = set()
-    records = iter(_nul_records(raw, uncertainty, "raw"))
-    for header in records:
-        parsed = _raw_header(header)
-        if parsed is None:
-            uncertainty.add("malformed-raw-record")
-            continue
-        path_bytes = next(records, None)
-        if path_bytes is None:
-            uncertainty.add("missing-raw-path")
-            continue
-        path = _utf8(path_bytes)
-        if path is None:
-            uncertainty.add("non-utf8-or-empty-raw-path")
-            continue
-        if path in seen_raw:
-            uncertainty.add("duplicate-raw-path")
-        seen_raw.add(path)
-        entry = paths.setdefault(path, PathStatus())
-        entry.delete_or_rename |= parsed.status == "D"
-        entry.unsupported_change |= parsed.status not in ("A", "M", "D")
-        entry.index_mode = parsed.new_mode
-        entry.raw_change = parsed.status
-        staged_from_raw.add(path)
+    changes = raw_changes(raw, uncertainty)
+    for change in changes:
+        entry = paths.setdefault(change.path, PathStatus())
+        entry.delete_or_rename |= change.status == "D"
+        entry.unsupported_change |= change.status not in ("A", "M", "D")
+        entry.index_mode = change.new_mode
+        entry.raw_change = change.status
+    staged_from_raw = {change.path for change in changes}
 
     for entry in paths.values():
         if None not in (entry.staged_change, entry.raw_change) and (
@@ -312,7 +178,7 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
             uncertainty.add("status-raw-change-mismatch")
     if staged_from_status != staged_from_raw:
         uncertainty.add("status-raw-population-mismatch")
-    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), raw)
+    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), changes)
 
 
 # Snapshots.
@@ -361,7 +227,11 @@ def snapshot() -> Snapshot:
 
 
 def classify(taken: Snapshot) -> Reason:
-    """The precommit route for `taken`; uncertainty takes the broad route."""
+    """The precommit route for `taken`; uncertainty takes the broad route.
+
+    Beyond the shared rule, the commit must be the whole dirty tree: nothing
+    untracked or unstaged that the checks would see but the commit would not.
+    """
     statuses = taken.paths.values()
     if taken.uncertainty:
         return Reason.UNCERTAIN_STATUS
@@ -371,15 +241,7 @@ def classify(taken: Snapshot) -> Reason:
         return Reason.UNTRACKED_PATH
     if any(entry.unstaged or not entry.staged for entry in statuses):
         return Reason.UNSTAGED_PATH
-    if any(entry.delete_or_rename for entry in statuses):
-        return Reason.DELETE_OR_RENAME
-    if any(entry.unsupported_change for entry in statuses):
-        return Reason.UNSUPPORTED_CHANGE
-    if any(entry.index_mode not in REGULAR for entry in statuses):
-        return Reason.UNSUPPORTED_INDEX_MODE
-    if not all(path.endswith(".md") for path in taken.paths):
-        return Reason.NON_MARKDOWN_PATH
-    return Reason.ISOLATED_STAGED_MARKDOWN
+    return markdown_only(taken.staged_changes)
 
 
 def routing(reason: Reason) -> str:
@@ -541,7 +403,8 @@ def _worktree_matches_index() -> None:
 
 
 def markdown_admission() -> Snapshot:
-    """Admits only a reconciled tree of staged regular Markdown, byte-identical."""
+    """Admits only a reconciled tree that is clean or still Markdown-only, with
+    byte-identical docs inputs."""
     taken = snapshot()
     if taken.uncertainty:
         raise Refused(f"Git status evidence is uncertain: {_debug(taken.uncertainty)}")
@@ -549,12 +412,9 @@ def markdown_admission() -> Snapshot:
         raise Refused(
             "unstaged or nonignored untracked changes remain after reconciliation"
         )
-    for path, entry in taken.paths.items():
-        if not (entry.staged and path.endswith(".md") and entry.index_mode in REGULAR):
-            raise Refused(
-                "post-reconciliation index is outside staged regular Markdown "
-                f"admission: {path}"
-            )
+    reason = markdown_only(taken.staged_changes)
+    if taken.staged_changes and reason is not Reason.ISOLATED_STAGED_MARKDOWN:
+        raise Refused(f"post-reconciliation index is no longer Markdown-only: {reason}")
     _worktree_matches_index()
     return taken
 

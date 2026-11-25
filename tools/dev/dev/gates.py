@@ -415,6 +415,18 @@ def ci_validate_host() -> None:
     host_tests()
 
 
+def docs_checks(mode: Mode) -> None:
+    """The checks a Markdown-only change needs (`rawdiff.markdown_only`)."""
+    markdown(mode, Docs.HOST)
+    docs_shape()
+
+
+def ci_validate_docs() -> None:
+    """CI's whole verdict for a Markdown-only change (`dev.scope`)."""
+    clean_tree()
+    docs_checks(Mode.VERIFY)
+
+
 def ci_validate_hermetic() -> None:
     clean_tree()
     static_checks()
@@ -442,8 +454,7 @@ def _precommit_checks(markdown_only: bool) -> None:
     """A Markdown-only change takes the Markdown-sensitive Fix checks, in order;
     any other change takes check-no-test."""
     if markdown_only:
-        markdown(Mode.FIX, Docs.HOST)
-        docs_shape()
+        docs_checks(Mode.FIX)
     else:
         check_no_test()
 

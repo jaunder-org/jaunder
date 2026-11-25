@@ -263,11 +263,13 @@ fn remove_registered_worktree_with(
 fn dirty_probe_tree(tmp: &Path) -> Result<()> {
     // A clean tree makes Nix's flake fetcher walk grafted-away history on CI's
     // shallow checkout (docs/adr/0116-coverage-probe-dirty-tree-workaround.md).
-    let readme = tmp.join("README.md");
-    let mut bytes = fs::read(&readme).context("reading README.md to dirty it")?;
-    bytes.push(b'\n');
-    fs::write(&readme, bytes).context("dirtying README.md")
+    // A new intent-to-add Markdown file, which no source filter admits, dirties
+    // it without depending on any tracked file.
+    fs::write(tmp.join(PROBE_DIRT), "probe\n").context("dirtying the probe worktree")?;
+    git_run(tmp, &["add", "--intent-to-add", "--", PROBE_DIRT])
 }
+
+const PROBE_DIRT: &str = "coverage-probe-dirt.md";
 
 fn run_probe() -> Result<()> {
     let repo_root = std::env::current_dir().context("resolving cwd")?;

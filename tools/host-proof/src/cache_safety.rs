@@ -516,13 +516,14 @@ impl Drop for WorktreeGuard {
     }
 }
 
+/// Dirties the worktree with a new intent-to-add Markdown file, which no source
+/// filter admits, so the probe depends on no tracked file.
 fn dirty_probe_tree(dir: &Path) -> Result<()> {
-    let readme = dir.join("README.md");
-    let mut bytes =
-        fs::read(&readme).context("reading README.md to dirty source probe worktree")?;
-    bytes.push(b'\n');
-    fs::write(readme, bytes).context("dirtying source probe worktree")
+    fs::write(dir.join(PROBE_DIRT), "probe\n").context("dirtying source probe worktree")?;
+    git_run(dir, &["add", "--intent-to-add", "--", PROBE_DIRT])
 }
+
+const PROBE_DIRT: &str = "cache-safety-probe-dirt.md";
 
 fn stage_change(dir: &Path, path: &str) -> Result<()> {
     let path = dir.join(path);
