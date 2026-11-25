@@ -4294,6 +4294,8 @@ PostgreSQL lanes create database `jaunder_<i>` per instance with
 `jaunder create-pg-db`. The OTel collector stays shared, because traces
 correlate by trace id. Every lane runs two workers on two vCPUs; every Firefox
 lane has a 4 GiB guest with a 2 GiB disk, and every Chromium lane a 3 GiB guest.
+Every lane records its guest memory headroom in `lane-memory-<lane>.txt`, and
+sizing changes are judged from that file (#2092).
 
 Because a worker runs one test at a time, no two tests share a server
 concurrently, and the suite follows one state rule instead of quarantine: a test

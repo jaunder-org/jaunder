@@ -23,6 +23,11 @@ import {
   signOutViaAccount,
 } from "./settings-areas";
 
+// Password login's errors. The passkey card beside the form renders its own
+// `.error` availability notice from the site's `base_url`, global state these
+// tests do not set.
+const LOGIN_FORM_ERROR = `${SEL.error}:not([data-test^="passkey-login-"])`;
+
 test("register page shows form", async ({ page }) => {
   await seedConfigViaTool("site.registration_policy", "open");
   // Holdout (spec D6): proves /register renders.
@@ -311,7 +316,7 @@ test("login invalid fields do not dispatch", async ({ page }) => {
   await page.fill(SEL.password, "short");
   await page.locator(SEL.password).blur();
 
-  await expect(page.locator(SEL.error)).toHaveCount(2);
+  await expect(page.locator(LOGIN_FORM_ERROR)).toHaveCount(2);
   await expect(page.locator(SEL.submit)).toBeDisabled();
   await page.locator(SEL.password).press("Enter");
   expect(requests).toBe(0);
@@ -395,9 +400,9 @@ test("login with wrong password shows error", async ({ page }) => {
   await goto(page, "/login");
 
   await fillLoginForm(page, "testlogin", "wrongpassword!");
-  await waitForSelector(page, SEL.error);
+  await waitForSelector(page, LOGIN_FORM_ERROR);
 
-  await expect(page.locator(SEL.error)).toBeVisible();
+  await expect(page.locator(LOGIN_FORM_ERROR)).toBeVisible();
 });
 
 test("a failed logout reports the error and re-checks the session", async ({

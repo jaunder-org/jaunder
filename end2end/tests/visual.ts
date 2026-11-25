@@ -21,14 +21,16 @@ type VisualOptions = {
 
 /**
  * Set the seeded site configuration that the visual baselines render: the
- * default title with no tagline, Open registration, the Private Site Default
- * Audience, an enabled Media Upload Capability and no Site Theme selection. Other tests
- * change these globals on the same instance.
+ * default title with no tagline, the seeded base URL (it decides whether
+ * passkeys are available, which `/login` shows), Open registration, the Private
+ * Site Default Audience, an enabled Media Upload Capability and no Site Theme
+ * selection. Other tests change these globals on the same instance.
  */
 export async function setSeededSiteAppearance(
   tracedContext: NewTracedContext,
 ): Promise<void> {
   await seedConfigViaTool("site.title", "Jaunder");
+  await seedConfigViaTool("site.base_url", "https://example.com");
   await seedConfigViaTool("site.tagline", "");
   // Passkey sign-in and the base-URL warning both render from this setting.
   await seedConfigViaTool("site.base_url", "https://example.com");

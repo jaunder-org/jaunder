@@ -93,9 +93,9 @@ below makes that safe.
   precondition, or the incidental assertion goes.
 - `@visual` tests follow the same rule. Each seeds its own fixed-name user,
   because usernames render in the pixels. Each sets the seeded appearance its
-  screenshot renders (title, tagline, Registration Policy, Site Default
-  Audience, Media Upload Capability and no Site Theme selection) before it
-  renders. Visual tests therefore need no fresh database and no ordering.
+  screenshot renders (title, tagline, base URL, Registration Policy, Site
+  Default Audience, Media Upload Capability and no Site Theme selection) before
+  it renders. Visual tests therefore need no fresh database and no ordering.
 - A retried visual test may land on the instance where its earlier attempt
   already seeded the fixed-name user. It then signs in to that user instead of
   seeding it, and seeds none of the user's other state again, so the screenshot
@@ -187,6 +187,10 @@ each stays current.
 - Cost: each VM runs one more Jaunder process and one more database. Every
   Firefox lane has a 4 GiB guest with a 2 GiB disk and every Chromium lane a 3
   GiB guest. Every lane runs two workers on two vCPUs and two browsers per VM.
+  Every lane records its guest memory headroom in `lane-memory-<lane>.txt`
+  (#2092), which is how a sizing change is judged. The unsplit measurement
+  controls, which run the whole suite in one VM, take 5 GiB at workers=2 and 6
+  GiB at workers=4.
 - Cost: two harnesses run N instances instead of one.
 - Constraint: VM seeding runs as the service user (`runuser -u jaunder`), so the
   service account owns each instance's publisher gate. Created by root, the gate
