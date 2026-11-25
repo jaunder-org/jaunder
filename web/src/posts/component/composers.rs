@@ -253,7 +253,7 @@ pub(super) fn ComposerDetails(state: ComposeState) -> impl IntoView {
 /// Create it once per page, outside any closure that rebuilds the rail. A rail
 /// rebuilt with a fresh, unresolved resource suspends the enclosing `<Suspense>`,
 /// which blanks the whole editor and moves its save summary under the pointer (#2113).
-pub(super) fn uploads_enabled() -> Resource<WebResult<bool>> {
+pub(super) fn load_uploads_enabled() -> Resource<WebResult<bool>> {
     Resource::new(|| (), |()| crate::media::get_uploads_enabled())
 }
 
@@ -554,7 +554,7 @@ fn CreationComposer(
     on_input: Option<Callback<()>>,
 ) -> impl IntoView {
     let named = audience::load_named_audiences();
-    let uploads_enabled = uploads_enabled();
+    let uploads_enabled = load_uploads_enabled();
     let (submit_disabled, dispatch) = posts::submit_gate(
         state.body,
         Signal::derive(move || {
@@ -1045,7 +1045,7 @@ pub(super) fn ComposerControlRail(
     schedule_error: Signal<Option<InvalidSchedule>>,
     creation_schedule: Option<CreationSchedule>,
     named: RwSignal<NamedAudienceState>,
-    /// From [`uploads_enabled`], created where it outlives rebuilds of this rail.
+    /// From [`load_uploads_enabled`], created where it outlives rebuilds of this rail.
     uploads_enabled: Resource<WebResult<bool>>,
     #[prop(optional)] on_audience_edit: Option<Callback<()>>,
     #[prop(default = Signal::derive(|| true))] format_ready: Signal<bool>,

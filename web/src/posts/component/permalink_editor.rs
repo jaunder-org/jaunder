@@ -237,7 +237,7 @@ pub fn EditPostPage() -> impl IntoView {
     let slug_field = Field::<Slug>::optional();
     let named = audience::load_named_audiences();
     // Page-level so the form rebuild after a confirmed save reuses the resolved flag.
-    let uploads_enabled = composers::uploads_enabled();
+    let uploads_enabled = composers::load_uploads_enabled();
     let lifecycle = posts::EditLifecycleState::new();
     // The redirect-on-publish effect reacts to the client-only ServerAction
     // dispatch. Whether a settled update redirects at all, and to where, is the
@@ -351,6 +351,7 @@ fn EditPostForm(
     delete_publication: posts::LoadedPublication,
     /// The named-audience load shared by the picker and the action gate.
     named: RwSignal<NamedAudienceState>,
+    /// The page-level flag load, so this form's rebuilds never refetch it (#2113).
     uploads_enabled: Resource<WebResult<bool>>,
     action: ServerAction<posts::Update>,
     delete_action: ServerAction<posts::Delete>,
