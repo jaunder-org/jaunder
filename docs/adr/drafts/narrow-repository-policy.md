@@ -33,7 +33,9 @@ package's only dependency on the product crate `common`.
 - **Git and checkout admission belong to `tools/host-tool`.** host-tool is the
   shared contract of the host tools: their JSON report, and how they select and
   admit the caller's checkout and repair `core.hooksPath`. host-proof, coverage
-  and repository-policy import these helpers from host-tool.
+  and repository-policy import these helpers from host-tool. Its one executable,
+  `admit-inputs` (`packages.host-tool`, #2102), is that admission as a command
+  for `dev test-local` and `dev e2e-local`.
 - **One checkout entry point.** Every host tool calls host-tool's
   `checkout::prepare` with its name and, for repository-policy, the source
   predicate compiled into that package (`JAUNDER_REPOSITORY_POLICY_SOURCE`). No

@@ -1,4 +1,4 @@
-"""The span record format shared with host-proof's Rust writer."""
+"""The span record format `dev` writes, locked by a golden file."""
 
 from pathlib import Path
 

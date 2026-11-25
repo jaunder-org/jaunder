@@ -4687,18 +4687,17 @@ the wrapper there
 ([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.
-Every process, including host-proof through the Rust OpenTelemetry SDK, appends
-start and end span records to its own file in `.xtask/run/<run_id>.trace.d/`, in
-one format locked by a shared golden file. When the root ends it always merges
-them into `<run_id>.trace.json`, Chrome trace JSON that Perfetto opens,
-assigning tracks from the span tree and marking a span with no end or no parent
-`incomplete`. `dev trace summary [PATH] [--markdown]` reads a run's records
-locally or from a CI artifact; CI uploads `.xtask/run/` from every validation
-and E2E job and appends the summary to its step summary, diagnostically only.
-Spans go only to files, never OTLP, and tracing never changes a step's exit
-status or output. This replaces traced-run's custom span mechanism
-(`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding). Product
-telemetry is unchanged.
+Every `dev` process appends start and end span records to its own file in
+`.xtask/run/<run_id>.trace.d/`, in one format locked by a golden file. When the
+root ends it always merges them into `<run_id>.trace.json`, Chrome trace JSON
+that Perfetto opens, assigning tracks from the span tree and marking a span with
+no end or no parent `incomplete`. `dev trace summary [PATH] [--markdown]` reads
+a run's records locally or from a CI artifact; CI uploads `.xtask/run/` from
+every validation and E2E job and appends the summary to its step summary,
+diagnostically only. Spans go only to files, never OTLP, and tracing never
+changes a step's exit status or output. This replaces traced-run's custom span
+mechanism (`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding).
+Product telemetry is unchanged.
 
 The auxiliary repository-policy package owns only the fixed documentation
 policies (`repository-docs`) and the fixed Rust/TypeScript source contracts
@@ -4713,10 +4712,12 @@ rather than cloned. Git and checkout admission (caller checkout selection,
 untracked-input admission and `core.hooksPath` repair) live in the shared
 `tools/host-tool` library beside the host-tool report contract, behind one
 `prepare(owner, source_admits)` entry; repository-policy's executables pass
-their compiled source predicate to it. No in-derivation producer links
-host-tool, so `toolsSrc` excludes its sources. The informational repository
-census and the Org timezone extractor are retired. The narrow scoped-Leptosfmt
-adapter is the formatter exception, not a general process runner.
+their compiled source predicate to it. Its one executable, `admit-inputs`,
+exposes untracked-input admission to `dev test-local` and `dev e2e-local`. No
+in-derivation producer links host-tool, so `toolsSrc` excludes its sources. The
+informational repository census and the Org timezone extractor are retired. The
+narrow scoped-Leptosfmt adapter is the formatter exception, not a general
+process runner.
 
 Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).
@@ -5421,9 +5422,6 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
   `ci-validate-host`. `wasm-audit` already has (#2101): `dev wasm-audit` and the
   wasm budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the
   breakdown.
-- `admit-inputs` joins `repository-policy`.
-- `csr-prerequisite` is retired in favour of the server build's own bundle
-  validation.
 - The repository contract tests become pytest.
 
 Until the remaining moves land, the placements below describe the current tree:
@@ -5449,17 +5447,14 @@ Until the remaining moves land, the placements below describe the current tree:
   `report` field. Each prints exactly one JSON report on stdout (steps,
   outcomes, durations, details, verdict) and sends child output to stderr; its
   exit status is the verdict. `dev` renders the human step view; there is no
-  sidecar, `--json` flag or completion sentinel. Only its `csr-prerequisite`
-  executable joins the calling `dev` run's trace, through
-  `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`, writing its validation
-  phases as span records with the Rust OpenTelemetry SDK
-  ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). Its
-  `admit-inputs` and `csr-prerequisite` executables are steps of
-  `dev test-local`, which sequences CSR admission, the `.#csrBundle` build, CSR
-  validation, the image worker build and `pg-run cargo nextest` itself, holding
-  the checkout-local `flock` on `.xtask/host-artifacts.lock` for the whole run
-  so a concurrent `test-local` in the same checkout cannot repoint the bundle's
-  GC root or rebuild the image worker under running tests.
+  sidecar, `--json` flag or completion sentinel. None joins the calling `dev`
+  run's trace.
+- **`dev test-local`** sequences CSR admission (host-tool's `admit-inputs`), the
+  `.#csrBundle` build, the image worker build (whose server build script
+  validates the bundle) and `pg-run cargo nextest` itself, holding the
+  checkout-local `flock` on `.xtask/host-artifacts.lock` for the whole run so a
+  concurrent `test-local` in the same checkout cannot repoint the bundle's GC
+  root or rebuild the image worker under running tests.
 - **In-derivation executables** — the tools that must run inside Nix build
   sandboxes or VM guests, where `nix` and the host tools are unavailable. Each
   is its own Nix package, and each derivation takes only the executable it runs.
@@ -5561,16 +5556,17 @@ would otherwise default to resolver 1
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.host-proof`, `packages.coverage-check` and `packages.system-artifacts`
-are built by one shared host-tool builder (`nix/host-tool.nix`) from each
-package's own Cargo path closure, on a dependencies-only build that only the
-lockfile, member manifests, toolchain and features change
-(`nix/tools-workspace-package.nix`, which `packages.repository-policy` shares);
-application coverage/E2E dependencies and explicit host-unit-test authorities
-remain separate. `dev` runs every Rust host tool from these outputs and
-`packages.repository-policy`, locally and in CI, so CI substitutes unchanged
-tools from Cachix instead of compiling them. setup-ci caches no compiled tool
-output; jobs that run host Cargo opt in to a cache of its downloads only
+`packages.host-proof`, `packages.host-tool`, `packages.coverage-check` and
+`packages.system-artifacts` are built by one shared host-tool builder
+(`nix/host-tool.nix`) from each package's own Cargo path closure, on a
+dependencies-only build that only the lockfile, member manifests, toolchain and
+features change (`nix/tools-workspace-package.nix`, which
+`packages.repository-policy` shares); application coverage/E2E dependencies and
+explicit host-unit-test authorities remain separate. `dev` runs every Rust host
+tool from these outputs and `packages.repository-policy`, locally and in CI, so
+CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
+caches no compiled tool output; jobs that run host Cargo opt in to a cache of
+its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
@@ -5782,13 +5778,13 @@ The residual homes are concern packages in the `tools/` workspace, not a generic
 checker registry, runner, supervisor or replacement omnibus:
 
 - `tools/repository-policy` — fixed repository-docs/source-contracts policy
-  interfaces, shared checkout admission and best-effort `core.hooksPath`
-  preparation (every host tool calls it before its workload).
-- `tools/host-tool` — the shared host-tool report contract.
-- `tools/host-proof` — focused proof (`admit-inputs`, which `test-local` and
-  `e2e-local` admit through, and `test-local`'s `csr-prerequisite` step),
-  artifact-only e2e verdicts (`e2e-evidence`) and host diagnostics
-  (`trace-analysis`, `source-diagnostics`).
+  interfaces.
+- `tools/host-tool` — the shared host-tool report contract, checkout admission
+  and best-effort `core.hooksPath` preparation (every host tool calls it before
+  its workload), and the `admit-inputs` executable that `test-local` and
+  `e2e-local` admit through.
+- `tools/host-proof` — artifact-only e2e verdicts (`e2e-evidence`) and host
+  diagnostics (`trace-analysis`, `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

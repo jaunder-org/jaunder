@@ -4,6 +4,8 @@
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
 - Amended: 2026-11-24 — `e2e-local` moved into `dev` as Python (#2066)
 - Amended: 2026-11-25 — `wasm-audit` moved into `dev` as Python (#2101)
+- Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
+  retired (#2102)
 
 ## Context
 
@@ -51,7 +53,12 @@ Choose these concern homes for the three residual clusters:
   admission), scoped-leptosfmt and Org-timezone extraction targets.
   Checkout/source admission and best-effort relative hook setup share one
   library owner and explicit prepare callsites; pure/artifact consumers do not
-  acquire Git-config mutation.
+  acquire Git-config mutation. _Amended by #2102._ That library owner, now
+  `tools/host-tool` (`docs/adr/drafts/narrow-repository-policy.md`), also ships
+  `admit-inputs <source-admits>`, the one command over its untracked-input
+  admission that `dev test-local` and `dev e2e-local` run before building a
+  selected output. A thin command belongs with the logic it wraps, not in
+  host-proof.
 - **Qualification:** one auxiliary tools/qualification package and a single
   qualification-host executable retaining the existing bounded harness/source/
   target argument contract behind four public Just recipes. Reuse host/common

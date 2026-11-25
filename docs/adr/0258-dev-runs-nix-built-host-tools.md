@@ -5,6 +5,8 @@
 - Issue: [#1968](https://github.com/jaunder-org/jaunder/issues/1968)
 - Amended: 2026-11-24 — `host-proof` no longer ships `e2e-local` (#2066)
 - Amended: 2026-11-25 — `host-proof` no longer ships `wasm-audit` (#2101)
+- Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
+  retired (#2102)
 
 ## Context
 
@@ -38,7 +40,11 @@ packages:
   longer one. It runs inside `dev`, and only its admission step reaches
   host-proof (`admit-inputs`). _Amended by #2101:_ nor is `wasm-audit`, which is
   now `dev`'s own Python. Its breakdown runs `twiggy` from the devShell rather
-  than a Nix-built host tool.
+  than a Nix-built host tool. _Amended by #2102:_ `admit-inputs` moved to
+  `host-tool` and `csr-prerequisite` is retired, so neither `test-local` nor
+  `e2e-local` builds `host-proof`.
+- `host-tool` (_amended by #2102_): admit-inputs, the shared library's one
+  executable, whose small closure keeps admission cheap to build
 - `coverage-check` (the `coverage` crate with its `host` feature)
 - `perf-data`
 - `pr-observer`

@@ -233,12 +233,10 @@ STATIC = [
 CLEAN = commands("git status --porcelain --untracked-files=all")
 CSR_BUNDLE = nix_build(".#csrBundle", "--out-link .xtask/gcroots/csr-bundle")
 TEST_LOCAL = [
-    *HOST_PROOF_BUILD,
+    *build("host-tool"),
     *commands("admit-inputs .#csrBundle.sourceAdmits"),
     *CSR_BUNDLE,
-    # csr-prerequisite shares admit-inputs' package, already built.
     *commands(
-        "csr-prerequisite .xtask/gcroots/csr-bundle",
         "cargo build --locked -p jaunder --bin jaunder",
         "cargo nextest run --no-run --workspace",
         "pg-run cargo nextest run --workspace",

@@ -1524,8 +1524,6 @@ dependencies = [
  "flate2",
  "host",
  "host-tool",
- "opentelemetry",
- "opentelemetry_sdk",
  "regex",
  "repository-policy",
  "serde",

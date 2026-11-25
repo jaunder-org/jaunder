@@ -4,6 +4,8 @@
 - Date: 2026-11-16
 - Issue: [#1965](https://github.com/jaunder-org/jaunder/issues/1965)
 - Amended: 2026-11-25 — the wasm budget runs in-process in `dev` (#2101)
+- Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
+  retired (#2102)
 
 ## Context
 
@@ -45,8 +47,9 @@ exported only to files: every process writes plain span start and end records
 under `.xtask/run/<run_id>.trace.d/`. The root process merges them into one
 Chrome trace JSON file, `<run_id>.trace.json`, for Perfetto, and marks spans
 with no end or no parent as incomplete. Child processes join through the
-OpenTelemetry environment carrier. host-proof uses the Rust OpenTelemetry SDK
-with the same record format. `dev` runs from the checkout on the host and is
+OpenTelemetry environment carrier. _Amended by #2102:_ only `dev` processes
+write records; host-proof's Rust OpenTelemetry writer, whose only user was
+`csr-prerequisite`, is retired. `dev` runs from the checkout on the host and is
 built from a filtered source in the sandbox. `dev trace summary` reads the
 records locally or from CI artifacts.
 
@@ -97,12 +100,18 @@ Work a gate performs is a visible `dev` step, not hidden inside a tool
   ([#1964](https://github.com/jaunder-org/jaunder/issues/1964)): CSR input
   admission, the `.#csrBundle` Nix step, CSR validation, the image worker build
   and `pg-run cargo nextest`. Admission and validation stay in Rust as the small
-  `host-proof admit-inputs` and `host-proof csr-prerequisite` executables. `dev`
-  holds the checkout-local `flock` on `.xtask/host-artifacts.lock`, in a
-  descriptor no child inherits, for the whole sequence. The lock stays: it stops
-  a concurrent `test-local` in the same checkout from repointing the bundle's GC
-  root or rebuilding `target/debug/jaunder` while a run's tests use them.
-  host-proof's `test-local` executable is retired.
+  `host-proof admit-inputs` and `host-proof csr-prerequisite` executables.
+  _Amended by #2102:_ `admit-inputs` is now host-tool's executable, and
+  `csr-prerequisite` is retired: `dev` passes the bundle's resolved absolute
+  root to Cargo, and the server build script, which already ran the same
+  validators on a declared root and fails closed, validates it in
+  `image-worker`. The separately named early failure and its two sub-phase spans
+  are the accepted loss. `dev` holds the checkout-local `flock` on
+  `.xtask/host-artifacts.lock`, in a descriptor no child inherits, for the whole
+  sequence. The lock stays: it stops a concurrent `test-local` in the same
+  checkout from repointing the bundle's GC root or rebuilding
+  `target/debug/jaunder` while a run's tests use them. host-proof's `test-local`
+  executable is retired.
 
 With xtask gone, the in-sandbox `devtool` crate no longer marks a boundary; it
 was a catch-all of unrelated jobs. It is dissolved: each job becomes an

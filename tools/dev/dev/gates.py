@@ -18,9 +18,9 @@ from opentelemetry.trace import Span
 from dev import e2e, index, report, static, steps, trace, wasm_audit
 from dev.checkout import clean_tree
 from dev.commands import (
+    ADMIT_INPUTS,
     COVERAGE_CHECK,
     SOURCE_CONTRACT,
-    host_proof,
     repository_policy,
 )
 from dev.static import Mode
@@ -200,11 +200,14 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
             fcntl.flock(lock, fcntl.LOCK_EX)
         bundle = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
         if bundle is None:
-            admit = steps.tool(host_proof("admit-inputs"))
-            steps.run("csr-admission", [*admit, ".#csrBundle.sourceAdmits"])
+            steps.run(
+                "csr-admission", [*steps.tool(ADMIT_INPUTS), ".#csrBundle.sourceAdmits"]
+            )
             bundle = csr_bundle()
-        prerequisite = steps.tool(host_proof("csr-prerequisite"))
-        root = steps.text("csr-prerequisite", [*prerequisite, bundle])
+        # server's build script validates the bundle and fails closed. It runs
+        # in server/ and tracks the variable's value, so the root is absolute
+        # and resolved past the GC-root symlink: a new bundle is a new value.
+        root = os.path.realpath(bundle)
         # One environment for every Cargo step below: build scripts track
         # these (server's JAUNDER_CSR_BUNDLE_DIR, aws-lc-sys's CFLAGS), so any
         # difference would rebuild between them. aws-lc-sys keys its

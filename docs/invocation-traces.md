@@ -19,12 +19,12 @@ beyond the worktree out of `.xtask/run/`, which is local run history.
 
 Each of `test-local`'s steps is a span under `dev test-local`: `hooks-path`
 (only when `core.hooksPath` needs writing), `host-artifacts-lock` (the wait for
-the checkout's artifact lock), `csr-admission`, `csr-bundle`, `csr-prerequisite`
-(with host-proof's manifest and inventory checks nested inside it),
-`image-worker` and `nextest`. Each span records `jaunder.status` (`ok`,
-`failed`, `signalled`, or `incomplete` when it has no end record or no parent).
-Each `dev` step span also records its `process.exit.code` and its command line,
-capped at 1 KiB. Spans that ran in parallel get separate Perfetto tracks.
+the checkout's artifact lock), `csr-admission`, `csr-bundle`, `image-worker`
+(whose server build validates the bundle) and `nextest`. Each span records
+`jaunder.status` (`ok`, `failed`, `signalled`, or `incomplete` when it has no
+end record or no parent). Each `dev` step span also records its
+`process.exit.code` and its command line, capped at 1 KiB. Spans that ran in
+parallel get separate Perfetto tracks.
 
 Tracing never changes a command's output or exit status. The recorded command
 lines include the selectors you pass, which are **not guaranteed secret-free**:

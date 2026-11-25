@@ -52,7 +52,7 @@ if args[0] == "path-info":
         print("/nix/store/fake.drv")
         sys.exit()
     sys.exit(1)
-if args[-1] != ".#host-proof" and mode("FAKE_BUILD") == "fail":
+if args[-1] != ".#host-tool" and mode("FAKE_BUILD") == "fail":
     sys.exit(9)
 if "--out-link" in args:
     os.symlink(os.environ["FAKE_TOOL_OUT"], args[args.index("--out-link") + 1])

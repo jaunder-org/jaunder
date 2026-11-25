@@ -1,5 +1,5 @@
-//! Focused host proof (ADR-0246): artifact-only e2e verdicts, host
-//! diagnostics, and the CSR input checks host tests depend on. Each verdict
+//! Focused host proof (ADR-0246): artifact-only e2e verdicts and host
+//! diagnostics. Each verdict
 //! executable prints one JSON report on stdout. The `e2e-local` lifecycle is
 //! `dev e2e-local` in `tools/dev` (#2066).
 
@@ -11,14 +11,12 @@ mod e2e_ownership;
 pub mod nix_build;
 pub mod playwright_report;
 mod server_fn_coverage;
-pub mod span_records;
 #[cfg(test)]
 mod test_support;
 pub mod traces;
 
 pub mod steps {
     pub mod boot_decomposition_coverage;
-    pub mod csr_prerequisite;
     pub mod duration_budget;
     pub mod server_fn_coverage_check;
 }

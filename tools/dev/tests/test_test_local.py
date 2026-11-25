@@ -15,22 +15,19 @@ from conftest import Checkout
 LOCK = ".xtask/host-artifacts.lock"
 STEPS = [
     "host-artifacts-lock",
-    "host-proof-build",
+    "host-tool-build",
     "csr-admission",
     "csr-bundle",
-    "csr-prerequisite",
     "image-worker",
     "nextest-build",
     "nextest",
 ]
 
-# Host-proof's helpers, in its package output. They fail as ADMIT_CODE
-# and PREREQUISITE_CODE say; with DAEMON set, admission first leaves behind a
-# daemon that keeps every inheritable descriptor, its pid in `daemon.pid`. The
-# prerequisite prints its resolved root.
-TOOL = """\
-binary = pathlib.Path(sys.argv[0]).name
-if binary == "admit-inputs" and os.environ.get("DAEMON"):
+# admit-inputs, in host-tool's package output. It fails as ADMIT_CODE
+# says; with DAEMON set, it first leaves behind a daemon that keeps every
+# inheritable descriptor, its pid in `daemon.pid`.
+ADMIT_INPUTS = """\
+if os.environ.get("DAEMON"):
     daemon = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdin=subprocess.DEVNULL,
@@ -40,13 +37,10 @@ if binary == "admit-inputs" and os.environ.get("DAEMON"):
         start_new_session=True,
     )
     pathlib.Path("daemon.pid").write_text(str(daemon.pid))
-code = int(os.environ.get(
-    "ADMIT_CODE" if binary == "admit-inputs" else "PREREQUISITE_CODE", "0"))
+code = int(os.environ.get("ADMIT_CODE", "0"))
 if code:
-    print(f"{binary}: refused", file=sys.stderr)
+    print("admit-inputs: refused", file=sys.stderr)
     sys.exit(code)
-if binary == "csr-prerequisite":
-    print(os.path.realpath(sys.argv[1]))
 """
 # The image worker build and nextest (behind the fake pg-run). Every Cargo
 # command records its arguments and Cargo environment in `cargo.jsonl`. nextest's run records what
@@ -84,13 +78,13 @@ if args[0] != "build" and "--no-run" not in args:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# host-proof's package builds to FAKE_TOOL_OUT. Otherwise an evaluation prints
+# host-tool's package builds to FAKE_TOOL_OUT. Otherwise an evaluation prints
 # a derivation, a cache query fails, and a build links its out-link to $BUNDLE,
 # or fails with NIX_BUILD_CODE. No step records a cache source.
 NIX = """\
-if sys.argv[-1] == ".#host-proof":
+if sys.argv[-1] == ".#host-tool":
     derivation = "--derivation" in sys.argv
-    print("/nix/store/fake-host-proof.drv" if derivation else os.environ["FAKE_TOOL_OUT"])
+    print("/nix/store/fake-host-tool.drv" if derivation else os.environ["FAKE_TOOL_OUT"])
     sys.exit()
 if "--derivation" in sys.argv:
     print("/nix/store/fake-csr-bundle.drv")
@@ -113,8 +107,7 @@ def local(checkout: Checkout) -> Checkout:
     checkout.tool("cargo", CARGO)
     checkout.tool("nix", NIX)
     checkout.tool("pg-run", PG_RUN)
-    for helper in ["admit-inputs", "csr-prerequisite"]:
-        checkout.built(helper, TOOL)
+    checkout.built("admit-inputs", ADMIT_INPUTS)
     (checkout.root.parent / "bundle").mkdir()
     return checkout
 
@@ -160,10 +153,10 @@ BUNDLE_BUILD = (
     "nix build -L --accept-flake-config --print-out-paths --out-link .xtask/gcroots/csr-bundle "
     ".#csrBundle"
 )
-# Both helpers come from one package build: its evaluation, then the build.
-HOST_PROOF_BUILD = [
-    "nix path-info --derivation --accept-flake-config .#host-proof",
-    "nix build -L --accept-flake-config --print-out-paths --no-link .#host-proof",
+# admit-inputs' package build: its evaluation, then the build.
+HOST_TOOL_BUILD = [
+    "nix path-info --derivation --accept-flake-config .#host-tool",
+    "nix build -L --accept-flake-config --print-out-paths --no-link .#host-tool",
 ]
 WORKER_BUILD = "cargo build --locked -p jaunder --bin jaunder"
 NEXTEST_BUILD = "cargo nextest run --no-run --workspace"
@@ -174,11 +167,10 @@ def expected_order(*nextest_args: str) -> list[str]:
     first as their own step."""
     run = nextest_args or ("--workspace",)
     return [
-        *HOST_PROOF_BUILD,
+        *HOST_TOOL_BUILD,
         "admit-inputs .#csrBundle.sourceAdmits",
         BUNDLE_EVAL,
         BUNDLE_BUILD,
-        "csr-prerequisite .xtask/gcroots/csr-bundle",
         WORKER_BUILD,
         *([] if nextest_args else [NEXTEST_BUILD]),
         " ".join(["pg-run", "cargo", "nextest", "run", *run]),
@@ -198,7 +190,7 @@ def test_each_step_runs_in_order_as_a_span_of_the_gate(local: Checkout) -> None:
     assert starts == sorted(starts)
 
 
-def test_nextest_gets_the_verified_bundle_and_the_built_worker(
+def test_nextest_gets_the_resolved_bundle_and_the_built_worker(
     local: Checkout,
 ) -> None:
     result = run_test_local(local)
@@ -269,17 +261,22 @@ def test_the_tests_compile_apart_from_their_run_in_its_environment(
     assert not any(line.startswith("pg-run") and "--no-run" in line for line in lines)
 
 
-def test_an_explicit_bundle_root_is_verified_without_building_one(
-    local: Checkout,
+@pytest.mark.parametrize("exists", [True, False])
+def test_an_explicit_bundle_root_reaches_cargo_resolved_without_building_anything(
+    local: Checkout, exists: bool
 ) -> None:
+    # Relative, and through a symlink: server's build script runs in server/
+    # and validates the root itself, refusing one that does not exist.
     explicit = local.root.parent / "explicit"
-    explicit.mkdir()
-    result = run_test_local(local, JAUNDER_CSR_BUNDLE_DIR=str(explicit))
+    if exists:
+        explicit.mkdir()
+    (local.root / "link").symlink_to(explicit)
+    result = run_test_local(local, JAUNDER_CSR_BUNDLE_DIR="link")
     assert result.returncode == 0, result
-    lines = order(local)
-    assert not any(".#csrBundle" in line for line in lines), lines
-    assert lines[:3] == [*HOST_PROOF_BUILD, f"csr-prerequisite {explicit}"]
-    assert nextest(local)["bundle"] == os.path.realpath(explicit)
+    assert order(local)[0] == WORKER_BUILD
+    assert {record["JAUNDER_CSR_BUNDLE_DIR"] for record in cargo(local)} == {
+        os.path.realpath(explicit)
+    }
     assert "csr-bundle" not in local.merged()
 
 
@@ -307,7 +304,6 @@ def test_the_worker_build_sets_missing_cflags_empty_and_keeps_an_existing_value(
     [
         ({"ADMIT_CODE": "3"}, "admit-inputs"),
         ({"NIX_BUILD_CODE": "4"}, "nix build"),
-        ({"PREREQUISITE_CODE": "1"}, "csr-prerequisite"),
     ],
 )
 def test_a_refused_bundle_stops_before_any_compilation(
@@ -317,7 +313,7 @@ def test_a_refused_bundle_stops_before_any_compilation(
     assert result.returncode == int(next(iter(failure.values()))), result
     lines = order(local)
     assert lines[-1].startswith(last), lines
-    # Only the helpers were built: no Cargo compilation of the workspace.
+    # Only the tool and bundle were built: no Cargo compilation of the workspace.
     assert not (local.root / "cargo.jsonl").exists()
     assert not (local.root / "nextest.json").exists()
 
