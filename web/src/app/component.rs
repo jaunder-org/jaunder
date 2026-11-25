@@ -484,6 +484,13 @@ fn AppShell() -> impl IntoView {
             confirmed_user_tag.0.set(retained);
         }
     });
+    // One shell serves both layouts (#2013): the Sidebar and the route `<Outlet/>`
+    // are built once, and only the attributes and banner placement below follow
+    // the layout. A layout-specific tree would build a new Outlet on every layout
+    // change, and that Outlet mounts the route being left once more before the
+    // router swaps in the destination.
+    let public =
+        Memo::new(move |_| common::theme::is_public_presentation_path(&location.pathname.get()));
     // `data-theme` must be a plain dynamic attribute, NOT `attr:data-theme`: the
     // Leptos `attr:` directive prefix is only for spreading onto a component; on a
     // plain element it leaks a literal `attr:data-theme` attribute into the mounted
@@ -492,17 +499,14 @@ fn AppShell() -> impl IntoView {
         <div
             class="j-root"
             data-theme=move || {
-                if common::theme::is_public_presentation_path(&location.pathname.get()) {
+                if public.get() {
                     theme.get().map_or_else(String::new, |theme| theme.data_theme())
                 } else {
                     Theme::Studio.token().to_owned()
                 }
             }
             data-home=move || (location.pathname.get() == "/app").then_some("true")
-            data-jaunder-private=move || {
-                (!common::theme::is_public_presentation_path(&location.pathname.get()))
-                    .then_some("true")
-            }
+            data-jaunder-private=move || (!public.get()).then_some("true")
         >
             <Show
                 when=move || coordinator_failure.get().is_none()
@@ -521,51 +525,51 @@ fn AppShell() -> impl IntoView {
                     }
                 }
             >
-                {move || {
-                    if common::theme::is_public_presentation_path(&location.pathname.get()) {
-                        view! {
-                            <div class="j-theme-clip" data-jaunder-theme-clip>
-                                <div
-                                    class="j-shell"
-                                    data-jaunder-theme-surface
-                                    data-jaunder-style-contract=common::theme::STYLE_CONTRACT_VERSION
-                                >
-                                    <Sidebar />
-                                    <div class="j-main-region">
-                                        <main class="j-main" data-jaunder-part="main">
-                                            <Outlet />
-                                        </main>
-                                    </div>
-                                </div>
-                            </div>
-                            <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
-                            <div id="j-trusted-chrome" class="j-trusted-chrome">
-                                <BackupBanner />
-                                <SiteBaseUrlBanner />
-                                <crate::posts::EditingTimezoneBanner />
-                            </div>
+                // The private wrapper is `display: contents`, so private pages
+                // keep a box tree without the public paint clip.
+                <div
+                    class=move || if public.get() { "j-theme-clip" } else { "j-contents" }
+                    data-jaunder-theme-clip=move || public.get().then_some("")
+                >
+                    <div
+                        class="j-shell"
+                        data-jaunder-theme-surface=move || public.get().then_some("")
+                        data-jaunder-style-contract=move || {
+                            public.get().then_some(common::theme::STYLE_CONTRACT_VERSION_TOKEN)
                         }
-                            .into_any()
-                    } else {
-                        view! {
-                            <div class="j-shell">
-                                <Sidebar />
-                                <div class="j-main-region">
-                                    <BackupBanner />
-                                    <SiteBaseUrlBanner />
-                                    <crate::posts::EditingTimezoneBanner />
-                                    <main class="j-main">
-                                        <Outlet />
-                                    </main>
-                                </div>
-                            </div>
-                            <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
-                        }
-                            .into_any()
-                    }
-                }}
+                    >
+                        <Sidebar />
+                        <div class="j-main-region">
+                            <Show when=move || !public.get()>
+                                <WarningBanners />
+                            </Show>
+                            <main
+                                class="j-main"
+                                data-jaunder-part=move || public.get().then_some("main")
+                            >
+                                <Outlet />
+                            </main>
+                        </div>
+                    </div>
+                </div>
+                <div id="j-trusted-post-actions" class="j-trusted-post-actions"></div>
+                <Show when=move || public.get()>
+                    <div id="j-trusted-chrome" class="j-trusted-chrome">
+                        <WarningBanners />
+                    </div>
+                </Show>
             </Show>
         </div>
+    }
+}
+
+/// The operational warning banners, placed by `AppShell` per layout.
+#[component]
+fn WarningBanners() -> impl IntoView {
+    view! {
+        <BackupBanner />
+        <SiteBaseUrlBanner />
+        <crate::posts::EditingTimezoneBanner />
     }
 }
 
