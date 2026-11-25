@@ -13,7 +13,11 @@ fn main() {
         );
         std::process::exit(2);
     };
-    if let Err(error) = repository_policy::checkout::prepare_policy_checkout("repository-docs") {
+    if let Err(error) = host_tool::checkout::prepare(
+        "repository-docs",
+        // Git-backed Nix outputs refuse omitted inputs; native Cargo reads live source.
+        option_env!("JAUNDER_REPOSITORY_POLICY_SOURCE"),
+    ) {
         eprintln!("repository-docs: {error:#}");
         std::process::exit(2);
     }

@@ -21,12 +21,11 @@ enum Command {
 
 fn main() {
     let cli = parse_args::<Cli>();
-    if let Err(error) = host_proof::checkout::prepare() {
+    if let Err(error) = host_tool::checkout::prepare("host-proof", None) {
         std::process::exit(
             CommandResult::refused("source-diagnostics", format!("{error:#}")).emit(),
         );
     }
-    host_proof::checkout::ensure_hooks_installed();
     let start = std::time::Instant::now();
     let (name, step) = match cli.command {
         Command::CacheSafetyProbe => ("cache-safety-probe", host_proof::cache_safety::probe()),

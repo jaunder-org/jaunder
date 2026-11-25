@@ -4,7 +4,7 @@ use std::process::ExitStatus;
 
 /// Run git against `dir` with the repo-redirecting env scrubbed.
 pub fn git(dir: &Path, args: &[&str]) -> ExitStatus {
-    crate::git::at(dir).args(args).status().unwrap()
+    host_tool::git::at(dir).args(args).status().unwrap()
 }
 
 /// Run git against `dir`, asserting it succeeded.

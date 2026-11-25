@@ -209,7 +209,7 @@ fn dead_links_in_with_tracked(
 }
 
 fn tracked_paths(repo: &Path) -> Result<BTreeSet<String>> {
-    Ok(crate::git::lines(repo, &["ls-files"])?
+    Ok(host_tool::git::lines(repo, &["ls-files"])?
         .into_iter()
         .collect())
 }
@@ -251,7 +251,7 @@ fn normalize_repo_rel(path: &Path) -> Option<String> {
 /// gate. Absent paths are dropped so a staged deletion fails at its `git rm`, not
 /// here.
 fn gated_files(repo: &Path) -> Result<Vec<String>> {
-    Ok(crate::git::ls_files_md(repo)?
+    Ok(host_tool::git::ls_files_md(repo)?
         .into_iter()
         .filter(|rel| !EXCLUDED.iter().any(|tree| rel.starts_with(tree)))
         .filter(|rel| repo.join(rel).exists())

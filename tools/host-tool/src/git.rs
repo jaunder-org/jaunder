@@ -154,57 +154,70 @@ pub fn config_set(dir: &Path, key: &str, value: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    use crate::test_support::commit;
+    /// A fresh repository with an identity, owned by the returned directory.
+    fn temp_repo(tag: &str) -> tempfile::TempDir {
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("jaunder-git-{tag}-"))
+            .tempdir()
+            .unwrap();
+        run(dir.path(), &["init", "-q", "-b", "main"]).unwrap();
+        config_set(dir.path(), "user.email", "t@t").unwrap();
+        config_set(dir.path(), "user.name", "t").unwrap();
+        dir
+    }
 
-    fn temp_repo(tag: &str) -> crate::test_support::TestRepo {
-        crate::test_support::temp_repo("git", tag)
+    /// Write `rel` and commit it.
+    fn commit(dir: &Path, rel: &str, body: &str) {
+        std::fs::write(dir.join(rel), body).unwrap();
+        run(dir, &["add", rel]).unwrap();
+        run(dir, &["commit", "-qm", "c"]).unwrap();
     }
 
     #[test]
     fn output_returns_trimmed_stdout_and_bails_on_error() {
         let dir = temp_repo("output");
-        commit(&dir, "a.txt", "x\n");
-        let head = output(&dir, &["rev-parse", "HEAD"]).unwrap();
+        commit(dir.path(), "a.txt", "x\n");
+        let head = output(dir.path(), &["rev-parse", "HEAD"]).unwrap();
         assert_eq!(head.len(), 40, "full sha, trimmed: {head:?}");
-        assert!(output(&dir, &["not-a-subcommand"]).is_err());
+        assert!(output(dir.path(), &["not-a-subcommand"]).is_err());
     }
 
     #[test]
     fn lines_drops_blank_lines() {
         let dir = temp_repo("lines");
-        commit(&dir, "a.txt", "1\n");
-        commit(&dir, "b.txt", "2\n");
-        let subjects = lines(&dir, &["log", "--format=%s"]).unwrap();
+        commit(dir.path(), "a.txt", "1\n");
+        commit(dir.path(), "b.txt", "2\n");
+        let subjects = lines(dir.path(), &["log", "--format=%s"]).unwrap();
         assert_eq!(subjects, vec!["c".to_string(), "c".to_string()]);
     }
 
     #[test]
     fn run_ok_on_success_err_on_failure() {
         let dir = temp_repo("run");
-        commit(&dir, "a.txt", "x\n");
-        assert!(run(&dir, &["status", "--porcelain"]).is_ok());
-        assert!(run(&dir, &["mv", "nope", "nowhere"]).is_err());
+        commit(dir.path(), "a.txt", "x\n");
+        assert!(run(dir.path(), &["status", "--porcelain"]).is_ok());
+        assert!(run(dir.path(), &["mv", "nope", "nowhere"]).is_err());
     }
 
     #[test]
     fn toplevel_returns_repo_root() {
         let dir = temp_repo("toplevel");
-        commit(&dir, "a.txt", "x\n");
-        let root = toplevel(&dir).unwrap();
+        commit(dir.path(), "a.txt", "x\n");
+        let root = toplevel(dir.path()).unwrap();
         // Compare canonically — /tmp may be a symlink.
         assert_eq!(
             std::fs::canonicalize(&root).unwrap(),
-            std::fs::canonicalize(&dir).unwrap()
+            std::fs::canonicalize(dir.path()).unwrap()
         );
     }
 
     #[test]
     fn config_get_none_when_unset_some_after_set() {
         let dir = temp_repo("config");
-        assert_eq!(config_get(&dir, "core.hooksPath").unwrap(), None);
-        config_set(&dir, "core.hooksPath", ".githooks").unwrap();
+        assert_eq!(config_get(dir.path(), "core.hooksPath").unwrap(), None);
+        config_set(dir.path(), "core.hooksPath", ".githooks").unwrap();
         assert_eq!(
-            config_get(&dir, "core.hooksPath").unwrap(),
+            config_get(dir.path(), "core.hooksPath").unwrap(),
             Some(".githooks".to_string())
         );
     }
@@ -212,16 +225,22 @@ mod tests {
     #[test]
     fn config_get_bails_on_a_broken_config_rather_than_reading_unset() {
         let dir = temp_repo("broken-config");
-        std::fs::write(dir.join(".git/config"), "[core\n").unwrap();
-        assert!(config_get(&dir, "core.hooksPath").is_err());
+        std::fs::write(dir.path().join(".git/config"), "[core\n").unwrap();
+        assert!(config_get(dir.path(), "core.hooksPath").is_err());
     }
 
     #[test]
     fn ensure_hooks_path_sets_then_is_noop() {
         let dir = temp_repo("ensure-hooks");
-        assert!(ensure_hooks_path(&dir).unwrap(), "first call sets it");
-        assert!(!ensure_hooks_path(&dir).unwrap(), "second call is a no-op");
-        assert_eq!(hooks_path(&dir).unwrap(), Some(HOOKS_PATH.to_string()));
+        assert!(ensure_hooks_path(dir.path()).unwrap(), "first call sets it");
+        assert!(
+            !ensure_hooks_path(dir.path()).unwrap(),
+            "second call is a no-op"
+        );
+        assert_eq!(
+            hooks_path(dir.path()).unwrap(),
+            Some(HOOKS_PATH.to_string())
+        );
     }
 
     #[test]

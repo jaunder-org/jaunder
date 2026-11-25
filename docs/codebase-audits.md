@@ -13,7 +13,7 @@ local to the implementation that owns the behaviour.
 
 Use a hybrid audit:
 
-1. Generate a machine-assisted repository census.
+1. Gather a repository census with existing analysis tools.
 2. Rank candidate hotspots using several independent signals.
 3. Review complete modules and behavioural slices, not isolated files.
 4. Record a small number of evidence-backed findings.
@@ -27,7 +27,7 @@ review determines whether anything should change.
 
 ## Repository census
 
-Build a compact, reproducible inventory of signals such as:
+Gather a compact inventory of signals such as:
 
 - crate, package, and module dependencies;
 - exported symbols and their references;
@@ -41,64 +41,28 @@ Build a compact, reproducible inventory of signals such as:
 - corresponding SQLite and PostgreSQL adapter paths;
 - duplicated constants, validation rules, projections, and state transitions.
 
-Use the most semantic tool available. Rust Analyzer and language servers are
-better than syntax trees for definitions and references. `cargo metadata` is
-better for crate dependencies. Syntax-aware search is useful for structural
-clones, wrapper shapes, and repeated conversion pipelines. Git history supplies
-churn and co-change evidence.
+Use the most semantic tool available, scoped to the slice you are auditing:
 
-The census is not itself a backlog and should not initially gate changes. Every
-signal can have a legitimate explanation.
+- `cargo metadata` and `cargo tree` for crate dependencies;
+- rust-analyzer (or the TypeScript language server) for definitions, references,
+  and unreferenced exports;
+- ast-grep for structural clones, wrapper shapes, and repeated conversion
+  pipelines;
+- `git log --name-only` over a bounded range for churn and co-change;
+- a direct comparison of `storage/src/sqlite` and `storage/src/postgres` for
+  adapter correspondence;
+- an agent-assisted read of the slice (see below) to rank what the tools find.
 
-### Running and interpreting the census
-
-Run the complete read-only census from the repository root:
-
-```bash
-dev census
-dev census --json
-```
-
-The compact output and JSON describe the same ordered signal sections and
-independently keyed language/signal/capability cells. A cell is `clean` when its
-collector completed without emitting candidates, `candidates` when it emitted
-repository-relative review leads, `unavailable` when its declared analyzer or
-input capability is absent, and `failed` when collection could not complete. A
-failed cell makes the command fail while retaining every completed cell in the
-report; neither `unavailable` nor `failed` means clean. The unused-dependencies
-and-symbols section separately identifies `unused-dependency` and
-`unreferenced-exported-symbol` capabilities, so unavailable dependency analysis
-cannot conceal semantic symbol evidence. Each candidate cell retains at most
-`MAX_CANDIDATES_PER_CELL` (currently 10) deterministically ordered candidates in
-both outputs, together with its pre-cap `total_candidates`. Each candidate
-likewise retains at most `MAX_PATHS_PER_CANDIDATE` (currently 10) sorted paths
-and carries its pre-cap `total_paths`; human output states `showing N / total`
-when either list is truncated. This keeps high-volume heuristic history and
-clone results reviewable without implying that omitted candidates or paths
-vanished.
-
-The census covers Rust, TypeScript, and Elisp dependency/structural signals,
-Rust and TypeScript semantic-reference signals when their analyzers are
-available, repository-wide Git-history churn and co-change for every approved
-tracked source path, and SQLite/PostgreSQL storage adapter path correspondence.
-Sound unused-dependency analysis is explicitly unavailable for Rust, TypeScript,
-and Elisp until a collector exists. TypeScript semantic collection opens the
-approved snapshot documents in the analyzer's declared workspace before
-requesting symbols and references. Semantic collectors use their declared
-semantic analyzer; structural clone evidence comes from parsed function and test
-forms; history uses full `HEAD`-reachable non-merge Git history with rename
-detection; adapter correspondence matches `storage/src/sqlite` and
-`storage/src/postgres` paths. Every cell records its collector identity,
-evidence method, version when available, and material limitation so its lead can
-be reviewed at the right confidence.
-
-The report is ephemeral: do not commit generated census output or treat it as a
-baseline. It is neither a verification gate nor a finding or backlog. In
-particular, churn and co-change are heuristic maintenance signals, and a paired
+The census is not itself a backlog and must not gate changes. Every signal can
+have a legitimate explanation. Do not commit its output or treat it as a
+baseline. Churn and co-change are heuristic maintenance signals, and a paired
 SQLite/PostgreSQL path is only a correspondence candidate, never a claim of SQL,
 behavioral, or semantic equivalence. Read the cited code, tests, and applicable
-ADRs—especially ADR-0019's deliberate dialect boundaries—before recording a
+ADRs (especially ADR-0019's deliberate dialect boundaries) before recording a
 finding.
+
+A dedicated census tool was retired because its unranked output was not useful
+for audits (`docs/adr/drafts/narrow-repository-policy.md`).
 
 ## Ranking hotspots
 
@@ -244,12 +208,12 @@ straightforward consolidation.
 
 Maintain two tracks:
 
-1. Regenerate the repository census periodically and after large milestones.
+1. Gather a fresh census periodically and after large milestones.
 2. Complete one bounded behavioural-slice audit during a maintenance cycle.
 
 For each slice: investigate, agree on findings, create focused issues, remediate
 one issue at a time, verify all affected callers and adapters, delete superseded
-paths, and then regenerate the relevant census signals.
+paths, and then re-check the relevant census signals.
 
 A strong first slice is one storage-backed domain operation with both SQLite and
 PostgreSQL implementations and callers in another crate. It exposes adapter

@@ -49,13 +49,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         [words("nix run --no-update-lock-file --no-write-lock-file .#ux-sandbox --")],
     ),
     (
-        ["census", "--json", SHELL_SYNTAX],
-        [
-            *build("repository-policy"),
-            ["source-contracts", "census", "--json", SHELL_SYNTAX],
-        ],
-    ),
-    (
         ["pg-run", "psql", "-c", "select 1"],
         [["pg-run", "psql", "-c", "select 1"]],
     ),
@@ -63,20 +56,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (
         ["pg-run", "--", "psql", "--", "-c"],
         [["pg-run", "psql", "--", "-c"]],
-    ),
-    (
-        ["census", "--json", "--", "--"],
-        [
-            *build("repository-policy"),
-            ["source-contracts", "census", "--json", "--", "--"],
-        ],
-    ),
-    (
-        ["org-timezone-manifest", "--", "-x.org"],
-        [
-            *build("repository-policy"),
-            ["org-timezone-manifest", "--", "-x.org"],
-        ],
     ),
     (
         ["coverage-check", "probe-source", "--help"],
@@ -95,13 +74,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             "source-diagnostics",
             "trace-analysis",
         ]
-    ),
-    (
-        ["org-timezone-manifest", "a.org", SHELL_SYNTAX],
-        [
-            *build("repository-policy"),
-            ["org-timezone-manifest", "--", "a.org", SHELL_SYNTAX],
-        ],
     ),
     (
         ["adr-format"],
@@ -422,39 +394,6 @@ def test_report_tools_show_their_help_unchanged(
     )
 
 
-# The front door forwards explicit local originals only. Nothing is bootstrapped and nothing but the
-# trace run directory (`.xtask/run`, which `dev` writes for every run) appears.
-ORG_TOOL = """\
-files = sys.argv[sys.argv.index("--") + 1:]
-reports = [{"file": name} for name in files if pathlib.Path(name).is_file()]
-print(json.dumps({"mappings": reports}))
-sys.exit(0 if len(reports) == len(files) else 1)
-"""
-
-
-def test_org_timezone_manifest_forwards_originals_without_bootstrap(
-    checkout: Checkout,
-) -> None:
-    checkout.tool("nix", store_nix())
-    checkout.built("org-timezone-manifest", "import json\n" + ORG_TOOL)
-    name = "local ; touch unexpected.org"
-    text = "#+PROPERTY: JAUNDER_ID 7\n#+PROPERTY: JAUNDER_DATE_TZ UTC\n"
-    (checkout.root / name).write_text(text)
-    for file, status in [(name, 0), ("missing.org", 1)]:
-        result = checkout.dev(
-            "org-timezone-manifest",
-            file,
-            GITHUB_STEP_SUMMARY=str(checkout.root / "summary.md"),
-        )
-        assert result.returncode == status, result
-        report = json.loads(result.stdout)
-        assert len(report["mappings"]) == (status == 0)
-        assert not (checkout.root / "summary.md").exists()
-        assert not (checkout.root / "unexpected.org").exists()
-        assert [path.name for path in (checkout.root / ".xtask").iterdir()] == ["run"]
-    assert (checkout.root / name).read_text() == text
-
-
 def store_nix(output: str = "/nix/store/fake-out") -> str:
     """A fake `nix` whose tool packages build to FAKE_TOOL_OUT and every other
     installable to `output`, all registered in its store long ago."""
@@ -670,7 +609,6 @@ def test_build_csr_assembles_the_bundle_into_target_site(
         ["build-csr", "bogus"],
         ["static-all", "bogus"],
         ["adr-format", "extra"],
-        ["org-timezone-manifest"],
     ],
 )
 def test_missing_or_extra_arguments_are_refused_before_any_work(

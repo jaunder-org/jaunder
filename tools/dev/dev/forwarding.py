@@ -7,12 +7,7 @@ tools own every decision: nothing here infers approval or ownership.
 from collections.abc import Callable, Sequence
 
 from dev import report, steps
-from dev.commands import (
-    COVERAGE_CHECK,
-    SOURCE_CONTRACT,
-    host_proof,
-    repository_policy,
-)
+from dev.commands import COVERAGE_CHECK, host_proof
 
 
 def sandbox(args: Sequence[str]) -> None:
@@ -20,15 +15,6 @@ def sandbox(args: Sequence[str]) -> None:
         "ux-sandbox",
         ["nix", "run", *steps.NIX_LOCK_FLAGS, ".#ux-sandbox", "--", *args],
     )
-
-
-def census(args: Sequence[str]) -> None:
-    steps.run("census", [*steps.tool(SOURCE_CONTRACT), "census", *args])
-
-
-def org_timezone_manifest(files: Sequence[str]) -> None:
-    manifest = steps.tool(repository_policy("org-timezone-manifest"))
-    steps.run("org-timezone-manifest", [*manifest, "--", *files])
 
 
 def pg_run(args: Sequence[str]) -> None:

@@ -1,14 +1,10 @@
-//! Native repository policy and checkout admission, independent of product tooling.
+//! Native source contracts and documentation checks, independent of product tooling.
 pub mod adr;
-pub mod census;
-pub mod checkout;
 #[cfg(test)]
 mod concern_test_support;
 pub mod files;
-pub mod git;
 pub mod ids;
 pub mod markers;
-pub mod org_timezone_manifest;
 pub mod repository_docs;
 pub mod scoped_leptosfmt;
 pub mod server_fns;

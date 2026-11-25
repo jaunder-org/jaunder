@@ -45,7 +45,7 @@ fn owned_fixture() -> tempfile::TempDir {
 fn repository(parent: &Path, name: &str) -> PathBuf {
     let root = parent.join(name);
     fs::create_dir(&root).unwrap();
-    let output = repository_policy::git::at(&root)
+    let output = host_tool::git::at(&root)
         .args(["init", "--quiet"])
         .output()
         .unwrap();

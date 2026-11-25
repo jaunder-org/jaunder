@@ -13,7 +13,7 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         vec!["config", "core.hooksPath", "caller-owned-hooks"],
     ] {
         assert!(
-            repository_policy::git::at(&root)
+            host_tool::git::at(&root)
                 .args(args)
                 .status()
                 .unwrap()
@@ -26,7 +26,7 @@ fn another_repository_is_refused_before_its_hook_configuration_changes() {
         .output()
         .unwrap();
     assert_eq!(output.status.code(), Some(2));
-    let hooks = repository_policy::git::at(&root)
+    let hooks = host_tool::git::at(&root)
         .args(["config", "--get", "core.hooksPath"])
         .output()
         .unwrap();

@@ -331,38 +331,6 @@ local fail-fast behavior does not weaken their verdicts.
   recorded human approval for that exact PR/head). Ask for review before you
   merge, not before every commit.
 
-### Read-only Org timezone evidence
-
-Run `traced-run -- dev org-timezone-manifest /path/a.org /path/b.org` with
-explicit local UTF-8 Org files (shell globs are also accepted). There is no
-recursive discovery, inventory option, database connection, server access, or
-import. The extractor only reads originals; normal command acquisition/build
-artifacts remain outside them.
-
-Stdout is a JSON manifest, independent of `--json`: `mappings` contains unique
-`post_id` (decimal string, avoiding JSON integer precision loss) and `timezone`
-pairs, ordered by numeric ID. Only positive ASCII decimal IDs within signed
-64-bit range are accepted; leading zeros denote the same ID. Named zones use
-`PublicationTimezone` validation and retain exact alias spelling. Surrounding
-Org property whitespace is syntax, not part of the value. Only the leading
-keyword block is inspected, using the same boundary as server Org metadata;
-body/headline properties are not candidates. DATE, STATUS and body content are
-not prerequisites, and unrelated metadata is not validated.
-
-`diagnostics` is ordered by source path/code/ID. Codes distinguish missing or
-invalid ID/zone, repeated ID/zone properties, duplicate IDs across sources, and
-unreadable (including non-UTF-8) sources. Every rejected source also receives
-`unmapped_source`; duplicate diagnostics name the ID. All sources naming an
-ambiguous ID are excluded, even if zones agree or another source is invalid.
-Other valid mappings remain in a partial report. Exit **0** means no local
-exceptions, **1** means a partial manifest with diagnostics, and **2** means
-invalid invocation or output serialization failure. A successful extraction is
-not server-coverage proof: `server_coverage` always explicitly reports that
-server IDs absent from originals cannot be determined without a separately
-authorized read-only Post-ID inventory. This command does not accept or fetch
-that inventory, infer matches from titles/slugs/dates/offsets, or change any
-Post, revision, timestamp, or original file.
-
 ### Artifact lifecycle
 
 Commit what defines, implements, explains, or continuously checks the system.
@@ -515,7 +483,7 @@ shared worktree config. `dev` runs every step (cargo test, nextest and pytest
 included) without those vars, and `tools/dev/tests/conftest.py` drops every
 `GIT_*` variable for its tests; keep both. Build every Rust test's git command
 (and any production helper it calls) through a constructor that `env_remove`s
-those vars — see `git::at()` in `tools/repository-policy/src/git.rs`. Read-only
+those vars — see `git::at()` in `tools/host-tool/src/git.rs`. Read-only
 production queries (`rev-parse`/`log`/`diff`/`ls-files`) are safe unscrubbed
 since they don't mutate.
 

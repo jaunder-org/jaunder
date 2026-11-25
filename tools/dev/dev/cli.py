@@ -192,31 +192,21 @@ class _Forwarding(click.Command):
     is forwarded with the rest.
     """
 
-    def __init__(self, name: str, required: bool, **settings: Any) -> None:
-        super().__init__(name, **settings)
-        self.required = required
-
     def parse_args(self, ctx: click.Context, args: list[str]) -> list[str]:
         forwarded = args[1:] if args[:1] == ["--"] else args
-        if self.required and not forwarded:
-            raise click.UsageError("missing arguments", ctx)
         ctx.params["args"] = tuple(forwarded)
         return []
-
-    def collect_usage_pieces(self, ctx: click.Context) -> list[str]:
-        return ["[--] ARGS..." if self.required else "[--] [ARGS]..."]
 
 
 def _forwarding(
     name: str,
     body: Callable[[tuple[str, ...]], None],
     summary: str,
-    required: bool = False,
 ) -> None:
     def command(args: tuple[str, ...]) -> None:
         _gate(lambda: body(args))
 
-    cli.add_command(_Forwarding(name, required, callback=command, help=summary))
+    cli.add_command(_Forwarding(name, callback=command, help=summary))
 
 
 _forwarding(
@@ -227,11 +217,6 @@ _forwarding(
 )
 _forwarding(
     "sandbox", forwarding.sandbox, "Run the UX sandbox with ARGS, kept as argv."
-)
-_forwarding(
-    "census",
-    forwarding.census,
-    "Informational source census: a fixed domain command, not a validation.",
 )
 _forwarding(
     "pg-run",
@@ -254,12 +239,6 @@ for _binary, _summary in {
     _forwarding(
         _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
     )
-_forwarding(
-    "org-timezone-manifest",
-    forwarding.org_timezone_manifest,
-    "Timezone manifest of explicit local Org originals; no checkout admission.",
-    required=True,
-)
 
 
 @cli.command("upgrade-test")

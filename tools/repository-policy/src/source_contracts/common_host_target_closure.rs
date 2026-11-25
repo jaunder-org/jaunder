@@ -13,7 +13,7 @@ use anyhow::{Context, Result, anyhow};
 use serde::Deserialize;
 use xshell::{Shell, cmd};
 
-use crate::git;
+use host_tool::git;
 
 const CSR_TARGET: &str = "wasm32-unknown-unknown";
 
