@@ -1433,12 +1433,14 @@ to remove the source.
 produces fresh, versioned performance evidence. Defaults are `medium`,
 `sqlite,postgres`, an empty browser list, `all`, and unset counts. Nix selects
 producer descriptions from these native parameters and one fresh nonce; `dev`
-builds and retains each producer serially, and the host-only `perf-data` command
-validates and assembles the retained evidence. Rust does not schedule producers.
-The default matrix for every profile is direct storage and browser work against
-SQLite and PostgreSQL, with Chromium for browser work; it uses release-mode
-application artifacts and runs the selected workloads in order. The canonical
-comparison run is therefore:
+builds, retains and checks each producer serially, then assembles the retained
+evidence. Each VM has already validated its manifest and fragment in Rust, so
+`dev` checks only the producer's status, that its fragment fills the selected
+slot, and that every fragment describes the same dataset. Rust does not schedule
+producers. The default matrix for every profile is direct storage and browser
+work against SQLite and PostgreSQL, with Chromium for browser work; it uses
+release-mode application artifacts and runs the selected workloads in order. The
+canonical comparison run is therefore:
 
 ```bash
 dev perf medium
@@ -1465,11 +1467,11 @@ dev perf small sqlite,postgres "" all 1000 20 2000
 
 `posts`, `authors`, and `revisions` each take a positive `u64`; an empty value
 leaves that count unset. A supplied plan must have posts divisible by authors,
-revisions at least posts, and more than 50 owner-history rows per author;
-accepted custom datasets distribute their revisions deterministically. Any count
-override marks the result noncanonical, even when its numeric value equals the
-selected profile default, so it can be compared but the baseline importer
-rejects it.
+revisions at least posts, and more than 50 owner-history rows per author (the
+Nix selector rejects any other plan before building a producer); accepted custom
+datasets distribute their revisions deterministically. Any count override marks
+the result noncanonical, even when its numeric value equals the selected profile
+default, so it can be compared but the baseline importer rejects it.
 
 Select backends and browsers with comma-separated native parameters; duplicates
 normalize to one selection. `workload` accepts `all`, `storage`, or `browser`.
@@ -1502,17 +1504,16 @@ Each invocation creates a fresh nonce that is part of the producer derivation
 identity; it never restores or publishes measurement derivations or result
 outputs through a cache. Inspect the invocation-owned evidence under
 `.xtask/performance/<nonce>/`: `performance-result-v1.json` is the authoritative
-combined result. `selection.json` records Nix-selected identities and
-`invocation.json` records retained-root metadata; each
+combined result. `selection.json` records Nix-selected identities; each
 `producers/<name>/performance/` tree retains `producer-status-v1.json`,
 fragments, per-sample navigation/Playwright traces, and the correlated
 server/storage `otel-traces.jsonl`. `dev` copies that complete tree before
-status validation and before starting the next producer. A later build or status
-failure stops later producers without deleting earlier evidence. The same
-validated result is atomically copied to
-`.xtask/performance/performance-result-v1.json` as the stable CI upload/import
-entry point. CI uploads that complete tree as the `performance-result` artifact,
-including whatever evidence exists after a producer failure.
+checking the producer and before starting the next producer. A later build or
+status failure stops later producers without deleting earlier evidence. The same
+result is atomically copied to `.xtask/performance/performance-result-v1.json`
+as the stable CI upload/import entry point. CI uploads that complete tree as the
+`performance-result` artifact, including whatever evidence exists after a
+producer failure.
 
 When `tools/performance/baseline-v1.json` exists, compare a completed result:
 
@@ -1523,8 +1524,9 @@ dev perf-compare .xtask/performance/<nonce>/performance-result-v1.json
 Comparison prints absolute median/p95 values and each sample's
 minimum-to-maximum spread. A median or p95 increase of 20% or more is
 highlighted as advisory evidence only: it does not fail the command or CI.
-Missing samples, malformed fragments/results, incompatible identities, and
-producer failures are real failures and must not be dismissed as timing noise.
+Producer failures, an unsupported result or baseline schema, a different dataset
+plan, and incompatible identities are real failures and must not be dismissed as
+timing noise.
 
 There is intentionally no local baseline until a maintainer bootstraps one from
 the first successful canonical `main` run. After a scheduled or manual
@@ -2526,8 +2528,10 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   - A tool that needs a product fact (an inventory, a manifest, a format
     version) gets it from a product command or file, not by linking product
     code. If there is no such interface, add one.
-  - A format written by Rust and read in another language is validated against a
-    JSON Schema generated from the writer's types, committed with a drift check.
+  - A format written by Rust and read in another language is parsed, not
+    validated again: its Rust writer has already validated it, and no schema is
+    generated for it
+    ([docs/adr/drafts/perf-data-python-reads-validated-data.md](docs/adr/drafts/perf-data-python-reads-validated-data.md)).
   - Bash is allowed only for host scripts in `scripts/` that run commands and
     check their results, use traps only to remove temporary files or report the
     failed step, and get concurrency only from a standard tool (bounded

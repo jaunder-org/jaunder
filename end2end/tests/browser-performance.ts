@@ -116,12 +116,6 @@ function positiveInteger(value: unknown, name: string): number {
   return value;
 }
 
-function positiveSubjectInteger(value: unknown, name: string): number {
-  const number = positiveInteger(value, name);
-  if (number === 0) throw new Error(`${name} must be positive`);
-  return number;
-}
-
 function nonempty(value: unknown, name: string): string {
   if (typeof value !== "string" || value.trim() === "")
     throw new Error(`${name} must be nonempty`);
@@ -215,6 +209,8 @@ export function readPerformanceEnvironment(
   };
 }
 
+// The seeder validated the manifest before writing it; this only finds the
+// cursor a workload pages from.
 function cursor(
   manifest: DatasetManifest,
   workload: Cursor["workload"],
@@ -223,53 +219,7 @@ function cursor(
     (candidate) => candidate.workload === workload,
   );
   if (!found) throw new Error(`manifest lacks cursor for ${workload}`);
-  if (
-    found.target_percent !== 80 ||
-    found.resolved_rank < 1 ||
-    found.matching_result_count < PERFORMANCE_PAGE_SIZE
-  )
-    throw new Error(`manifest cursor for ${workload} is invalid`);
   return found;
-}
-
-export function validateManifest(value: unknown): DatasetManifest {
-  if (typeof value !== "object" || value === null)
-    throw new Error("manifest must be an object");
-  const manifest = value as DatasetManifest;
-  if (manifest.schema_version !== 1)
-    throw new Error("manifest schema_version must be 1");
-  nonempty(manifest.plan?.profile, "manifest.plan.profile");
-  positiveInteger(
-    manifest.plan?.generator?.version,
-    "manifest.plan.generator.version",
-  );
-  positiveInteger(
-    manifest.plan?.generator?.seed,
-    "manifest.plan.generator.seed",
-  );
-  const initialRows = manifest.subjects?.browser_initial_rows;
-  for (const route of [
-    "home",
-    "app",
-    "global_history",
-    "post_history",
-  ] as const) {
-    positiveSubjectInteger(
-      initialRows?.[route],
-      `manifest.subjects.browser_initial_rows.${route}`,
-    );
-  }
-  positiveSubjectInteger(
-    manifest.subjects?.history_post_id,
-    "manifest.subjects.history_post_id",
-  );
-  positiveSubjectInteger(
-    manifest.subjects?.revision_id,
-    "manifest.subjects.revision_id",
-  );
-  if (!Array.isArray(manifest.cursors))
-    throw new Error("manifest.cursors must be an array");
-  return manifest;
 }
 
 export function browserWorkloads(manifest: DatasetManifest): BrowserWorkload[] {

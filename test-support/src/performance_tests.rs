@@ -529,43 +529,6 @@ mod contract_coverage {
         }
     }
 
-    fn selection() -> RunSelection {
-        RunSelection {
-            backends: vec![Backend::Sqlite],
-            count_overrides: CountOverrides::default(),
-            browsers: vec![],
-            storage: true,
-            browser: false,
-        }
-    }
-
-    fn provenance() -> Provenance {
-        Provenance::Local(LocalProvenance {
-            git_commit: "commit".into(),
-        })
-    }
-
-    fn evidence() -> RunEvidence {
-        RunEvidence {
-            measured_at_unix_ms: 1,
-            freshness_nonce: "nonce".into(),
-            producer_derivation_identities: vec![NamedDerivationIdentity {
-                name: "producer".into(),
-                identity: "stable".into(),
-            }],
-        }
-    }
-
-    fn valid_run() -> RunEnvelope {
-        assemble_run(
-            selection(),
-            provenance(),
-            evidence(),
-            &[storage_envelope(storage_workloads())],
-        )
-        .expect("valid storage run")
-    }
-
     #[test]
     fn filenames_and_noncanonical_plans_cover_the_public_contract() {
         assert_eq!(
@@ -624,115 +587,6 @@ mod contract_coverage {
     }
 
     #[test]
-    fn assembly_rejects_schema_manifest_completeness_and_selection_drift() {
-        let mut unsupported = storage_envelope(storage_workloads());
-        unsupported.schema_version += 1;
-        assert_eq!(
-            assemble_run(selection(), provenance(), evidence(), &[unsupported]),
-            Err(AggregateError::UnsupportedSchema)
-        );
-
-        assert_eq!(
-            assemble_run(selection(), provenance(), evidence(), &[]),
-            Err(AggregateError::IncompatibleManifest)
-        );
-
-        let first = storage_envelope(storage_workloads());
-        let mut second = first.clone();
-        second.manifest.subjects.history_post_id += 1;
-        assert_eq!(
-            assemble_run(selection(), provenance(), evidence(), &[first, second]),
-            Err(AggregateError::IncompatibleManifest)
-        );
-
-        let mut missing = storage_workloads();
-        missing.pop();
-        assert!(matches!(
-            assemble_run(
-                selection(),
-                provenance(),
-                evidence(),
-                &[storage_envelope(missing)]
-            ),
-            Err(AggregateError::Missing(_))
-        ));
-
-        let mut mismatched = selection();
-        mismatched.count_overrides.posts = Some(120);
-        assert_eq!(
-            assemble_run(
-                mismatched,
-                provenance(),
-                evidence(),
-                &[storage_envelope(storage_workloads())]
-            ),
-            Err(AggregateError::InvalidSelection)
-        );
-
-        let github = Provenance::Github(GitHubProvenance {
-            repository: "jaunder-org/jaunder".into(),
-            workflow: "performance".into(),
-            job: "performance".into(),
-            reference: "refs/heads/main".into(),
-            head_sha: "commit".into(),
-            run_id: 1,
-            attempt: 1,
-        });
-        assemble_run(
-            selection(),
-            github,
-            evidence(),
-            &[storage_envelope(storage_workloads())],
-        )
-        .expect("valid GitHub provenance");
-    }
-
-    #[test]
-    fn run_validation_rejects_each_top_level_integrity_boundary() {
-        assert_eq!(validate_run(&valid_run()), Ok(()));
-
-        let mut run = valid_run();
-        run.schema_version += 1;
-        assert_eq!(validate_run(&run), Err(AggregateError::UnsupportedSchema));
-
-        let mut run = valid_run();
-        run.canonical_selection = true;
-        assert_eq!(validate_run(&run), Err(AggregateError::InvalidSelection));
-
-        let mut run = valid_run();
-        run.selection.backends.clear();
-        assert_eq!(validate_run(&run), Err(AggregateError::InvalidSelection));
-
-        let mut run = valid_run();
-        run.provenance = Provenance::Local(LocalProvenance {
-            git_commit: " ".into(),
-        });
-        assert_eq!(validate_run(&run), Err(AggregateError::InvalidProvenance));
-
-        let mut run = valid_run();
-        run.evidence.measured_at_unix_ms = 0;
-        assert_eq!(validate_run(&run), Err(AggregateError::InvalidEvidence));
-
-        let mut run = valid_run();
-        run.setup.push(SetupDuration {
-            producer: Producer::Browser,
-            backend: Backend::Sqlite,
-            provisioning_us: 1,
-            seeding_us: 1,
-        });
-        assert_eq!(validate_run(&run), Err(AggregateError::IncompatibleSetup));
-
-        let mut run = valid_run();
-        run.setup.clear();
-        assert_eq!(validate_run(&run), Err(AggregateError::IncompatibleSetup));
-
-        let mut run = valid_run();
-        run.selection.browser = true;
-        run.selection.browsers = vec![Browser::Chromium];
-        assert_eq!(validate_run(&run), Err(AggregateError::IncompatibleSetup));
-    }
-
-    #[test]
     fn manifest_validation_rejects_each_cursor_integrity_boundary() {
         let mut invalid = manifest();
         invalid.schema_version += 1;
@@ -752,49 +606,179 @@ mod contract_coverage {
     }
 
     #[test]
-    fn fragment_validation_rejects_missing_browser_point_and_unselected_workloads() {
-        let mut missing_browser = browser_envelope(browser_workloads());
-        let Fragment::Browser(fragment) = &mut missing_browser.fragment else {
-            unreachable!("constructed browser fragment")
-        };
-        fragment.workloads[0].key.browser = None;
+    fn validates_complete_storage_and_browser_fragments() {
         assert_eq!(
-            validate_fragment(&missing_browser),
-            Err(AggregateError::IncompatibleWorkload)
+            validate_fragment(&storage_envelope(storage_workloads())),
+            Ok(())
         );
+        assert_eq!(
+            validate_fragment(&browser_envelope(browser_workloads())),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn validates_a_complete_fragment_with_custom_counts() {
+        let mut envelope = storage_envelope(storage_workloads());
+        envelope.manifest.plan = plan(
+            DatasetProfile::Small,
+            CountOverrides {
+                posts: Some(120),
+                authors: Some(12),
+                revisions: Some(777),
+            },
+        )
+        .expect("custom plan");
+        assert_eq!(validate_fragment(&envelope), Ok(()));
+    }
+
+    #[test]
+    fn rejects_missing_and_duplicate_workloads() {
+        let mut workloads = storage_workloads();
+        workloads.pop();
+        assert!(matches!(
+            validate_fragment(&storage_envelope(workloads)),
+            Err(FragmentError::Missing(_))
+        ));
+
+        let mut workloads = storage_workloads();
+        workloads.push(workloads[0].clone());
+        assert!(matches!(
+            validate_fragment(&storage_envelope(workloads)),
+            Err(FragmentError::Duplicate(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_an_unsupported_fragment_schema() {
+        let mut envelope = storage_envelope(storage_workloads());
+        envelope.schema_version += 1;
+        assert_eq!(
+            validate_fragment(&envelope),
+            Err(FragmentError::UnsupportedSchema)
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_manifest_with_its_specific_error() {
+        for username in ["", " "] {
+            let mut fragment = storage_envelope(storage_workloads());
+            fragment.manifest.subjects.username = username.into();
+            assert_eq!(
+                validate_fragment(&fragment),
+                Err(FragmentError::InvalidManifest(ManifestError::Cursor))
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_setup_identity_and_backend_mismatches() {
+        let mut fragment = storage_envelope(storage_workloads());
+        let Fragment::Storage(storage) = &mut fragment.fragment else {
+            unreachable!("constructed storage fragment")
+        };
+        storage.setup.producer = Producer::Browser;
+        assert_eq!(
+            validate_fragment(&fragment),
+            Err(FragmentError::SetupProducerMismatch)
+        );
+
+        let mut fragment = storage_envelope(storage_workloads());
+        let Fragment::Storage(storage) = &mut fragment.fragment else {
+            unreachable!("constructed storage fragment")
+        };
+        storage.setup.backend = Backend::Postgres;
+        assert_eq!(
+            validate_fragment(&fragment),
+            Err(FragmentError::SetupBackendMismatch)
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_samples_summaries_and_builds() {
+        let mut workloads = storage_workloads();
+        workloads[0].samples.push(RawSample { duration_us: 2 });
+        let mut summary = storage_workloads();
+        summary[0].summary.mean_us += 1;
+        let mut debug = storage_workloads();
+        debug[0].key.build_mode = BuildMode::Debug;
+        for workloads in [workloads, summary, debug] {
+            assert_eq!(
+                validate_fragment(&storage_envelope(workloads)),
+                Err(FragmentError::IncompatibleWorkload)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_cross_producer_and_bad_position_workloads() {
+        let mut cross = storage_workloads();
+        cross[0].key.workload = Workload::Home;
+        let mut page = storage_workloads();
+        page[0].key.page_size = None;
+        let mut point = storage_workloads();
+        point[0].key.measurement_position = MeasurementPosition::Point;
+        point[0].key.page_size = None;
+        for workloads in [cross, page, point] {
+            assert_eq!(
+                validate_fragment(&storage_envelope(workloads)),
+                Err(FragmentError::IncompatibleWorkload)
+            );
+        }
 
         let mut wrong_producer = browser_workloads();
         wrong_producer[0].key.workload = Workload::PublicTimeline;
         assert_eq!(
             validate_fragment(&browser_envelope(wrong_producer)),
-            Err(AggregateError::IncompatibleWorkload)
+            Err(FragmentError::IncompatibleWorkload)
         );
+    }
 
-        let mut point = storage_workloads();
-        point[0].key.measurement_position = MeasurementPosition::Point;
-        point[0].key.page_size = None;
+    #[test]
+    fn rejects_a_browser_fragment_without_a_browser_identity() {
+        let mut workloads = browser_workloads();
+        workloads[0].key.browser = None;
         assert_eq!(
-            validate_fragment(&storage_envelope(point)),
-            Err(AggregateError::IncompatibleWorkload)
+            validate_fragment(&browser_envelope(workloads)),
+            Err(FragmentError::IncompatibleWorkload)
         );
+    }
 
-        let mut unselected = storage_workloads();
-        for item in &mut unselected {
-            item.key.backend = Backend::Postgres;
-        }
-        let mut envelope = storage_envelope(unselected);
-        let Fragment::Storage(fragment) = &mut envelope.fragment else {
-            unreachable!("constructed storage fragment")
-        };
-        fragment.setup.backend = Backend::Postgres;
+    #[test]
+    fn rejects_a_workload_for_another_browser() {
+        let mut workloads = browser_workloads();
+        workloads[1].key.browser = Some(Browser::Firefox);
         assert!(matches!(
-            assemble_run(selection(), provenance(), evidence(), &[envelope]),
-            Err(AggregateError::Unselected(_))
+            validate_fragment(&browser_envelope(workloads)),
+            Err(FragmentError::Unselected(_))
         ));
     }
 
     #[test]
-    fn browser_deep_positions_resolve_their_storage_cursor_contracts() {
+    fn rejects_browser_warm_measurements_and_wrong_deep_cursor_rank() {
+        let mut browser_warm = item(
+            Workload::Home,
+            MeasurementFrame::Warm,
+            MeasurementPosition::Initial,
+        );
+        browser_warm.key.sample_count = 20;
+        browser_warm.samples = vec![RawSample { duration_us: 1 }; 20];
+        browser_warm.summary = summarize(&browser_warm.samples).expect("valid samples");
+        assert_eq!(
+            validate_fragment(&browser_envelope(vec![browser_warm])),
+            Err(FragmentError::IncompatibleWorkload)
+        );
+
+        let mut workloads = storage_workloads();
+        workloads[1].key.cursor_resolved_rank = Some(79);
+        assert_eq!(
+            validate_fragment(&storage_envelope(workloads)),
+            Err(FragmentError::IncompatibleWorkload)
+        );
+    }
+
+    #[test]
+    fn browser_deep_positions_resolve_their_storage_cursors_but_are_not_owed() {
         for workload in [Workload::Home, Workload::App, Workload::BrowserPostHistory] {
             let mut workloads = browser_workloads();
             workloads.insert(
@@ -802,20 +786,86 @@ mod contract_coverage {
                 item(workload, MeasurementFrame::Cold, MeasurementPosition::Deep),
             );
             assert!(matches!(
-                assemble_run(
-                    RunSelection {
-                        backends: vec![Backend::Sqlite],
-                        count_overrides: CountOverrides::default(),
-                        browsers: vec![Browser::Chromium],
-                        storage: false,
-                        browser: true,
-                    },
-                    provenance(),
-                    evidence(),
-                    &[browser_envelope(workloads)]
-                ),
-                Err(AggregateError::Unselected(_))
+                validate_fragment(&browser_envelope(workloads)),
+                Err(FragmentError::Unselected(_))
             ));
+        }
+    }
+
+    #[test]
+    fn rejects_blank_or_missing_browser_diagnostics_and_stable_derivations() {
+        let mut workloads = storage_workloads();
+        workloads[0].key.stable_derivation_identities[0]
+            .identity
+            .clear();
+        assert_eq!(
+            validate_fragment(&storage_envelope(workloads)),
+            Err(FragmentError::IncompatibleWorkload)
+        );
+
+        let mut duplicate = browser_envelope(browser_workloads());
+        let Fragment::Browser(fragment) = &mut duplicate.fragment else {
+            unreachable!("constructed browser fragment")
+        };
+        fragment.diagnostics.trace_artifacts[1] = fragment.diagnostics.trace_artifacts[0].clone();
+        assert_eq!(
+            validate_fragment(&duplicate),
+            Err(FragmentError::InvalidDiagnostics)
+        );
+
+        for diagnostics in [
+            BrowserDiagnostics {
+                navigation_artifacts: vec![" ".into()],
+                trace_artifacts: vec!["trace.json".into()],
+                otel_trace_artifact: "otel-traces.jsonl".into(),
+            },
+            BrowserDiagnostics {
+                navigation_artifacts: vec![],
+                trace_artifacts: vec!["trace.json".into()],
+                otel_trace_artifact: "otel-traces.jsonl".into(),
+            },
+            BrowserDiagnostics {
+                navigation_artifacts: vec![],
+                trace_artifacts: vec![],
+                otel_trace_artifact: " ".into(),
+            },
+        ] {
+            let fragment = FragmentEnvelope {
+                schema_version: RESULT_SCHEMA_VERSION,
+                manifest: manifest(),
+                fragment: Fragment::Browser(BrowserFragment {
+                    setup: SetupDuration {
+                        producer: Producer::Browser,
+                        backend: Backend::Sqlite,
+                        provisioning_us: 1,
+                        seeding_us: 1,
+                    },
+                    diagnostics,
+                    workloads: vec![],
+                }),
+            };
+            assert_eq!(
+                validate_fragment(&fragment),
+                Err(FragmentError::InvalidDiagnostics)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_duplicate_or_unsorted_stable_derivation_names() {
+        for name in ["producer", "alpha"] {
+            let mut workloads = storage_workloads();
+            workloads[0]
+                .key
+                .stable_derivation_identities
+                .push(NamedDerivationIdentity {
+                    name: name.into(),
+                    identity: "other".into(),
+                });
+            assert_eq!(
+                validate_fragment(&storage_envelope(workloads)),
+                Err(FragmentError::IncompatibleWorkload)
+            );
         }
     }
 }

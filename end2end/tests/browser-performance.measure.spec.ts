@@ -13,7 +13,6 @@ import {
   performanceEnabled,
   readPerformanceEnvironment,
   summarize,
-  validateManifest,
   type BrowserWorkload,
   type DatasetManifest,
 } from "./browser-performance";
@@ -262,8 +261,8 @@ test("emits browser performance fragment from the authoritative manifest", async
 }) => {
   setTestBudget(BROWSER_PERFORMANCE_BUDGET_MS);
   const environment = readPerformanceEnvironment();
-  const manifest = validateManifest(
-    JSON.parse(await readFile(environment.manifestPath, "utf8")),
+  const manifest: DatasetManifest = JSON.parse(
+    await readFile(environment.manifestPath, "utf8"),
   );
   const diagnostics = {
     navigation_artifacts: [] as string[],

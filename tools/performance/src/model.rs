@@ -6,8 +6,6 @@ pub const DATASET_SCHEMA_VERSION: u32 = 1;
 pub const GENERATOR_VERSION: u32 = 1;
 pub const GENERATOR_SEED: u64 = 1_434;
 pub const DATASET_MANIFEST_FILENAME: &str = "dataset-manifest-v1.json";
-pub const RESULT_FILENAME: &str = "performance-result-v1.json";
-pub const BASELINE_FILENAME: &str = "baseline-v1.json";
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -244,12 +242,6 @@ pub struct CompatibilityKey {
     pub database_version: String,
     pub browser_version: Option<String>,
 }
-impl CompatibilityKey {
-    #[must_use]
-    pub fn is_compatible_with(&self, other: &Self) -> bool {
-        self == other
-    }
-}
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct WorkloadResult {
     pub key: CompatibilityKey,
@@ -292,56 +284,4 @@ pub struct FragmentEnvelope {
     pub schema_version: u32,
     pub manifest: DatasetManifest,
     pub fragment: Fragment,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunSelection {
-    pub backends: Vec<Backend>,
-    #[serde(default)]
-    pub count_overrides: CountOverrides,
-    pub browsers: Vec<Browser>,
-    pub storage: bool,
-    pub browser: bool,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunEvidence {
-    /// Host observation time; producer setup and workload durations remain separate.
-    pub measured_at_unix_ms: u64,
-    pub freshness_nonce: String,
-    pub producer_derivation_identities: Vec<NamedDerivationIdentity>,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct RunEnvelope {
-    pub schema_version: u32,
-    pub manifest: DatasetManifest,
-    pub selection: RunSelection,
-    pub canonical_selection: bool,
-    pub provenance: Provenance,
-    pub evidence: RunEvidence,
-    pub setup: Vec<SetupDuration>,
-    pub workloads: Vec<WorkloadResult>,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct LocalProvenance {
-    pub git_commit: String,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct GitHubProvenance {
-    pub repository: String,
-    pub workflow: String,
-    pub job: String,
-    pub reference: String,
-    pub head_sha: String,
-    pub run_id: u64,
-    pub attempt: u32,
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-#[serde(tag = "source", content = "details", rename_all = "snake_case")]
-pub enum Provenance {
-    Local(LocalProvenance),
-    Github(GitHubProvenance),
-}
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Baseline {
-    pub schema_version: u32,
-    pub run: RunEnvelope,
 }
