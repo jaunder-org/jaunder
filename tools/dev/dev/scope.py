@@ -1,0 +1,45 @@
+"""CI's documentation-only scope.
+
+A pull request or merge-queue entry that changes Markdown alone, by the rule
+the precommit's narrow route uses (`index.markdown_only`), runs only the
+documentation checks. Anything this cannot establish runs everything.
+"""
+
+import subprocess
+import sys
+
+from dev import index
+from dev.index import Reason
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(["git", *args], capture_output=True, check=False)
+
+
+def _reason(base: str) -> str:
+    """Why the change from `base` to HEAD is, or is not, Markdown-only."""
+    if not base:
+        return "no-base"
+    # Depth 1 is enough: comparing two trees needs no history between them.
+    fetched = _git("fetch", "--quiet", "--no-tags", "--depth=1", "origin", base)
+    if fetched.returncode:
+        return "base-unavailable"
+    diff = _git("diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, "HEAD")
+    if diff.returncode:
+        return "diff-failed"
+    uncertainty: set[str] = set()
+    changes = index.raw_changes(diff.stdout, uncertainty)
+    if uncertainty:
+        return Reason.UNCERTAIN_STATUS
+    return index.markdown_only(changes)
+
+
+def ci_scope(base: str) -> None:
+    """Prints `docs_only=true|false` for `$GITHUB_OUTPUT`, and why on stderr.
+
+    An empty `base` (a push) runs everything.
+    """
+    reason = _reason(base)
+    docs_only = reason == Reason.ISOLATED_STAGED_MARKDOWN
+    print(f"docs_only={'true' if docs_only else 'false'}", flush=True)
+    print(f"ci-scope: docs_only={docs_only} reason={reason}", file=sys.stderr)

@@ -217,6 +217,14 @@ green, read the commit's check suites
 `merge_group` suite carries the result. Do not list CI runs filtered by
 `event=push`.
 
+**Documentation-only entries.** A queue entry that changes only Markdown,
+compared with `merge_group.base_sha` by the precommit's own rule, runs only
+`Validation docs`, as its pull request did; both required checks still report.
+The queue entry's verdict still covers the landed commit, so its `push` run
+skips as above. Merge-queue runs are never cancelled; only a superseded
+`pull_request` run is
+([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
+
 ## ADR promoter queue boundary
 
 This branch changes `.github/workflows/adr-promoter.yml` to select the locked

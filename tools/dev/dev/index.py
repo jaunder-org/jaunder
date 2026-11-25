@@ -55,6 +55,16 @@ class PathStatus:
     worktree_fingerprint: str | None = None
 
 
+@dataclass(frozen=True)
+class Change:
+    """One record of a raw Git diff; a mode is 0 on a side that does not exist."""
+
+    old_mode: int
+    new_mode: int
+    status: str
+    path: str
+
+
 @dataclass
 class Snapshot:
     """The complete dirty tree, its staged raw diff and any uncertain evidence.
@@ -66,12 +76,13 @@ class Snapshot:
     paths: dict[str, PathStatus] = field(default_factory=dict)
     uncertainty: list[str] = field(default_factory=list)
     staged_raw_diff: bytes = b""
+    staged_changes: list[Change] = field(default_factory=list)
 
 
 class Reason(StrEnum):
-    """Why the precommit takes its route; only the first is narrow.
+    """Why a change is Markdown-only or not; only the first is narrow.
 
-    The broad reasons are listed in their stable precedence.
+    The other reasons are listed in their stable precedence.
     """
 
     ISOLATED_STAGED_MARKDOWN = "isolated-staged-markdown"
@@ -79,7 +90,6 @@ class Reason(StrEnum):
     EMPTY_STATE = "empty-state"
     UNTRACKED_PATH = "untracked-path"
     UNSTAGED_PATH = "unstaged-path"
-    DELETE_OR_RENAME = "delete-or-rename"
     UNSUPPORTED_CHANGE = "unsupported-change"
     UNSUPPORTED_INDEX_MODE = "unsupported-index-mode"
     NON_MARKDOWN_PATH = "non-markdown-path"
@@ -93,6 +103,7 @@ class StagePlan:
 
 @dataclass(frozen=True)
 class _RawHeader:
+    old_mode: int
     new_mode: int
     status: str
 
@@ -224,7 +235,36 @@ def _raw_header(header: bytes) -> _RawHeader | None:
         return None
     if not _valid_transition(old_mode, new_mode, old_object, new_object, status):
         return None
-    return _RawHeader(new_mode, status)
+    return _RawHeader(old_mode, new_mode, status)
+
+
+def raw_changes(raw: bytes, uncertainty: set[str]) -> list[Change]:
+    """The records of a `git diff --raw -z --no-abbrev --no-renames`.
+
+    A record this module cannot vouch for is left out and recorded in
+    `uncertainty`, so a caller with uncertainty must not trust the list.
+    """
+    changes: list[Change] = []
+    seen: set[str] = set()
+    records = iter(_nul_records(raw, uncertainty, "raw"))
+    for header in records:
+        parsed = _raw_header(header)
+        if parsed is None:
+            uncertainty.add("malformed-raw-record")
+            continue
+        path_bytes = next(records, None)
+        if path_bytes is None:
+            uncertainty.add("missing-raw-path")
+            continue
+        path = _utf8(path_bytes)
+        if path is None:
+            uncertainty.add("non-utf8-or-empty-raw-path")
+            continue
+        if path in seen:
+            uncertainty.add("duplicate-raw-path")
+        seen.add(path)
+        changes.append(Change(parsed.old_mode, parsed.new_mode, parsed.status, path))
+    return changes
 
 
 def parse(status: bytes, raw: bytes) -> Snapshot:
@@ -279,31 +319,14 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
             else:
                 add(old_path, index, worktree)
 
-    staged_from_raw: set[str] = set()
-    seen_raw: set[str] = set()
-    records = iter(_nul_records(raw, uncertainty, "raw"))
-    for header in records:
-        parsed = _raw_header(header)
-        if parsed is None:
-            uncertainty.add("malformed-raw-record")
-            continue
-        path_bytes = next(records, None)
-        if path_bytes is None:
-            uncertainty.add("missing-raw-path")
-            continue
-        path = _utf8(path_bytes)
-        if path is None:
-            uncertainty.add("non-utf8-or-empty-raw-path")
-            continue
-        if path in seen_raw:
-            uncertainty.add("duplicate-raw-path")
-        seen_raw.add(path)
-        entry = paths.setdefault(path, PathStatus())
-        entry.delete_or_rename |= parsed.status == "D"
-        entry.unsupported_change |= parsed.status not in ("A", "M", "D")
-        entry.index_mode = parsed.new_mode
-        entry.raw_change = parsed.status
-        staged_from_raw.add(path)
+    changes = raw_changes(raw, uncertainty)
+    for change in changes:
+        entry = paths.setdefault(change.path, PathStatus())
+        entry.delete_or_rename |= change.status == "D"
+        entry.unsupported_change |= change.status not in ("A", "M", "D")
+        entry.index_mode = change.new_mode
+        entry.raw_change = change.status
+    staged_from_raw = {change.path for change in changes}
 
     for entry in paths.values():
         if None not in (entry.staged_change, entry.raw_change) and (
@@ -312,7 +335,7 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
             uncertainty.add("status-raw-change-mismatch")
     if staged_from_status != staged_from_raw:
         uncertainty.add("status-raw-population-mismatch")
-    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), raw)
+    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), raw, changes)
 
 
 # Snapshots.
@@ -360,8 +383,38 @@ def snapshot() -> Snapshot:
     return taken
 
 
+def markdown_only(changes: list[Change]) -> Reason:
+    """Whether a diff changes Markdown alone: the one rule the precommit's
+    narrow route and CI's documentation-only scope share.
+
+    Every record must add, modify or delete a case-sensitive `.md` path that is
+    a regular file on each side that exists. A deleted or (as `--no-renames`
+    reports it) renamed Markdown file qualifies: the documentation checks see
+    what it breaks. Only the documentation consumes Markdown, so nothing else
+    needs to run.
+    """
+    if not changes:
+        return Reason.EMPTY_STATE
+    if any(change.status not in ("A", "M", "D") for change in changes):
+        return Reason.UNSUPPORTED_CHANGE
+    if any(
+        mode not in REGULAR
+        for change in changes
+        for mode in (change.old_mode, change.new_mode)
+        if mode
+    ):
+        return Reason.UNSUPPORTED_INDEX_MODE
+    if not all(change.path.endswith(".md") for change in changes):
+        return Reason.NON_MARKDOWN_PATH
+    return Reason.ISOLATED_STAGED_MARKDOWN
+
+
 def classify(taken: Snapshot) -> Reason:
-    """The precommit route for `taken`; uncertainty takes the broad route."""
+    """The precommit route for `taken`; uncertainty takes the broad route.
+
+    Beyond the shared rule, the commit must be the whole dirty tree: nothing
+    untracked or unstaged that the checks would see but the commit would not.
+    """
     statuses = taken.paths.values()
     if taken.uncertainty:
         return Reason.UNCERTAIN_STATUS
@@ -371,15 +424,7 @@ def classify(taken: Snapshot) -> Reason:
         return Reason.UNTRACKED_PATH
     if any(entry.unstaged or not entry.staged for entry in statuses):
         return Reason.UNSTAGED_PATH
-    if any(entry.delete_or_rename for entry in statuses):
-        return Reason.DELETE_OR_RENAME
-    if any(entry.unsupported_change for entry in statuses):
-        return Reason.UNSUPPORTED_CHANGE
-    if any(entry.index_mode not in REGULAR for entry in statuses):
-        return Reason.UNSUPPORTED_INDEX_MODE
-    if not all(path.endswith(".md") for path in taken.paths):
-        return Reason.NON_MARKDOWN_PATH
-    return Reason.ISOLATED_STAGED_MARKDOWN
+    return markdown_only(taken.staged_changes)
 
 
 def routing(reason: Reason) -> str:
@@ -541,7 +586,8 @@ def _worktree_matches_index() -> None:
 
 
 def markdown_admission() -> Snapshot:
-    """Admits only a reconciled tree of staged regular Markdown, byte-identical."""
+    """Admits only a reconciled tree that is clean or still Markdown-only, with
+    byte-identical docs inputs."""
     taken = snapshot()
     if taken.uncertainty:
         raise Refused(f"Git status evidence is uncertain: {_debug(taken.uncertainty)}")
@@ -549,12 +595,9 @@ def markdown_admission() -> Snapshot:
         raise Refused(
             "unstaged or nonignored untracked changes remain after reconciliation"
         )
-    for path, entry in taken.paths.items():
-        if not (entry.staged and path.endswith(".md") and entry.index_mode in REGULAR):
-            raise Refused(
-                "post-reconciliation index is outside staged regular Markdown "
-                f"admission: {path}"
-            )
+    reason = markdown_only(taken.staged_changes)
+    if taken.staged_changes and reason is not Reason.ISOLATED_STAGED_MARKDOWN:
+        raise Refused(f"post-reconciliation index is no longer Markdown-only: {reason}")
     _worktree_matches_index()
     return taken
 

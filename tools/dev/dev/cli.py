@@ -19,6 +19,7 @@ from dev import (
     issues,
     perf,
     pr_watch,
+    scope,
     static,
     steps,
     summary,
@@ -93,6 +94,24 @@ _workflow(
     gates.ci_validate_test_checks,
     "CI test-checks lane: clean tree, wasm tests, doctests and Elisp coverage.",
 )
+_workflow(
+    "ci-validate-docs",
+    gates.ci_validate_docs,
+    "CI docs lane, for a Markdown-only change: clean tree, Verify Markdown "
+    "Prettier and the documentation-shape checks.",
+)
+
+
+@cli.command("ci-scope")
+@click.option("--base", default="", help="The commit the change is compared with.")
+def ci_scope(base: str) -> None:
+    """Print docs_only=true when HEAD changes only Markdown since --base.
+
+    No base, or anything uncertain, prints docs_only=false: run everything.
+    """
+    _gate(lambda: scope.ci_scope(base))
+
+
 _workflow("coverage", gates.coverage, "Clean tree, then Rust coverage and CRAP policy.")
 _workflow(
     "doctests", gates.doctests, "Clean tree, then the doctests producer and gate."

@@ -4199,16 +4199,19 @@ Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
 shared 1500 s Playwright cap. Every lane runs its browser's independent
 unsharded preflight census, then emits its own report, lane and duration
-manifests, phase sidecar, trace capture, journals, and Playwright archive. An
-`always()` host reconciliation job per backend/browser pair downloads its
+manifests, phase sidecar, trace capture, journals, and Playwright archive. A
+`!cancelled()` host reconciliation job per backend/browser pair downloads its
 producer artifacts (three for Chromium, five for Firefox), proves the exact
 census/report/manifest union, and independently validates retries, duration
 pressure, panic phases, and boot traces. Missing, duplicated, misidentified,
 malformed, or failed evidence fails reconciliation; failed producers are still
 awaited and their recoverable evidence remains an aggregate input. The stable
-result-only `e2e gate` requires every producer, the catalog projection, and all
-four reconciliations. Local `dev validate` inherits the non-E2E Elisp verdict,
-then calls the same synchronous `dev e2e` workflow; it does not rerun live ERT
+result-only `e2e gate` requires every producer, the `CI scope` job that projects
+the catalog, and all four reconciliations; for a documentation-only change it
+requires the scope and the E2E jobs skipped
+([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
+Local `dev validate` inherits the non-E2E Elisp verdict, then calls the same
+synchronous `dev e2e` workflow; it does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
 
 #### `dev` E2E workflow (#1890, #1965)
@@ -4220,7 +4223,7 @@ verify without regenerating. `scripts/e2e-workflow` uses `xargs -P` for bounded
 admission and normalizes child failures so all enabled producers are attempted.
 Every pair's reconciliation runs after producers settle, even when evidence is
 absent or producers failed. The aggregate remains failed if any producer or
-reconciliation failed. CI owns its standard matrix, `needs`, `always()`,
+reconciliation failed. CI owns its standard matrix, `needs`, `!cancelled()`,
 artifact transport and aggregate job; reconciliation still executes after
 missing/failed artifact downloads.
 
@@ -4722,15 +4725,19 @@ The explicit local workflows are:
   Rust, preserving [ADR-0029](adr/0029-git-enforced-verify-gate.md)'s
   single-process custody). Before gate work it classifies the complete pre-run
   dirty-tree snapshot. The narrow `staged-markdown-only` class requires a
-  nonempty tree containing only staged-only, regular, case-sensitive `.md`
-  additions or modifications; any unstaged, untracked, delete/rename,
+  nonempty tree with nothing unstaged or untracked whose staged diff is
+  Markdown-only: every record adds, modifies or deletes a case-sensitive `.md`
+  path that is a regular file on each side that exists. That rule is the one
+  function CI's documentation-only scope also uses
+  ([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). A
+  Markdown delete, and so a Markdown rename, is narrow; any unstaged, untracked,
   type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
   evidence takes the broad route. Classification precedes host execution and
   distinguishes `class=staged-markdown-only reason=isolated-staged-markdown`, or
   `class=broad reason=<stable-kebab-case-reason>`. Broad reasons have stable
   precedence: `uncertain-status`, `empty-state`, `untracked-path`,
-  `unstaged-path`, `delete-or-rename`, `unsupported-change`,
-  `unsupported-index-mode`, then `non-markdown-path`.
+  `unstaged-path`, `unsupported-change`, `unsupported-index-mode`, then
+  `non-markdown-path`.
 
   The narrow host command runs `prettier-markdown`, `prettier-end2end`,
   sequence/identifier collision checks, the three ADR leaves, documentation
@@ -4747,23 +4754,23 @@ The explicit local workflows are:
   delete/rename state fail closed. Pre-existing delete/rename state and
   untracked files stay unstaged and tolerated. On `x86_64-linux`, successful
   narrow host checks and this one reconciliation are followed by admission
-  requiring no unstaged/nonignored-untracked changes and raw worktree/index blob
-  identity for all tracked Markdown and formatter-config inputs selected by
-  `static-docs` (`.prettierrc.json`, `.prettierignore`, and the `tools/dev/`
-  source, excluding `.claude`). The ordinary Git-backed `static-docs` request
-  then runs as a `dev` Nix-check step, so it uses `dev`'s one definition of Nix
-  check flags and appears in the trace with its cache state. A post-request
-  status/index check fails on tracked, staged, or nonignored-untracked mutation
-  (including a rewritten `flake.lock`) without restaging. Host, staging, or
-  admission failure skips the request; a request failure remains recorded if the
-  post-check also fails. Broad routing and non-x86 behavior remain host-only.
-  The snapshot, host checks, after-snapshot, staging, admission, request and
-  post-check are each a span directly under `dev precommit`. Every index query
-  runs the `git` CLI (`status`, `diff`, `ls-files`, `hash-object`, `add`) with
-  the hook's environment, so the evidence is the index `git commit` will write,
-  including the temporary `GIT_INDEX_FILE` of `git commit <path>`; a library
-  such as libgit2 could diverge from it on that index, on filters or on
-  fsmonitor.
+  requiring no unstaged/nonignored-untracked changes, a staged diff that is
+  still Markdown-only (or empty), and raw worktree/index blob identity for all
+  tracked Markdown and formatter-config inputs selected by `static-docs`
+  (`.prettierrc.json`, `.prettierignore`, and the `tools/dev/` source, excluding
+  `.claude`). The ordinary Git-backed `static-docs` request then runs as a `dev`
+  Nix-check step, so it uses `dev`'s one definition of Nix check flags and
+  appears in the trace with its cache state. A post-request status/index check
+  fails on tracked, staged, or nonignored-untracked mutation (including a
+  rewritten `flake.lock`) without restaging. Host, staging, or admission failure
+  skips the request; a request failure remains recorded if the post-check also
+  fails. Broad routing and non-x86 behavior remain host-only. The snapshot, host
+  checks, after-snapshot, staging, admission, request and post-check are each a
+  span directly under `dev precommit`. Every index query runs the `git` CLI
+  (`status`, `diff`, `ls-files`, `hash-object`, `add`) with the hook's
+  environment, so the evidence is the index `git commit` will write, including
+  the temporary `GIT_INDEX_FILE` of `git commit <path>`; a library such as
+  libgit2 could diverge from it on that index, on filters or on fsmonitor.
 
 - **`dev prepush`** is the fast local push-hook entrypoint. It opens with the
   same clean-tree precheck as `validate`, then runs the verify-only host/static
@@ -4812,6 +4819,20 @@ stable branch-protection context. Local `dev validate-no-e2e` composes the same
 required surfaces in success-path order, plus host Clippy
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
 [distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
+
+A Markdown-only pull request or merge-queue entry runs none of those lanes
+([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). The
+`CI scope` job runs `dev ci-scope` against the pull request's or queue entry's
+base with the precommit's Markdown-only rule; a push has no base, and anything
+it cannot establish runs everything. A documentation-only change runs only
+`Validation docs` (`dev ci-validate-docs`: clean tree, Markdown Prettier and the
+documentation-shape checks), and `Validate (no e2e)` then requires the scope and
+that lane instead of the four. The validation lanes, `Validation host` included,
+wait for `CI scope`; `Validation host` still runs when the scope is skipped for
+a merge-queue-tested push. A new commit on a pull request cancels its superseded
+run (one concurrency group per pull request, every other run its own group), and
+the aggregates and reconciliation use `!cancelled()` so a cancelled run starts
+no further jobs.
 
 All `dev` gates **fail fast** on a required child failure. They return nonzero
 without running later ordinary diagnostics or fabricating skipped success.
@@ -5242,10 +5263,13 @@ The coverage source is bounded to cargo sources, enforced by a `drvPath` probe
 [ADR-0116](adr/0116-coverage-probe-dirty-tree-workaround.md)): on a clean
 worktree nix's flake git-fetcher walks history for `revCount`, which fails on
 CI's shallow checkout of a merge commit whose parents are grafted away. A dirty
-tree makes nix copy the working directory and read only HEAD. Because the
-dirtied file is filter-excluded, the dirtying is constant and never perturbs the
-`drvPath` the probe measures — a filter that stopped excluding `README.md` would
-fail the probe loudly.
+tree makes nix copy the working directory and read only HEAD. The probe dirties
+it with a new intent-to-add Markdown file of its own, so no tracked file is
+load-bearing for it
+([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
+Because that file is filter-excluded, the dirtying is constant and never
+perturbs the `drvPath` the probe measures — a filter that stopped excluding
+`.md` would fail the probe loudly.
 
 ### Doctest gate
 
@@ -5600,10 +5624,12 @@ merges only if that build is green, so the up-to-date-before-merge treadmill is
 gone while the semantic-conflict guarantee is kept.
 `.github/workflows/ci.yml:11` carries the `merge_group:` trigger that makes the
 required checks run in that context. That queue run is the coverage and e2e
-verdict for the commit it lands. The `push` run for a queue-tested SHA runs only
-`Validation host`, which writes `main`'s kache store, and skips the other lanes.
-A push without a passing `merge_group` run, such as an admin bypass, validates
-in full
+verdict for the commit it lands; a Markdown-only queue entry runs only the
+documentation checks, as its pull request did
+([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). The
+`push` run for a queue-tested SHA runs only `Validation host`, which writes
+`main`'s kache store, and skips the other lanes. A push without a passing
+`merge_group` run, such as an admin bypass, validates in full
 ([merge-queue verdict draft](adr/0260-merge-queue-verdict-covers-landed-commit.md)).
 
 Because green checks are only phase one under a queue — and an ejected PR leaves

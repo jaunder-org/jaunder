@@ -42,12 +42,13 @@ ADR-promoter PRs get no identity check. They qualify through the rule; one that
 also rewrites a citation in a `.ts` comment (as #2090 did) runs everything.
 
 **No Markdown feeds a product lane.** Nothing uses `include_str!` on Markdown,
-and the Nix product checks filter `.md` out of their sources. The one exception
-today: the host-proof cache-safety probe and the coverage policy probe
-(`tools/host-proof/src/cache_safety.rs`,
-`tools/coverage/src/host/policy/ probe.rs`) dirty the root `README.md` in a
-probe worktree. They move to a tracked non-Markdown file, so the rule needs no
-exception.
+and the Nix product checks filter `.md` out of their sources. Two on-demand
+diagnostics, not CI lanes — the host-proof cache-safety probe and the coverage
+source probe (`tools/host-proof/src/cache_safety.rs`,
+`tools/coverage/src/host/policy/probe.rs`) — dirty the root `README.md` in a
+probe worktree. They instead dirty it with a new intent-to-add Markdown file of
+their own (human decision, 2026-11-25), so no tracked Markdown is load-bearing
+for them.
 
 **Base per event.** `pull_request`: `github.event.pull_request.base.sha`;
 `merge_group`: `github.event.merge_group.base_sha`; `push`: no base, always
