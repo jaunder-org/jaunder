@@ -27,6 +27,7 @@ runs:
       with:
         extra_nix_config: |
           experimental-features = nix-command flakes
+          always-allow-substitutes = false
         github_access_token: ${{ inputs.github-token }}
     # Measurement (#2103): the substitution setting Nix actually applies.
     - name: Show substitution setting
