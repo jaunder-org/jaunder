@@ -67,7 +67,7 @@ class Change:
 
 @dataclass
 class Snapshot:
-    """The complete dirty tree, its staged raw diff and any uncertain evidence.
+    """The complete dirty tree, its staged changes and any uncertain evidence.
 
     Uncertain evidence leaves the snapshot deliberately incomplete, so routing
     and reconciliation both fail closed.
@@ -75,7 +75,6 @@ class Snapshot:
 
     paths: dict[str, PathStatus] = field(default_factory=dict)
     uncertainty: list[str] = field(default_factory=list)
-    staged_raw_diff: bytes = b""
     staged_changes: list[Change] = field(default_factory=list)
 
 
@@ -335,7 +334,7 @@ def parse(status: bytes, raw: bytes) -> Snapshot:
             uncertainty.add("status-raw-change-mismatch")
     if staged_from_status != staged_from_raw:
         uncertainty.add("status-raw-population-mismatch")
-    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), raw, changes)
+    return Snapshot(dict(sorted(paths.items())), sorted(uncertainty), changes)
 
 
 # Snapshots.
