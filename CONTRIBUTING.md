@@ -636,21 +636,21 @@ The host and the CI VM load the **same** `end2end/playwright.config.ts`, keeping
 browser-flow definitions shared. A focused host pass does not establish the
 hermetic backend/browser matrix verdict; CI remains authoritative.
 
-- **Fast local loop** — `dev e2e-local` owns the whole loop: it resolves the CSR
-  bundle and builds the host server, starts an OTLP collector and one
-  `jaunder serve` per Playwright worker (`JAUNDER_E2E_WORKERS`, default 1), each
-  on its own ephemeral port with a fresh SQLite temp DB, seeds each instance,
-  and runs the local Chromium lifecycle, tearing every process down after. The
-  collector captures correlated browser and server spans, then the command
-  retains the complete capture under
-  `.xtask/e2e-local/<run-id>/<browser>/capture/` (each server's streams in its
-  `instance-<i>/` subdirectory) and prints the exact `otel-traces.jsonl` path.
-  Playwright's output is drained while it runs. No pre-existing server or
-  collector is needed. Use this while iterating on the web UI; it uses the HTML
-  reporter for interactive debugging. For browser-specific investigation on
-  macOS, select WebKit after provisioning browsers, for example
-  `dev e2e-local post-image-fit.spec.ts --browser webkit`; this proves
-  Playwright WebKit only, not actual Safari.
+- **Fast local loop** — `dev e2e-local` (Python inside `dev`,
+  `tools/dev/dev/e2e_local.py`) owns the whole loop: it resolves the CSR bundle
+  and builds the host server, starts an OTLP collector and one `jaunder serve`
+  per Playwright worker (`JAUNDER_E2E_WORKERS`, default 1), each on its own
+  ephemeral port with a fresh SQLite temp DB, seeds each instance, and runs the
+  local Chromium lifecycle, tearing every process down after. The collector
+  captures correlated browser and server spans, then the command retains the
+  complete capture under `.xtask/e2e-local/<run-id>/<browser>/capture/` (each
+  server's streams in its `instance-<i>/` subdirectory) and prints the exact
+  `otel-traces.jsonl` path. Playwright's output is drained while it runs. No
+  pre-existing server or collector is needed. Use this while iterating on the
+  web UI; it uses the HTML reporter for interactive debugging. For
+  browser-specific investigation on macOS, select WebKit after provisioning
+  browsers, for example `dev e2e-local post-image-fit.spec.ts --browser webkit`;
+  this proves Playwright WebKit only, not actual Safari.
 
   Ordinary runs select `.#sandboxArtifacts`: one source-consistent immutable set
   containing debug-profile host `jaunder` and `test-support`, with the debug CSR
@@ -676,10 +676,12 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   ignore the input or fall back to Cargo/site output. This refusal is specific
   to e2e's immutable artifact contract. The variable remains a build-time input
   for Nix package builds and an explicit validated input for `test-local` and
-  manual Cargo/Vite workflows. Handled SIGINT/SIGTERM stops owned foreground
-  consumers before server/collector teardown and releases their unique Nix root
-  afterward. The standalone manual `dev build-csr debug|release` workflow and
-  its local `target/site` output remain unchanged.
+  manual Cargo/Vite workflows. A first SIGINT/SIGTERM/SIGHUP stops the running
+  seed or Playwright consumer, with a ten-second grace, and still runs the whole
+  server/collector teardown and the panic gates. A second signal escalates the
+  stop under way to an immediate kill. The run exits 128+n and releases its
+  unique Nix root afterward. The standalone manual `dev build-csr debug|release`
+  workflow and its local `target/site` output remain unchanged.
 
 - **Focused browser-flow proof** — `dev e2e-local <spec-or-file:line>` scopes
   the local loop to one Playwright positional filter when that spec or line
@@ -923,11 +925,11 @@ tree's code with no virtualenv. Bytecode caching stays on; `__pycache__/` is
 ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
-(`repository-docs`, `source-contracts`), `host-proof` (`e2e-local`,
-`e2e-evidence`, `trace-analysis`, `wasm-audit`, `source-diagnostics`, and
-`test-local`'s `admit-inputs` and `csr-prerequisite`) and `coverage`
-(`coverage-check`, nondefault `host` feature). `dev` runs them with locked Cargo
-from the active checkout; CI's E2E verifier uses its Nix output
+(`repository-docs`, `source-contracts`), `host-proof` (`e2e-evidence`,
+`trace-analysis`, `wasm-audit`, `source-diagnostics`, `admit-inputs`, which
+`test-local` and `e2e-local` use, and `test-local`'s `csr-prerequisite`) and
+`coverage` (`coverage-check`, nondefault `host` feature). `dev` runs them with
+locked Cargo from the active checkout; CI's E2E verifier uses its Nix output
 (`packages.host-proof`). Host tools run only on the host, never inside
 derivations. Runtime paths belong to the active checkout, not the tool's store
 build directory. The executables that run inside derivations are likewise owned

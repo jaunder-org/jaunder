@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
+- Amended: 2026-11-24 — `e2e-local` moved into `dev` as Python (#2066)
 
 ## Context
 
@@ -67,6 +68,14 @@ Choose these concern homes for the three residual clusters:
   source admission, test-local artifact-lock/CSR/worker environment, and e2e
   immutable-artifact/root/readiness/capture/cleanup status contracts. Standalone
   sandbox remains a separate owner; no new supervisor/shared runtime is created.
+  _Amended by #2066._ Under the
+  [tool-language decision](0261-tool-language-by-maintainability.md),
+  `e2e-local` is no longer a host-proof executable. Its lifecycle runs inside
+  `dev` as Python (`tools/dev/dev/e2e_local.py`), with no ProcessKit/Tokio
+  adapters. Each child gets its own process group, and a `psutil` descendant
+  snapshot is taken at stop. Its source admission, immutable-artifact, root,
+  readiness, capture and cleanup status contracts are unchanged, except that
+  readiness identifies the server by pid alone.
 
 The complete finite ignored surviving-owner delta names remaining interfaces,
 not “their concern owners” placeholders. Existing coverage/doctests/performance
