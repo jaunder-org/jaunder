@@ -32,13 +32,14 @@ rename broad, which no check in the narrow route needed.
   `dev.scope` against the pull request's base or the merge-queue entry's base,
   with the image's own `python3` and `git`. A push has no base and is never
   documentation-only. For a documentation-only change only the `Validation docs`
-  lane runs (`dev ci-validate-docs`: Markdown Prettier and the
+  lane runs (`dev ci-validate-docs`: clean tree, Markdown Prettier and the
   documentation-shape checks); every other validation lane, E2E producer and
   reconciliation is skipped. `Validate (no e2e)` then requires the verdict job
   and docs lane, and `e2e gate` requires the verdict job and passes with the E2E
   jobs skipped as not applicable. Anything `dev.scope` cannot establish — no or
-  unfetchable base, a git error, a malformed record — runs everything. The merge
-  queue uses the same rule (human decision, 2026-11-24, on #1971).
+  unfetchable base, a git error, a malformed record — runs everything; a crash
+  of `dev.scope` itself fails the verdict job, and so both required checks. The
+  merge queue uses the same rule (human decision, 2026-11-24, on #1971).
 - **Superseded pull-request runs are cancelled.** The workflow's concurrency
   group is the pull request number for `pull_request` runs and the run id for
   every other run, with `cancel-in-progress`. Merge-queue and push runs are
@@ -59,8 +60,8 @@ rename broad, which no check in the narrow route needed.
   runner-minutes instead of about 160. ADR-promoter pull requests qualify when
   they touch only Markdown; one that also rewrites a citation in code runs
   everything.
-- `Validation host`, `main`'s kache writer, now waits for the seconds-long
-  verdict job so it can skip a documentation-only change; it still runs for a
+- `Validation host`, `main`'s kache writer, waits for the seconds-long verdict
+  job so it can skip a documentation-only change; it still runs for a
   merge-queue-tested push, and when the verdict job fails.
 - `dev.scope` and `dev.rawdiff` must stay standard-library-only and run on the
   slim image's Python (3.12 as of this decision).

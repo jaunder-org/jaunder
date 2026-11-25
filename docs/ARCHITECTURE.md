@@ -4830,11 +4830,12 @@ pinned Python. A push has no base, and anything it cannot establish runs
 everything. A documentation-only change runs only `Validation docs`
 (`dev ci-validate-docs`: clean tree, Markdown Prettier and the
 documentation-shape checks), and `Validate (no e2e)` then requires the verdict
-job and that lane instead of the four. `Validation host` now waits for the
-seconds-long verdict job, and still runs for a merge-queue-tested push. A new
-commit on a pull request cancels its superseded run (one concurrency group per
-pull request, every other run its own group), and the aggregates and
-reconciliation use `!cancelled()` so a cancelled run starts no further jobs.
+job and that lane instead of the four. `Validation host` waits for the
+seconds-long verdict job and runs for a merge-queue-tested push, and when the
+verdict job fails. A new commit on a pull request cancels its superseded run
+(one concurrency group per pull request, every other run its own group), and the
+aggregates and reconciliation use `!cancelled()` so a cancelled run starts no
+further jobs.
 
 All `dev` gates **fail fast** on a required child failure. They return nonzero
 without running later ordinary diagnostics or fabricating skipped success.

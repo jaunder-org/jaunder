@@ -66,14 +66,14 @@ nix develop
 ```
 
 The flake has five shells. `default` is the complete interactive shell. `ci` is
-`default` without the interactive-only tools; the CI host validation lane and
-the performance job enter it. `mutants` is `ci` plus `cargo-mutants`, for the
-scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`, `git`,
-`dev`, `traced-run`, `jq`, basic shell utilities and the OpenSSL/dav1d libraries
-for `LD_LIBRARY_PATH`, with no Rust toolchain and no C compiler. The CI jobs
-that only run Nix builds and Nix-built tools enter `ci-nix`: the hermetic,
-test-checks and coverage validation lanes and the e2e lane and reconcile jobs.
-`theme-thumbnail` is described in [themes](docs/themes.md).
+`default` without the interactive-only tools; the CI host and docs validation
+lanes and the performance job enter it. `mutants` is `ci` plus `cargo-mutants`,
+for the scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`,
+`git`, `dev`, `traced-run`, `jq`, basic shell utilities and the OpenSSL/dav1d
+libraries for `LD_LIBRARY_PATH`, with no Rust toolchain and no C compiler. The
+CI jobs that only run Nix builds and Nix-built tools enter `ci-nix`: the
+hermetic, test-checks and coverage validation lanes and the e2e lane and
+reconcile jobs. `theme-thumbnail` is described in [themes](docs/themes.md).
 
 Enter the default, CI, mutants or `ci-nix` shell from the intended Git checkout.
 At entry, their shared startup hook creates and verifies the absolute
