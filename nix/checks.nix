@@ -216,11 +216,8 @@ e2ePlaywrightTimeout = 1500;
 e2eLifecycleAllowance = 300;
 e2eDeadlineReserve = 120;
 e2eSeedTraceTimeout = 30;
-# The unsplit measurement controls run a browser's whole suite in one VM, which
-# outgrew the per-shard cap (#2092: their 522 Firefox tests took 23 to 43
-# minutes, and longer under memory or disk pressure). Their root disk (MiB)
-# holds the whole suite's temporary files, which filled both the default 1 GiB
-# and the Firefox shards' 2 GiB.
+# The unsplit measurement controls run a browser's whole suite in one VM, so
+# they need more Playwright time and root disk (MiB) than one shard (#2092).
 e2eControlPlaywrightTimeout = 7200;
 e2eControlDiskSize = 4096;
 
@@ -776,7 +773,9 @@ e2eRunAndCapture =
     # backdoor.service is the driver shell running Playwright and its browsers.
     memory_report = ["playwright-seconds %d" % (time.monotonic() - gate_started_at)]
     try:
-      _, samples = machine.execute("journalctl -u lane-memory-sampler.service --no-pager -o cat")
+      status, samples = machine.execute("journalctl -u lane-memory-sampler.service --no-pager -o cat")
+      if status != 0:
+        memory_report.append("sampler journal exit=%d" % status)
       available_kib = [int(line.split()[1]) for line in samples.splitlines() if line.startswith("MemAvailable:")]
       memory_report.append("mem-available-samples %d" % len(available_kib))
       if available_kib:
@@ -784,10 +783,10 @@ e2eRunAndCapture =
       for command in [
         "grep '^MemTotal:' /proc/meminfo",
         "cat /proc/pressure/memory",
-        "grep -E '^(oom_kill|allocstall_[a-z]+|pgscan_direct) ' /proc/vmstat",
+        "grep -E '^(oom_kill|allocstall_[a-z0-9]+|pgscan_direct) ' /proc/vmstat",
       ]:
-        _, output = machine.execute(command)
-        memory_report.append(output.strip())
+        status, output = machine.execute(command)
+        memory_report.append(output.strip() if status == 0 else command + " exit=%d" % status)
       for unit in [instance["unit"] for instance in e2e_instances()] + ["otel-collector.service", "postgresql.service", "backdoor.service"]:
         _, output = machine.execute("systemctl show -p LoadState -p MemoryPeak " + unit)
         state = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
@@ -1075,6 +1074,7 @@ mkE2eCheck =
           systemd.services.lane-memory-sampler = {
             description = "E2E lane guest memory sampler";
             wantedBy = [ "multi-user.target" ];
+            before = map (instance: "${instance.name}.service") instances;
             serviceConfig.ExecStart = pkgs.writeShellScript "lane-memory-sampler" ''
               while :; do
                 ${pkgs.gnugrep}/bin/grep '^MemAvailable:' /proc/meminfo
@@ -1359,9 +1359,8 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
       });
     }) e2eFirefoxControlLanes
   );
-# workers=2 stalled on reclaim at 3 GiB with two instances (#2092), as the gate
-# Firefox lanes did, so it takes their 4 GiB.
-e2eWorkers2ControlPackages = mkE2eControlPackages 2 4096 2;
+# Sized from their lane-memory reports (#2092).
+e2eWorkers2ControlPackages = mkE2eControlPackages 2 5120 2;
 e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 
 # Single-worker variants: the disabled unsplit catalog lanes (every

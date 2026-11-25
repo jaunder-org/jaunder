@@ -77,13 +77,15 @@ The four control packages are each built locally. They change size as follows:
 
 | Package                                           | Guest memory     | vCPU |
 | ------------------------------------------------- | ---------------- | ---- |
-| `e2e-{sqlite,postgres}-firefox-workers-2-control` | 3 GiB, now 4 GiB | 2    |
+| `e2e-{sqlite,postgres}-firefox-workers-2-control` | 3 GiB, now 5 GiB | 2    |
 | `e2e-{sqlite,postgres}-firefox-workers-4-control` | 6 GiB            | 4    |
 
 The first measured runs triggered the workers=2 raise: at 3 GiB, sqlite reached
-57 s of `full` stall over 4,500 s, with active direct reclaim. Those same runs
-also showed that the controls could not finish the whole unsplit suite, so they
-get two resources of their own:
+57 s of `full` stall over 4,500 s, with active direct reclaim. At 4 GiB,
+postgres was OOM-killed 22 minutes in: its two Firefox parents, three Playwright
+Node processes and two content processes held about 3.2 GiB, so the control went
+up again to 5 GiB. Those same runs also showed that the controls could not
+finish the whole unsplit suite, so they get two resources of their own:
 
 - **Disk:** a 4 GiB root disk. The whole suite's temporary files filled both the
   default 1 GiB and the Firefox shards' 2 GiB.
@@ -123,7 +125,7 @@ decision the fix is part of this issue, and it uses the state rule's two moves:
     stall totals.
 - Deliverables to commit:
   - The sampler and the summary.
-  - The control resizing: workers=2 at 4 GiB, and both controls with a 4 GiB
+  - The control resizing: workers=2 at 5 GiB, and both controls with a 4 GiB
     disk and a 2-hour Playwright budget.
   - The login-test state fix.
   - Sizing text describing the instrumentation and any change, in

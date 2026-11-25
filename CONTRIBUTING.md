@@ -784,10 +784,10 @@ Chromium guests; these are configured guest sizes, not measured host use or
 proof that any particular cap is safe. Each guest also runs one Jaunder instance
 and database per worker, so a guest's size must cover its browsers and every
 instance together; resize from measured guest memory, not from these figures.
-Every lane measures it (#2092): `lane-memory-sampler.service` logs the guest's
-`MemAvailable` once a second to `system-journal-<lane>.log`. After Playwright
-exits, the lane writes `lane-memory-<lane>.txt`, which is diagnostic only and
-fails nothing. It records:
+Every lane measures its guest memory (#2092): `lane-memory-sampler.service` logs
+the guest's `MemAvailable` once a second to `system-journal-<lane>.log`. After
+Playwright exits, the lane writes `lane-memory-<lane>.txt`, which is diagnostic
+only and fails nothing. It records:
 
 - the Playwright wall time;
 - `MemTotal` and the minimum sampled `MemAvailable`;
@@ -796,12 +796,27 @@ fails nothing. It records:
 - `MemoryPeak` for each instance, the collector, PostgreSQL and
   `backdoor.service` (Playwright and its browsers), page cache included.
 
+A guest OOM panics the test VM (`panic_on_oom`), so it writes no report. The
+lane's build log keeps the kernel's OOM report and per-process memory table
+instead.
+
 Low `MemAvailable` alone is not pressure, because browsers size their caches to
 the memory they find. Raise a guest by 1 GiB, and measure again, when a lane
 OOM-kills or its `full` memory stall reaches 1% of its Playwright wall time.
-Cross-checkout heavy-path admission is separate work in #1753, not a
-prerequisite. No global queue, automatic host threshold or resource-pressure
-cancellation is introduced.
+
+The unsplit Firefox measurement controls run the whole suite in one VM, so their
+browsers and Playwright workers grow further than in a shard. Each has a 4 GiB
+root disk and a 2-hour Playwright budget, with these resources:
+
+| Control   | Memory | vCPUs |
+| --------- | ------ | ----- |
+| workers=2 | 5 GiB  | 2     |
+| workers=4 | 6 GiB  | 4     |
+
+The workers=2 control stalled on reclaim at 3 GiB and was OOM-killed on
+PostgreSQL at 4 GiB. Cross-checkout heavy-path admission is separate work in
+#1753, not a prerequisite. No global queue, automatic host threshold or
+resource-pressure cancellation is introduced.
 
 #### Visual snapshot workflow
 
