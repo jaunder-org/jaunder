@@ -926,16 +926,16 @@ ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`), `host-tool` (`admit-inputs`, which
-`test-local` and `e2e-local` use), `host-proof` (`e2e-evidence`,
-`trace-analysis`) and `coverage` (`coverage-check`, nondefault `host` feature).
-`dev` runs them with locked Cargo from the active checkout; CI's E2E verifier
-uses its Nix output (`packages.host-proof`). Host tools run only on the host,
-never inside derivations. Runtime paths belong to the active checkout, not the
-tool's store build directory. The executables that run inside derivations are
-likewise owned by the crates whose logic they run: `coverage-sandbox`
-(`coverage`), `doctests` (`doctests`), and the dedicated `perf-producer` and
-`system-artifacts` crates. Each is its own Nix package, and a derivation takes
-only the one it runs.
+`test-local` and `e2e-local` use) and `coverage` (`coverage-check`, nondefault
+`host` feature). `dev` runs each from its Nix package output. The e2e verdicts
+and `dev trace-analysis` are `dev` Python, not host tools
+([e2e verdicts and trace analysis are `dev` Python](docs/adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+Host tools run only on the host, never inside derivations. Runtime paths belong
+to the active checkout, not the tool's store build directory. The executables
+that run inside derivations are likewise owned by the crates whose logic they
+run: `coverage-sandbox` (`coverage`), `doctests` (`doctests`), and the dedicated
+`perf-producer` and `system-artifacts` crates. Each is its own Nix package, and
+a derivation takes only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -1576,21 +1576,28 @@ baseline.
   dev trace-analysis analyze \
     .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
-  # VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
+  # VM captures are extracted from capture-<lane>.tar.gz; `run` does this.
   dev trace-analysis analyze \
-    /path/to/sqlite-otel-traces.jsonl \
-    /path/to/postgres-otel-traces.jsonl
+    --playwright-report /path/to/playwright-report-<lane>.json \
+    /path/to/otel-traces.jsonl
+
+  # Median boot-phase decomposition per trace file, project and cache warmth.
+  dev trace-analysis boot-phases /path/to/otel-traces.jsonl
   ```
 
-  The analyzer reports on:
-  - Slowest spans overall and per `e2e.test`.
-  - Top action, navigation-phase, long-task, and resource-initiator hotspots.
-  - Long-task totals and `e2e.test` duration by project.
+  The analyzer reports per-test span coverage, boot-decomposition coverage, the
+  slowest spans overall and per `e2e.test`, the top action, navigation-phase,
+  long-task, resource-initiator and resource-asset hotspots, long-task totals
+  and `e2e.test` duration by project, and per-trace totals. Each command prints
+  its tables and a `dev` step line; `docs/observability.md` ("Analysis") has the
+  sections and exit statuses.
 
   **Optional Filters**:
-  - `--top N`: Limit the number of rows in each section.
+  - `--top N`: Limit the number of rows in each ranked section (at least 1).
   - `--trace TRACE_ID`: Analyze a specific trace.
   - `--project NAME`: Filter by browser (e.g., `firefox`, `webkit`).
+  - `--playwright-report FILE` (repeatable): the per-test span-coverage
+    denominator; without one that section is skipped with a note.
 
 - **Failure logs — look here first (#144)**: on a red E2E lane, read the scoped
   server-diagnostic log before the journal. It is a small JSONL file of only the
@@ -1626,11 +1633,12 @@ baseline.
   `--breakdown [--wasm F]` for per-section and per-crate attribution of the
   unstripped `.#csrWasm`. The crate rollup reads `twiggy`'s JSON.
 
-- **Run & Analyze**: Use `dev trace-analysis run` to build the full VM e2e suite
-  and immediately analyze the results.
+- **Run & Analyze**: Use `dev trace-analysis run` to build every enabled e2e
+  lane check (`checks.e2e-<identity>`) for both backends, one at a time, and
+  immediately analyze each lane's capture with its own Playwright report.
   - Use `--single-worker` to build the workers=1 diagnostic packages instead of
-    the gate checks, when the question is per-navigation cost rather than suite
-    cost.
+    the lane checks, when the question is per-navigation cost rather than suite
+    cost. Their captures keep the `<backend>-<browser>-unsplit` identity.
   - Use `--browser chromium|firefox` to restrict the run to one browser
     (default: both).
 
@@ -2177,18 +2185,20 @@ failures remain failures; snapshot verification is deliberately replaced by
 regeneration only for this explicit action. Ordinary `dev e2e` and
 `dev e2e-producer` remain verification-only.
 
-The artifact-input CLI
-(`e2e-evidence server-fn-coverage {verify,regenerate} --catalog <catalog> --diagnostics-root <root>`)
-reads only already-lifted `e2e-<identity>` directories. It first reconciles the
-SQLite/Chromium pair: the exact enabled lane set, an identical complete census
-equal to the lanes' disjoint report union, and a successful phase sidecar per
-lane. Only then are the captures read. A capture whose server `diag.log` records
-an OpenTelemetry SDK span loss (`BatchSpanProcessor.*`), or that has no
-`diag.log`, is refused as incomplete: a lost request span would otherwise
-surface as an orphan (#2029). Each producer replaces its own lifted files before
-it builds, and the local workflows that reach coverage rerun the producers
-first. These checks do not claim detection of arbitrary hidden capture
-omissions; no extra receipt or attestation schema is involved.
+The artifact-input verdict (the SQLite/Chromium
+`dev e2e-reconcile sqlite chromium [ARTIFACTS]`, which verifies the snapshot;
+`dev e2e-regenerate-coverage` writes it) reads only already-lifted
+`e2e-<identity>` directories. It first reconciles the SQLite/Chromium pair: the
+exact enabled lane set, an identical complete census equal to the lanes'
+disjoint report union, and a successful phase sidecar per lane. Only then are
+the captures read, against `source-contracts server-fn-inventory`'s JSON listing
+of `web/src`. A capture whose server `diag.log` records an OpenTelemetry SDK
+span loss (`BatchSpanProcessor.*`), or that has no `diag.log`, is refused as
+incomplete: a lost request span would otherwise surface as an orphan (#2029).
+Each producer replaces its own lifted files before it builds, and the local
+workflows that reach coverage rerun the producers first. These checks do not
+claim detection of arbitrary hidden capture omissions; no extra receipt or
+attestation schema is involved.
 
 One further property is worth knowing before you fight the gate:
 

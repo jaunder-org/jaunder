@@ -2538,8 +2538,12 @@ In the E2E VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
 out `playwright-report-<lane>.json` (Playwright's `results.json`) and the
 service and system journals alongside the capture tarball, per
 [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md): artifacts are copied
-before the Playwright exit is asserted. `dev trace-analysis analyze` consumes
-the trace files offline (see the tooling section).
+before the Playwright exit is asserted. The e2e verdicts and
+`dev trace-analysis` read these artifacts offline through one Python trace core,
+`tools/dev/dev/traces.py`: the OTLP span parser, the gzip capture reader and the
+boot decomposition outcome
+([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md);
+see the tooling section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
 lifted Playwright JSON report defines the executed project population. The
@@ -2569,10 +2573,9 @@ diagnostics, never added to that decomposition. The **Node frame** —
 `mountedMs`, and `commitToMountMs`. `commitToMountMs` is still reported as the
 bridge to suite wall-clock but is never decomposed; the difference
 `commitToMountMs - bootTotalMs` is reported separately as **frame skew** and
-charged to the harness (`frame_skew_ms` in
-`tools/host-proof/src/traces/boot_phases.rs`). The two frames differ by
-cross-process, plausibly engine-asymmetric lag, so mixing them would charge
-harness IPC to the app's boot phases.
+charged to the harness (`frame_skew_ms` in `tools/dev/dev/boot_phases.py`). The
+two frames differ by cross-process, plausibly engine-asymmetric lag, so mixing
+them would charge harness IPC to the app's boot phases.
 
 ### Logs
 
@@ -4727,9 +4730,13 @@ Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).
 The E2E workflow owns authoritative output selection and trace/snapshot
 verification; its temporary `server-fn-flow` bridge is retired. Static
-server-function inventory is now a native source contract; runtime extraction,
-regeneration and producer-artifact verification are host-proof's `e2e-evidence`
-commands. Devtool keeps its in-sandbox commands.
+server-function inventory is now a native source contract, which
+`source-contracts server-fn-inventory` also lists as JSON; runtime extraction,
+regeneration and producer-artifact verification are `dev` Python
+(`tools/dev/dev/e2e_evidence.py`, `tools/dev/dev/server_fn_coverage.py`) that
+reads that listing without re-validating it
+([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+Devtool keeps its in-sandbox commands.
 
 The explicit local workflows are:
 
@@ -5343,11 +5350,10 @@ naming a spec that never touches the fn would stay green forever. The gate has
 two lanes: a static `source-contracts -- server-fn-coverage` lane
 (repository-policy) in `dev check`/`dev validate-no-e2e` that reads the sole
 committed `docs/coverage/server-fns.json` snapshot plus the source-derived
-inventory, and an e2e lane (host-proof
-`e2e-evidence server-fn-coverage verify|regenerate`,
-`tools/host-proof/src/steps/server_fn_coverage_check.rs`) that recomputes that
-snapshot from the lifted SQLite/Chromium lane artifacts and runtime catalog,
-after reconciling that pair
+inventory, and an e2e lane (the coverage pair's `dev e2e-reconcile` and
+`dev e2e-regenerate-coverage`, `tools/dev/dev/server_fn_coverage.py`) that
+recomputes that snapshot from the lifted SQLite/Chromium lane artifacts and
+runtime catalog, after reconciling that pair
 ([split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Static
 inventory checking remains independent of E2E production; regeneration is
 explicit.
@@ -5358,11 +5364,13 @@ deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
 against the derived `/<vertical>/<ident>`; #714 removed the literal, so the
 inventory now computes the endpoint with the very expression such a check would
 compare it to — a value against itself, which passes for the wrong reason. What
-verifies the computed endpoint instead is `server-fn-coverage`'s seed
-cross-check, which matches it against URIs observed in a real captured run
+verifies the computed endpoint instead is the seed cross-check, which matches
+the live `web/src` inventory against the `(module, span name, URI path)` tuples
+observed in a real captured run
 (`the_derived_endpoint_matches_the_uri_a_real_run_requested` in
-`tools/host-proof/src/steps/server_fn_coverage_check.rs`). Endpoint correctness
-is therefore asserted only where real traffic exists.
+`tools/repository-policy/src/source_inventory.rs`, which owns the derivation;
+[e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+Endpoint correctness is therefore asserted only where real traffic exists.
 
 ### Component thinness and cross-language literals
 
@@ -5383,7 +5391,10 @@ value-anchor would let prose change the verdict), and the opening quote. The
 anchor locates; only exact string inequality fails. Zero anchor matches, more
 than one, or an unreadable file are all hard failures, because a locator that
 has quietly stopped locating is the one thing this gate must never report as
-green.
+green. The table also pairs Python sites with Rust: the capture layout's
+`instance-`, `diag.log` and `otel-traces.jsonl` are spelled once in
+`tools/dev/dev/traces.py` and paired with `host/src/capture.rs`
+([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
 
 ## Development tooling
 
@@ -5446,9 +5457,8 @@ Until the remaining moves land, the placements below describe the current tree:
   that report, so child output goes to stderr; the exit status is the verdict.
   `dev` renders the human view from it (`tools/dev/dev/report.py`).
 - **`tools/host-proof`** (retiring; see the pending moves above) — focused host
-  proof (ADR-0246): the direct `trace-analysis` executable behind the matching
-  `dev` command; trace analysis carries its rendered tables in the report's
-  `report` field. Each prints exactly one JSON report on stdout (steps,
+  proof (ADR-0246): `source-diagnostics`. It prints exactly one JSON report on
+  stdout (steps,
   outcomes, durations, details, verdict) and sends child output to stderr; its
   exit status is the verdict. `dev` renders the human step view; there is no
   sidecar, `--json` flag or completion sentinel. None joins the calling `dev`
@@ -5787,8 +5797,6 @@ checker registry, runner, supervisor or replacement omnibus:
   and best-effort `core.hooksPath` preparation (every host tool calls it before
   its workload), and the `admit-inputs` executable that `test-local` and
   `e2e-local` admit through.
-- `tools/host-proof` — artifact-only e2e verdicts (`e2e-evidence`) and host
-  diagnostics (`trace-analysis`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

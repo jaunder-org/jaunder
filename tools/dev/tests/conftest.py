@@ -279,10 +279,6 @@ TOOL_PACKAGES = {
         "repository-docs",
         "scoped-leptosfmt",
     ),
-    "host-proof": (
-        "e2e-evidence",
-        "trace-analysis",
-    ),
     "coverage-check": ("coverage-check",),
     "system-artifacts": ("system-artifacts",),
 }

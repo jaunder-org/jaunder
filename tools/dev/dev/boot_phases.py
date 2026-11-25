@@ -28,6 +28,7 @@ from dev.traces import (
     field_f64,
     member,
     parse_json_attr,
+    plain_sum,
     read_spans,
 )
 
@@ -76,18 +77,6 @@ PREAMBLE = (
 SEGMENT_HEADERS = ("segment", "median_ms", "share_of_boot_total_%", "n")
 
 
-def fsum(values: Sequence[float]) -> float:
-    """`values` added plainly left to right.
-
-    Python's `sum` compensates float rounding, which would move a reported
-    mean's last digit away from the plain sum this report has always used.
-    """
-    total = 0.0
-    for value in values:
-        total += value
-    return total
-
-
 def _lower_middle(values: Sequence[float]) -> float:
     return sorted(values)[(len(values) - 1) // 2]
 
@@ -116,10 +105,10 @@ class Estimate:
         n = len(values)
         if not n:
             return cls(0, None, None)
-        mean = fsum(values) / n
+        mean = plain_sum(values) / n
         if n < 2:
             return cls(n, mean, None)
-        squares = fsum([(value - mean) * (value - mean) for value in values])
+        squares = plain_sum([(value - mean) * (value - mean) for value in values])
         return cls(n, mean, math.sqrt(squares / (n - 1)) / math.sqrt(n))
 
 

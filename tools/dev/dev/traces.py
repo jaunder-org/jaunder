@@ -15,7 +15,7 @@ import math
 import re
 import tarfile
 import urllib.parse
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
@@ -477,6 +477,19 @@ class Decomposition:
     commit_to_mount_ms: float | None
 
 
+def plain_sum(values: Sequence[float]) -> float:
+    """`values` added plainly left to right.
+
+    Python's `sum` compensates float rounding (3.12+), while the Rust tools
+    these verdicts and reports port summed naively: the boot closure verdict at
+    its 1 ms tolerance edge and a reported mean's last digit must not move.
+    """
+    total = 0.0
+    for value in values:
+        total += value
+    return total
+
+
 def decompose(
     navigation: Any, marks: list[Any], page_total: float | None = None
 ) -> Decomposition | BootOutcome:
@@ -526,7 +539,8 @@ def decompose(
         return starts.get(ends[0], math.inf), end
 
     segments.extend(sorted(intervals, key=bounds))
-    if abs(sum(value for _, value in segments) - boot_total) > CLOSURE_TOLERANCE_MS:
+    total = plain_sum([value for _, value in segments])
+    if abs(total - boot_total) > CLOSURE_TOLERANCE_MS:
         return BootOutcome.CLOSURE_VIOLATION
     return Decomposition(segments, boot_total, field_f64(navigation, "commitToMountMs"))
 

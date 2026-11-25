@@ -156,8 +156,8 @@ class ReportedDurations:
                         f" retry {key.retry}: {_number(existing)} ms vs"
                         f" {_number(duration)} ms. Reports from different backends"
                         " share test+project+retry keys, so they cannot be merged —"
-                        " analyze one combo at a time, or use `traces run`, which"
-                        " pairs each report with its own trace file."
+                        " analyze one combo at a time, or use `dev trace-analysis"
+                        " run`, which pairs each report with its own trace file."
                     )
                 merged[key] = duration
         return cls(global_=merged)

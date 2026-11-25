@@ -498,14 +498,6 @@ let
   };
   # The tools `dev` runs on the host, from cached outputs instead of compiling
   # the tools workspace. Names stay clear of setup-ci's Cachix pushFilter.
-  hostProofBin = mkHostTool {
-    pname = "host-proof";
-    member = "tools/host-proof";
-    bins = [
-      "e2e-evidence"
-      "trace-analysis"
-    ];
-  };
   # The shared host-tool library ships only checkout admission's command, so
   # `test-local` and `e2e-local` admit without building any larger tool.
   hostToolBin = mkHostTool {
