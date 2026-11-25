@@ -110,17 +110,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             words("repository-docs adr-format"),
         ],
     ),
-    (
-        ["perf-compare", "candidate evidence.json"],
-        [
-            *build("perf-data"),
-            words("perf-data compare --result", "candidate evidence.json"),
-        ],
-    ),
-    (
-        ["perf-import-baseline", "42"],
-        [*build("perf-data"), words("perf-data import-baseline 42")],
-    ),
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
     (

@@ -80,17 +80,17 @@ One sibling tree is outside the root workspace as its own cargo workspace:
 concern packages rather than a separate driver workspace, and each executable
 that runs inside a Nix derivation lives in the crate that owns its logic
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). `performance` is
-the pure versioned dataset, producer-artifact, statistics, and comparison
-library shared by sandbox producers and host analysis under
-[ADR-0028](adr/0028-devtool-vs-xtask-boundary.md). The same auxiliary package
-provides the host-only `perf-data` CLI for evidence policy; the Nix performance
-producers run the separate `perf-producer` crate, which links the library with
-typed product storage, and never invoke that host CLI. The diagnostic coverage
-runtime is a target-only auxiliary member that is also copied into the
-diagnostic Nix source closure; its manifest therefore keeps direct package
-metadata so that the copied crate remains independently parseable. Those
-boundaries are execution/ownership boundaries, not a claim that every `tools/`
-crate is absent from every Nix derivation
+the pure versioned dataset-plan, manifest, fragment, statistics and
+fragment-validation library that the sandbox producers write with; the Nix
+performance producers run the separate `perf-producer` crate, which links the
+library with typed product storage. The host side of the workflow is Python in
+`dev`, which reads the producers' already-validated output
+([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+The diagnostic coverage runtime is a target-only auxiliary member that is also
+copied into the diagnostic Nix source closure; its manifest therefore keeps
+direct package metadata so that the copied crate remains independently
+parseable. Those boundaries are execution/ownership boundaries, not a claim that
+every `tools/` crate is absent from every Nix derivation
 ([Cargo workspace execution boundaries](adr/0141-cargo-workspace-execution-boundaries.md)).
 `elisp/` (the Emacs client,
 [ADR-0031](adr/0031-elisp-separately-tested-subproject.md)) and `end2end/`
@@ -117,16 +117,20 @@ is the native workflow in this source tree, with `medium`, `sqlite,postgres`,
 omitted browsers, `all`, and unset counts as defaults. Nix selects pinned
 producers from these parameters and one fresh nonce in every producer derivation
 identity. `dev` alone builds them serially and retains each complete
-`performance/` tree under `.xtask/performance/<nonce>/producers/<name>/` before
-status validation and before the next producer starts. A later build or status
-failure leaves earlier evidence intact. The host-only `perf-data` CLI in
-`tools/performance` validates status, fragments, compatibility, confined
-diagnostic references and invocation metadata, then atomically publishes each
-nonce result and stable upload copy. It never selects producers, consumes
-installables for scheduling, or invokes Nix. Positive optional `u64` exploration
-counts use native `dev` parameters: accepted plans require posts divisible by
-authors, revisions at least posts, and more than 50 owner-history rows per
-author, then distribute revisions deterministically. Any override makes a result
+`performance/` tree under `.xtask/performance/<nonce>/producers/<name>/`, then
+checks that producer before the next one starts. A later build or status failure
+leaves earlier evidence intact. Each VM has already validated its manifest (the
+seeder) and fragment (`perf-producer`) in Rust, so `dev` does not validate them
+again. It checks only what no single producer can: the producer's status, that
+its fragment fills the backend/browser slot Nix selected, and that every
+fragment describes the same dataset. It then atomically publishes each nonce
+result and the stable upload copy
+([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+Positive optional `u64` exploration counts use native `dev` parameters. The Nix
+selector rejects a plan that does not have posts divisible by authors, revisions
+at least posts, and (with any override) more than 50 owner-history rows per
+author, so an invalid plan fails before any VM is built; accepted plans
+distribute revisions deterministically. Any override makes a result
 noncanonical, including a value equal to its profile default, and baseline
 import rejects it. Canonicality follows normalized selectors; explicit
 default-equivalent selections remain canonical. The default matrix is storage
@@ -140,12 +144,14 @@ caches measurement output or changes the baseline. Comparison runs only after
 successful production when a committed baseline exists; `if: always()` uploads
 the entire invocation evidence tree even on failure.
 `dev perf-compare <result-path>` prints absolute median/p95/spread and advisory
-20-percent timing warnings; invalid artifacts and producer failures are not
+20-percent timing warnings; an unsupported schema, or a dataset plan or
+compatibility-key set that differs from the baseline, is a refusal, not
 advisory. `dev perf-import-baseline <positive-run-id>` is the only baseline
 mutation and admits only a verified successful `main` schedule/manual artifact
 with the exact repository/workflow/job/run-attempt, head, artifact and
-provenance identities, canonical complete medium evidence, and baseline
-compatibility. PR/local/noncanonical evidence cannot seed it. Atomic publication
+provenance identities, canonical medium evidence, and compatibility with an
+existing baseline; it relies on the assembling run for completeness rather than
+rechecking it. PR/local/noncanonical evidence cannot seed it. Atomic publication
 is per file; stable-copy failure leaves the complete nonce result and reports
 failure.
 
@@ -155,7 +161,9 @@ is accepted, as a narrow performance-specific clarification of ADR-0028;
 ADR-0141 workspace ownership and auxiliary host tests remain unchanged. Its
 `just perf*` front doors are now the `dev perf*` subcommands above
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)); the serial
-producer sequence and the host Rust performance command are unchanged.
+producer sequence is unchanged. The host Rust performance command is retired:
+`dev` owns host assembly, comparison and import in Python
+([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
 
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its
@@ -5353,19 +5361,21 @@ Maintainability chooses the language of infrastructure
 ([infrastructure language by maintainability](adr/0261-tool-language-by-maintainability.md)).
 A tool is Python unless it links product crates it genuinely needs or needs
 Rust-specific parsing. Product facts come from product commands or files rather
-than linked product code, and a format that Rust writes and another language
-reads is validated against a JSON Schema generated from the writer's types. Bash
-is limited to `scripts/` host scripts that run commands and check their results,
-with traps only for cleanup or failed-step reporting and concurrency only from
-standard tools; signal forwarding, supervising long-lived children, or data
-shaping beyond `jq` means Python. Shell inside Nix builders and workflow `run:`
-steps is outside the rule. Under that decision `perf-data` moves to Python in
-its own follow-up; `e2e-local` has already moved into `dev` (#2066), and
-`pr-observer` has already become the native `dev pr-watch`
+than linked product code. A reader in another language parses data its Rust
+writer has already validated, with no generated schema and no second validation;
+format drift fails loudly at the reader
+([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+Bash is limited to `scripts/` host scripts that run commands and check their
+results, with traps only for cleanup or failed-step reporting and concurrency
+only from standard tools; signal forwarding, supervising long-lived children, or
+data shaping beyond `jq` means Python. Shell inside Nix builders and workflow
+`run:` steps is outside the rule. Under that decision `e2e-local` has already
+moved into `dev` (#2066), the performance workflow's host work is now Python in
+`dev perf*`, and `pr-observer` has already become the native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
-[upgrade test](adr/0265-upgrade-test.md). Until the remaining moves land the
-placements below describe the current tree:
+[upgrade test](adr/0265-upgrade-test.md). The placements below describe the
+current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
@@ -5499,17 +5509,16 @@ would otherwise default to resolver 1
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.host-proof`, `packages.coverage-check`, `packages.perf-data`,
-`packages.system-artifacts` are built by one shared host-tool builder
-(`nix/host-tool.nix`) from each package's own Cargo path closure, on a
-dependencies-only build that only the lockfile, member manifests, toolchain and
-features change (`nix/tools-workspace-package.nix`, which
-`packages.repository-policy` shares); application coverage/E2E dependencies and
-explicit host-unit-test authorities remain separate. `dev` runs every Rust host
-tool from these outputs and `packages.repository-policy`, locally and in CI, so
-CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
-caches no compiled tool output; jobs that run host Cargo opt in to a cache of
-its downloads only
+`packages.host-proof`, `packages.coverage-check` and `packages.system-artifacts`
+are built by one shared host-tool builder (`nix/host-tool.nix`) from each
+package's own Cargo path closure, on a dependencies-only build that only the
+lockfile, member manifests, toolchain and features change
+(`nix/tools-workspace-package.nix`, which `packages.repository-policy` shares);
+application coverage/E2E dependencies and explicit host-unit-test authorities
+remain separate. `dev` runs every Rust host tool from these outputs and
+`packages.repository-policy`, locally and in CI, so CI substitutes unchanged
+tools from Cachix instead of compiling them. setup-ci caches no compiled tool
+output; jobs that run host Cargo opt in to a cache of its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped

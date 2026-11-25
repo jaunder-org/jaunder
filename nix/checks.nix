@@ -1583,6 +1583,19 @@ selectPerformanceProducers =
       authors = parseCount authors;
       revisions = parseCount revisions;
     };
+    # The dataset planner's canonical counts and count rules
+    # (tools/performance/src/dataset.rs `plan`), restated so a plan the seeder
+    # would reject fails here, before any producer VM is built. Drift fails
+    # loudly either way: here for a valid plan, in the seeder for an invalid one.
+    canonicalCounts = {
+      small = { posts = 100; authors = 10; revisions = 500; };
+      medium = { posts = 5000; authors = 100; revisions = 25000; };
+      large = { posts = 50000; authors = 1000; revisions = 250000; };
+    }.${profile};
+    counts = builtins.mapAttrs (
+      name: value: if value == null then canonicalCounts.${name} else value
+    ) countOverrides;
+    overridden = builtins.any (value: value != null) (builtins.attrValues countOverrides);
     producer = kind: backend: selectedBrowser:
       let
         derivation = mkPerformanceProducer {
@@ -1627,6 +1640,9 @@ selectPerformanceProducers =
   assert builtins.all (
     value: value == null || (builtins.isInt value && value > 0)
   ) (builtins.attrValues countOverrides);
+  assert counts.posts - counts.posts / counts.authors * counts.authors == 0;
+  assert counts.revisions >= counts.posts;
+  assert !overridden || counts.revisions / counts.authors > 50;
   assert selectedBackends != [ ];
   assert !browser || selectedBrowsers != [ ];
   {

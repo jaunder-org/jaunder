@@ -516,11 +516,6 @@ let
     bins = [ "coverage-check" ];
     features = [ "host" ];
   };
-  perfDataBin = mkHostTool {
-    pname = "perf-data";
-    member = "tools/performance";
-    bins = [ "perf-data" ];
-  };
   # Every CSR bundle derivation runs this executable, and the product binary
   # embeds the bundle. Its own Cargo closure keeps edits to unrelated tools out
   # of the product derivation
@@ -1596,7 +1591,6 @@ in
     repository-policy = repositoryPolicyBin;
     host-proof = hostProofBin;
     coverage-check = coverageCheckBin;
-    perf-data = perfDataBin;
     adr-promoter = adrPromoter;
     dev = devBin;
     # The out-of-process e2e seed helper (ADR-0046). Exposed so it is

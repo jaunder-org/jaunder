@@ -308,8 +308,8 @@ def perf_compare(result: str) -> None:
 
 
 @cli.command("perf-import-baseline")
-@click.argument("run_id")
-def perf_import_baseline(run_id: str) -> None:
+@click.argument("run_id", type=click.IntRange(min=1))
+def perf_import_baseline(run_id: int) -> None:
     """Replace the baseline from an authenticated CI run RUN_ID."""
     _gate(lambda: perf.import_baseline(run_id))
 

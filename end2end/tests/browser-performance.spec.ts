@@ -7,10 +7,11 @@ import {
   performanceEnabled,
   readPerformanceEnvironment,
   summarize,
-  validateManifest,
+  type Cursor,
+  type DatasetManifest,
 } from "./browser-performance";
 
-const manifest = {
+const manifest: DatasetManifest = {
   schema_version: 1,
   plan: { profile: "small", generator: { version: 1, seed: 1434 } },
   subjects: {
@@ -24,22 +25,21 @@ const manifest = {
       post_history: 33,
     },
   },
-  cursors: [
-    "public_timeline",
-    "authenticated_timeline",
-    "owner_history",
-    "post_history",
-  ].map((workload) => ({
+  cursors: (
+    [
+      "public_timeline",
+      "authenticated_timeline",
+      "owner_history",
+      "post_history",
+    ] as const
+  ).map((workload): Cursor => ({
     workload,
     target_percent: 80,
     matching_result_count: 100,
     resolved_rank: 80,
-    cursor: {
-      kind: workload.includes("history") ? "history" : "timeline",
-      value: workload.includes("history")
-        ? { revision_id: 99 }
-        : { created_at_us: 1, post_id: 42 },
-    },
+    cursor: workload.includes("history")
+      ? { kind: "history", value: { revision_id: 99 } }
+      : { kind: "timeline", value: { created_at_us: 1, post_id: 42 } },
   })),
 };
 
@@ -67,7 +67,7 @@ const environment = {
 };
 
 test("plans the six canonical browser measurements from authoritative cursors", () => {
-  const workloads = browserWorkloads(validateManifest(manifest));
+  const workloads = browserWorkloads(manifest);
   expect(workloads).toHaveLength(6);
   expect(
     workloads.map(
@@ -86,7 +86,7 @@ test("plans the six canonical browser measurements from authoritative cursors", 
 
 test("maps browser diagnostic references beneath the configured fragment directory", () => {
   const fragmentDirectory = "/var/lib/jaunder/performance-fragments";
-  const workload = browserWorkloads(validateManifest(manifest))[3]!;
+  const workload = browserWorkloads(manifest)[3]!;
   const artifacts = browserDiagnosticArtifacts(fragmentDirectory, workload, 7);
 
   expect(artifacts).toEqual({
@@ -121,7 +121,7 @@ test("computes shared midpoint median and nearest-rank p95", () => {
   });
 });
 
-test("rejects malformed performance environment and manifest", () => {
+test("rejects a malformed performance environment and a missing cursor", () => {
   expect(() =>
     readPerformanceEnvironment({
       ...environment,
@@ -150,22 +150,7 @@ test("rejects malformed performance environment and manifest", () => {
   expect(() => readPerformanceEnvironment(reversedIdentities)).toThrow(
     "sorted order",
   );
-  expect(() => validateManifest({ ...manifest, schema_version: 2 })).toThrow(
-    "schema_version",
+  expect(() => browserWorkloads({ ...manifest, cursors: [] })).toThrow(
+    "owner_history",
   );
-  expect(() =>
-    validateManifest({
-      ...manifest,
-      subjects: {
-        ...manifest.subjects,
-        browser_initial_rows: {
-          ...manifest.subjects.browser_initial_rows,
-          app: -1,
-        },
-      },
-    }),
-  ).toThrow("browser_initial_rows.app");
-  expect(() =>
-    browserWorkloads(validateManifest({ ...manifest, cursors: [] })),
-  ).toThrow("owner_history");
 });
