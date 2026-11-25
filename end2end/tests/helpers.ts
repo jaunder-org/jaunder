@@ -65,7 +65,7 @@
  */
 
 import { BASE_URL } from "./instance";
-import { expect, type Page } from "@playwright/test";
+import { expect, type Page, type Request } from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { allowSecondBoot, throwIfViolated } from "./bootBudget";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
@@ -169,7 +169,8 @@ export async function failServerFn(
  * The releasable sibling of {@link failServerFn}: instead of fulfilling an immediate
  * 500, this suspends the request so a *loading* state can be observed
  * deterministically rather than raced. Register it **before** the action that triggers
- * the fetch, or the request escapes the route.
+ * the fetch, or the request escapes the route. Pass `holds` to stall only the calls
+ * it accepts; the others continue at once.
  *
  * Deliberately no `page.unroute` on release — unrouting immediately would race the
  * still-suspended handler's `continue()`, and the route is harmless once released.
@@ -177,13 +178,14 @@ export async function failServerFn(
 export async function stallServerFn(
   page: Page,
   endpoint: string,
+  holds: (request: Request) => boolean = () => true,
 ): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   await page.route(`**/api/${endpoint}`, async (route) => {
-    await gate;
+    if (holds(route.request())) await gate;
     await route.continue();
   });
   return release;
