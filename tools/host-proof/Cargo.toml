@@ -17,10 +17,6 @@ name = "csr-prerequisite"
 path = "src/bin/csr-prerequisite.rs"
 
 [[bin]]
-name = "e2e-local"
-path = "src/bin/e2e-local.rs"
-
-[[bin]]
 name = "e2e-evidence"
 path = "src/bin/e2e-evidence.rs"
 
@@ -41,10 +37,8 @@ anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 flate2 = "1.1.10"
 host = { path = "../../host" }
-jiff = { version = "0.2.35", default-features = false, features = ["std"] }
 opentelemetry = "0.32.0"
 opentelemetry_sdk = "0.32.1"
-processkit = "3.3.4"
 regex = "1.12.3"
 repository-policy = { path = "../repository-policy" }
 host-tool = { path = "../host-tool" }
@@ -56,12 +50,8 @@ sha2 = "0.11.0"
 tabled = "0.22.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
-# e2e-local bridges processkit's async supervision into synchronous lifecycle
-# steps; a background worker keeps process I/O pumps live between calls.
-tokio = { version = "1.53.1", features = ["rt-multi-thread", "signal", "time"] }
 url = "2.5.9"
 wasmparser = "0.258.0"
-xshell = "0.2.7"
 
 [dev-dependencies]
 # Maintained YAML-org successor for CI workflow contract tests (#1939).

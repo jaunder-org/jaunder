@@ -505,7 +505,6 @@ let
       "admit-inputs"
       "csr-prerequisite"
       "e2e-evidence"
-      "e2e-local"
       "source-diagnostics"
       "trace-analysis"
       "wasm-audit"
