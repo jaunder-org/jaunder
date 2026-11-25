@@ -7,7 +7,6 @@ does not depend on where it ran. The verdicts themselves run here, in-process
 
 import json
 import sys
-import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -87,25 +86,6 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     return add
 
 
-def _verdict(name: str, decide: Callable[[], str]) -> None:
-    """Runs one in-process verdict as the step `name` and shows its result.
-
-    A refusal fails the step with status 1, like a failed tool would.
-    """
-    started_ns = time.time_ns()
-    with steps.phase(name):
-        try:
-            detail, ok = decide(), True
-        except EvidenceError as error:
-            detail, ok = str(error), False
-        duration_ms = (time.time_ns() - started_ns) // 1_000_000
-        step = {"name": name, "ok": ok, "duration_ms": duration_ms, "detail": detail}
-        sys.stdout.write(report.render_report({"steps": [step]}))
-        sys.stdout.flush()
-        if not ok:
-            raise steps.StepFailed(1, signalled=False)
-
-
 def producer(lane: str) -> None:
     """One lane's producer, then its verification, whose result is shown.
 
@@ -123,7 +103,7 @@ def producer(lane: str) -> None:
         verdict=True,
     )
     output = Path(_selected_output(check))
-    _verdict(
+    report.verdict(
         "e2e-evidence",
         lambda: e2e_evidence.verify_lane(lane, Path(CATALOG), output),
     )
@@ -161,7 +141,7 @@ def _coverage(regenerate: bool, artifacts: str) -> None:
             return server_fn_coverage.regenerate(coverage, snapshot)
         return server_fn_coverage.verify(coverage, snapshot)
 
-    _verdict(name, decide)
+    report.verdict(name, decide)
 
 
 def regenerate_coverage() -> None:
@@ -178,7 +158,7 @@ def reconcile(backend: str, browser: str, artifacts: str) -> None:
 
     The coverage pair's verdict also includes server-function flow coverage.
     """
-    _verdict(
+    report.verdict(
         "e2e-reconcile",
         lambda: e2e_evidence.reconciled_lanes(
             backend, browser, Path(CATALOG), Path(artifacts)

@@ -392,7 +392,7 @@ case "$name $*" in
   'nix path-info --derivation '*)
     for installable; do :; done
     printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
-  'admit-inputs '*|'trace-analysis '*|'coverage-check '*)
+  'admit-inputs '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """.replace(

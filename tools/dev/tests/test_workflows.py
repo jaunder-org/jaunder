@@ -75,8 +75,8 @@ FORWARDED: list[tuple[list[str], Commands]] = [
         ],
     ),
     (
-        ["trace-analysis", "--flag", SHELL_SYNTAX],
-        [*build("host-proof"), ["trace-analysis", "--flag", SHELL_SYNTAX]],
+        ["coverage-check", "--flag", SHELL_SYNTAX],
+        [*build("coverage-check"), ["coverage-check", "--flag", SHELL_SYNTAX]],
     ),
     (
         ["adr-format"],
@@ -410,10 +410,7 @@ def test_report_tools_fail_closed_without_a_report(
 @pytest.mark.parametrize("help_args", [["--help"], ["-h"], ["report", "--help"]])
 @pytest.mark.parametrize(
     "command",
-    [
-        "trace-analysis",
-        "coverage-check",
-    ],
+    ["coverage-check"],
 )
 def test_report_tools_show_their_help_unchanged(
     checkout: Checkout, command: str, help_args: list[str]

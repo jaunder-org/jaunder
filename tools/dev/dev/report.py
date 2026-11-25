@@ -5,7 +5,15 @@ line per step. The producing executable's exit status remains the verdict.
 """
 
 import json
+import sys
+import time
+from collections.abc import Callable, Sequence
 from typing import Any
+
+from tabulate import tabulate
+
+from dev import steps
+from dev.traces import EvidenceError
 
 
 def render_report(report: Any) -> str:
@@ -34,3 +42,44 @@ def render(document: bytes) -> str | None:
         return render_report(json.loads(document))
     except ValueError, LookupError, TypeError, AttributeError:
         return None
+
+
+def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """`rows` under `headers` as a box-drawn table, without a final newline.
+
+    Cells arrive already formatted: number parsing is off, so `1.000` stays
+    `1.000` rather than becoming `1`.
+    """
+    return tabulate(
+        rows, headers=headers, tablefmt="simple_outline", disable_numparse=True
+    )
+
+
+def verdict(
+    name: str,
+    decide: Callable[[], str],
+    refused: Callable[[EvidenceError], int] = lambda _error: 1,
+) -> None:
+    """Runs one in-process verdict as the step `name` and shows its result.
+
+    `decide` returns the step's detail, having written any report of its own
+    first. Evidence it refuses fails the step with the status `refused` gives
+    that refusal, as a failed tool's status would.
+    """
+    started_ns = time.time_ns()
+    with steps.phase(name):
+        try:
+            detail, code = decide(), 0
+        except EvidenceError as error:
+            detail, code = str(error), refused(error)
+        duration_ms = (time.time_ns() - started_ns) // 1_000_000
+        step = {
+            "name": name,
+            "ok": not code,
+            "duration_ms": duration_ms,
+            "detail": detail,
+        }
+        sys.stdout.write(render_report({"steps": [step]}))
+        sys.stdout.flush()
+        if code:
+            raise steps.StepFailed(code, signalled=False)

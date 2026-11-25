@@ -170,7 +170,7 @@ def read_instance_diag_logs(capture: Path) -> list[str]:
     return ordered
 
 
-def _get(value: Any, key: str) -> Any:
+def member(value: Any, key: str) -> Any:
     """`value[key]` when `value` is a JSON object holding it, else None."""
     return value.get(key) if isinstance(value, dict) else None
 
@@ -191,7 +191,7 @@ def as_f64(value: Any) -> float | None:
 
 def field_f64(value: Any, key: str) -> float | None:
     """A finite number field of a JSON object, else None."""
-    number = as_f64(_get(value, key))
+    number = as_f64(member(value, key))
     return number if number is not None and math.isfinite(number) else None
 
 
@@ -199,15 +199,15 @@ def get_attr(span: Any, key: str) -> str:
     """A string attribute of a span's `attributes[]`: its `stringValue`, else
     its `intValue` as text (OTLP encodes int64 as a number or a string), else
     the empty string."""
-    attributes = _get(span, "attributes")
+    attributes = member(span, "attributes")
     for attribute in attributes if isinstance(attributes, list) else []:
-        if _get(attribute, "key") != key:
+        if member(attribute, "key") != key:
             continue
-        value = _get(attribute, "value")
-        text = _get(value, "stringValue")
+        value = member(attribute, "value")
+        text = member(value, "stringValue")
         if isinstance(text, str):
             return text
-        number = _get(value, "intValue")
+        number = member(value, "intValue")
         if as_i64(number) is not None:
             return str(number)
         return number if isinstance(number, str) else ""
@@ -216,9 +216,9 @@ def get_attr(span: Any, key: str) -> str:
 
 def has_attr(span: Any, key: str) -> bool:
     """Whether a span's `attributes[]` declares `key` at all."""
-    attributes = _get(span, "attributes")
+    attributes = member(span, "attributes")
     return isinstance(attributes, list) and any(
-        _get(attribute, "key") == key for attribute in attributes
+        member(attribute, "key") == key for attribute in attributes
     )
 
 
@@ -250,8 +250,8 @@ def parse_duration_ms(span: Any) -> float:
     """`endTimeUnixNano - startTimeUnixNano` in milliseconds; a missing or
     unparseable bound counts as 0, so a malformed span degrades rather than
     aborting the read. The difference saturates at the 128-bit range."""
-    start = _nanos(_get(span, "startTimeUnixNano")) or 0
-    end = _nanos(_get(span, "endTimeUnixNano")) or 0
+    start = _nanos(member(span, "startTimeUnixNano")) or 0
+    end = _nanos(member(span, "endTimeUnixNano")) or 0
     return max(-_I128, min(end - start, _I128 - 1)) / 1_000_000
 
 
@@ -264,7 +264,7 @@ def span_interval_ms(raw: Any) -> tuple[float, float] | None:
     """
 
     def millis(key: str) -> float | None:
-        value = _get(raw, key)
+        value = member(raw, key)
         if isinstance(value, str):
             try:
                 return float(value) / 1_000_000
@@ -365,7 +365,7 @@ def _string(span: dict[str, Any], key: str) -> str:
 
 
 def _array(value: Any, field: str, where: str) -> list[Any]:
-    found = _get(value, field)
+    found = member(value, field)
     if not isinstance(found, list):
         raise EvidenceError(f"{where} has no {field} array")
     return found
@@ -487,11 +487,11 @@ def decompose(
     supplied only for page-span evidence, stands in for a missing `mount_done`
     mark.
     """
-    if _get(navigation, "wasmTimingSchema") != CURRENT_TIMING_SCHEMA:
+    if member(navigation, "wasmTimingSchema") != CURRENT_TIMING_SCHEMA:
         return BootOutcome.INCOMPLETE
     starts: dict[str, float] = {}
     for mark in marks:
-        name, start = _get(mark, "name"), field_f64(mark, "startTime")
+        name, start = member(mark, "name"), field_f64(mark, "startTime")
         if isinstance(name, str) and start is not None:
             starts[name] = start
     boot_total = next(
@@ -506,7 +506,7 @@ def decompose(
         if value is None:
             return BootOutcome.INCOMPLETE
         segments.append((label, value))
-    phases = _get(navigation, "bootPhases")
+    phases = member(navigation, "bootPhases")
     if not isinstance(phases, dict):
         return BootOutcome.INCOMPLETE
     intervals = [

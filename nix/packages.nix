@@ -804,6 +804,8 @@ let
     ps.pyyaml
     # `dev e2e-local` stops each child's descendants, as well as its group.
     ps.psutil
+    # `dev trace-analysis` lays out its report tables.
+    ps.tabulate
   ];
   devPython = pkgs.python3.withPackages devPythonDeps;
   devPythonCheck = pkgs.python3.withPackages (
@@ -814,6 +816,7 @@ let
       ps.mypy
       ps.types-psutil
       ps.types-pyyaml
+      ps.types-tabulate
       ps.pytest
       # Tests that read GitHub workflows find their steps by YAML structure.
       ps.pyyaml
