@@ -306,7 +306,9 @@ pub fn LogoutPage() -> impl IntoView {
     // logout asks the server itself: the sign-out may have taken effect even
     // though its response was lost (#2013).
     Effect::new(move |_| match logout_action.value().get() {
-        Some(Ok(_)) => super::clear_session(),
+        Some(Ok(MutationOutcome::Confirmed(()) | MutationOutcome::CommitIndeterminate(()))) => {
+            super::clear_session();
+        }
         Some(Err(_)) => super::use_session().reconcile.refetch(),
         None => {}
     });

@@ -406,13 +406,18 @@ test("a failed logout reports the error and re-checks the session", async ({
   await signInAs(page, user.username);
   await goto(page, "/app");
   await failServerFn(page, "auth/logout");
-  let failed = false;
+  let logoutResponded = false;
   let sessionChecksAfterFailure = 0;
   page.on("response", (response) => {
-    if (new URL(response.url()).pathname === "/api/auth/logout") failed = true;
+    if (new URL(response.url()).pathname === "/api/auth/logout") {
+      logoutResponded = true;
+    }
   });
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname === "/api/auth/get_session" && failed) {
+    if (
+      new URL(request.url()).pathname === "/api/auth/get_session" &&
+      logoutResponded
+    ) {
       sessionChecksAfterFailure += 1;
     }
   });
