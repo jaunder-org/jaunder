@@ -63,9 +63,12 @@ instead of linking.
 language does not make the reader Rust. The writer publishes a JSON Schema
 generated from its own types, committed with a drift check
 ([ADR-0109](0109-cross-language-literal-agreement.md)), and every reader
-validates against it. _Amended by #1974._ A single shared literal, such as a
-file name or a manifest key, needs no schema. Each side defines it as a named
-constant, and ADR-0109's literal agreement pins the two together.
+validates against it. The
+[validated-data draft](drafts/perf-data-python-reads-validated-data.md) amends
+this: the reader parses data its writer already validated, with no schema.
+_Amended by #1974._ A single shared literal, such as a file name or a manifest
+key, needs no schema either. Each side defines it as a named constant, and
+ADR-0109's literal agreement pins the two together.
 
 **Shell** is allowed only for host scripts in `scripts/`. Shell inside Nix
 builders and `run:` steps in GitHub workflows is out of scope. A bash script
@@ -143,8 +146,9 @@ no Nix build.
       named constants on the Rust side, because today the layout is built with
       `format!`.
     - The `syn` inventory of server functions stays in `repository-policy`. That
-      package gains a command that emits it as JSON, validated against a schema
-      generated from its types.
+      package gains a command that emits it as JSON. Python parses it without
+      validating it again
+      ([validated-data rule](drafts/perf-data-python-reads-validated-data.md)).
 - **`wasm-audit` moves into `tools/dev` as Python.**
   - _The CI budget_ is the raw size of the selected wasm file.
   - _The manual breakdown_ takes function names, sizes and demangling from
@@ -197,8 +201,6 @@ no Nix build.
 
   | Issue                                                       | Move                                                            | ADRs it amends                                                                                                                  |
   | ----------------------------------------------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-  | Issue                                                       | Move                                                            | ADRs it amends                                                                                                                  |
-  | ---                                                         | ---                                                             | ---                                                                                                                             |
   | [#2100](https://github.com/jaunder-org/jaunder/issues/2100) | `e2e-evidence` and `trace-analysis`                             | ADR-0246, ADR-0247, ADR-0258; [ADR-0165](0165-playwright-report-defines-trace-gate-population.md) if its tool references change |
   | [#2101](https://github.com/jaunder-org/jaunder/issues/2101) | `wasm-audit`                                                    | [ADR-0106](0106-wasm-raw-size-budget.md), ADR-0246, ADR-0247, ADR-0251, ADR-0258                                                |
   | [#2102](https://github.com/jaunder-org/jaunder/issues/2102) | `admit-inputs`, `csr-prerequisite` and the OpenTelemetry writer | ADR-0246, ADR-0247, ADR-0251, ADR-0258                                                                                          |
