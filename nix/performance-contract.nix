@@ -88,6 +88,16 @@ let
       posts = "0";
     }) true
   );
+  # The planner's count rules, from the profile's canonical counts where unset.
+  countRejected = counts: !(builtins.tryEval (
+    builtins.deepSeq (selectPerformanceProducers ({
+      freshnessNonce = "invalid-counts";
+      profile = "small";
+      backends = "sqlite";
+      browsers = "";
+      workload = "storage";
+    } // counts)) true
+  )).success;
   invalidStorageBrowser = builtins.tryEval (
     builtins.deepSeq (selectPerformanceProducers {
       freshnessNonce = "invalid-storage-browser";
@@ -126,4 +136,11 @@ assert overridden.selection.count_overrides == {
 };
 assert !invalidStorageBrowser.success;
 assert !invalidZeroCount.success;
+# Posts not divisible by authors (small has 10 authors).
+assert countRejected { posts = "105"; };
+# Fewer revisions than posts (small has 100 posts).
+assert countRejected { revisions = "99"; };
+# Overridden counts need more than 50 history rows per author.
+assert countRejected { posts = "100"; authors = "10"; revisions = "500"; };
+assert !(countRejected { posts = "100"; authors = "10"; revisions = "510"; });
 true

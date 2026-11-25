@@ -198,7 +198,6 @@ TOOL_PACKAGES = {
         "wasm-audit",
     ),
     "coverage-check": ("coverage-check",),
-    "perf-data": ("perf-data",),
     "system-artifacts": ("system-artifacts",),
 }
 
