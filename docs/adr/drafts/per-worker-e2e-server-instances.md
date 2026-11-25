@@ -187,6 +187,8 @@ each stays current.
 - Cost: each VM runs one more Jaunder process and one more database. Every
   Firefox lane has a 4 GiB guest with a 2 GiB disk and every Chromium lane a 3
   GiB guest. Every lane runs two workers on two vCPUs and two browsers per VM.
+  Every lane records its guest memory headroom in `lane-memory-<lane>.txt`
+  (#2092), which is how a sizing change is judged.
 - Cost: two harnesses run N instances instead of one.
 - Constraint: VM seeding runs as the service user (`runuser -u jaunder`), so the
   service account owns each instance's publisher gate. Created by root, the gate

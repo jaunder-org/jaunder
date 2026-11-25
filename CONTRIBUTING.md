@@ -784,6 +784,21 @@ Chromium guests; these are configured guest sizes, not measured host use or
 proof that any particular cap is safe. Each guest also runs one Jaunder instance
 and database per worker, so a guest's size must cover its browsers and every
 instance together; resize from measured guest memory, not from these figures.
+Every lane measures it (#2092): `lane-memory-sampler.service` logs the guest's
+`MemAvailable` once a second to `system-journal-<lane>.log`. After Playwright
+exits, the lane writes `lane-memory-<lane>.txt`, which is diagnostic only and
+fails nothing. It records:
+
+- the Playwright wall time;
+- `MemTotal` and the minimum sampled `MemAvailable`;
+- the memory-pressure stall totals from `/proc/pressure/memory`;
+- the OOM-kill and direct-reclaim counters from `/proc/vmstat`;
+- `MemoryPeak` for each instance, the collector, PostgreSQL and
+  `backdoor.service` (Playwright and its browsers), page cache included.
+
+Low `MemAvailable` alone is not pressure, because browsers size their caches to
+the memory they find. Raise a guest by 1 GiB, and measure again, when a lane
+OOM-kills or its `full` memory stall reaches 1% of its Playwright wall time.
 Cross-checkout heavy-path admission is separate work in #1753, not a
 prerequisite. No global queue, automatic host threshold or resource-pressure
 cancellation is introduced.

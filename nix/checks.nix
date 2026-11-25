@@ -216,6 +216,13 @@ e2ePlaywrightTimeout = 1500;
 e2eLifecycleAllowance = 300;
 e2eDeadlineReserve = 120;
 e2eSeedTraceTimeout = 30;
+# The unsplit measurement controls run a browser's whole suite in one VM, which
+# outgrew the per-shard cap (#2092: their 522 Firefox tests took 23 to 43
+# minutes, and longer under memory or disk pressure). Their root disk (MiB)
+# holds the whole suite's temporary files, which filled both the default 1 GiB
+# and the Firefox shards' 2 GiB.
+e2eControlPlaywrightTimeout = 7200;
+e2eControlDiskSize = 4096;
 
 # Performance producers seed larger profiles before measuring. Their browser
 # step gets 75 minutes; the VM budget leaves 25 minutes for boot, seed, and
@@ -762,6 +769,38 @@ e2eRunAndCapture =
     # from build.log alone, even on a timeout and without --keep-failed.
     print(pw_out)
 
+    # Guest memory headroom (#2092), so a memory failure is diagnosable from the
+    # lane alone. Diagnostic only: an incomplete report never fails the lane.
+    # It runs before the writers stop, because `systemctl show` no longer
+    # reports a stopped unit's peak. Peaks include page cache, and
+    # backdoor.service is the driver shell running Playwright and its browsers.
+    memory_report = ["playwright-seconds %d" % (time.monotonic() - gate_started_at)]
+    try:
+      _, samples = machine.execute("journalctl -u lane-memory-sampler.service --no-pager -o cat")
+      available_kib = [int(line.split()[1]) for line in samples.splitlines() if line.startswith("MemAvailable:")]
+      memory_report.append("mem-available-samples %d" % len(available_kib))
+      if available_kib:
+        memory_report.append("min-mem-available-kib %d" % min(available_kib))
+      for command in [
+        "grep '^MemTotal:' /proc/meminfo",
+        "cat /proc/pressure/memory",
+        "grep -E '^(oom_kill|allocstall_[a-z]+|pgscan_direct) ' /proc/vmstat",
+      ]:
+        _, output = machine.execute(command)
+        memory_report.append(output.strip())
+      for unit in [instance["unit"] for instance in e2e_instances()] + ["otel-collector.service", "postgresql.service", "backdoor.service"]:
+        _, output = machine.execute("systemctl show -p LoadState -p MemoryPeak " + unit)
+        state = dict(line.split("=", 1) for line in output.splitlines() if "=" in line)
+        if state.get("LoadState") == "loaded":
+          memory_report.append("memory-peak " + unit + " " + state.get("MemoryPeak", "unavailable"))
+    except Exception as error:
+      memory_report.append("memory report incomplete: " + str(error))
+    print("\n".join(memory_report))
+    try:
+      (machine.out_dir / "lane-memory-${identity}.txt").write_text("\n".join(memory_report) + "\n")
+    except Exception as error:
+      print("memory report not retained: " + str(error))
+
     # Collect failures without aborting the remaining diagnostic lifts.
     retention_errors.extend(stop_e2e_capture_writers())
 
@@ -1030,6 +1069,19 @@ mkE2eCheck =
           # instance unit inherits the module unit's package.
           services.jaunder.package = upgradeFrom.jaunder;
           specialisation.upgraded.configuration.services.jaunder.package = lib.mkForce jaunderBin;
+        } ++ lib.optional (lane != null) {
+          # Logs guest MemAvailable once a second for the lane's memory report
+          # (#2092): the kernel keeps no low-water mark for it.
+          systemd.services.lane-memory-sampler = {
+            description = "E2E lane guest memory sampler";
+            wantedBy = [ "multi-user.target" ];
+            serviceConfig.ExecStart = pkgs.writeShellScript "lane-memory-sampler" ''
+              while :; do
+                ${pkgs.gnugrep}/bin/grep '^MemAvailable:' /proc/meminfo
+                ${pkgs.coreutils}/bin/sleep 1
+              done
+            '';
+          };
         };
 
         virtualisation.memorySize = vmMemory;
@@ -1301,11 +1353,15 @@ mkE2eControlPackages = workers: vmMemory: vmCores:
       value = mkE2eCombo (lane // {
         extraEnv = " JAUNDER_E2E_RETRIES=1";
         expectedCensusTopology = "${lane.backend}-firefox-workers-${toString workers}-control";
+        playwrightTimeout = e2eControlPlaywrightTimeout;
+        vmDiskSize = e2eControlDiskSize;
         inherit workers vmMemory vmCores;
       });
     }) e2eFirefoxControlLanes
   );
-e2eWorkers2ControlPackages = mkE2eControlPackages 2 3072 2;
+# workers=2 stalled on reclaim at 3 GiB with two instances (#2092), as the gate
+# Firefox lanes did, so it takes their 4 GiB.
+e2eWorkers2ControlPackages = mkE2eControlPackages 2 4096 2;
 e2eWorkers4ControlPackages = mkE2eControlPackages 4 6144 4;
 
 # Single-worker variants: the disabled unsplit catalog lanes (every

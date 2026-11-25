@@ -73,16 +73,39 @@ either:
 
 Any raise is 1 GiB, and the measurement is repeated.
 
-The four control packages are each built once locally, with a salted,
-uncommitted `e2eSalt`:
+The four control packages are each built locally. They change size as follows:
 
-| Package                                           | Guest memory | vCPU |
-| ------------------------------------------------- | ------------ | ---- |
-| `e2e-{sqlite,postgres}-firefox-workers-2-control` | 3 GiB        | 2    |
-| `e2e-{sqlite,postgres}-firefox-workers-4-control` | 6 GiB        | 4    |
+| Package                                           | Guest memory     | vCPU |
+| ------------------------------------------------- | ---------------- | ---- |
+| `e2e-{sqlite,postgres}-firefox-workers-2-control` | 3 GiB, now 4 GiB | 2    |
+| `e2e-{sqlite,postgres}-firefox-workers-4-control` | 6 GiB            | 4    |
 
-The gate sizes (Firefox 4 GiB, Chromium 3 GiB) stay unless the CI window or
-these runs meet the rule above.
+The first measured runs triggered the workers=2 raise: at 3 GiB, sqlite reached
+57 s of `full` stall over 4,500 s, with active direct reclaim. Those same runs
+also showed that the controls could not finish the whole unsplit suite, so they
+get two resources of their own:
+
+- **Disk:** a 4 GiB root disk. The whole suite's temporary files filled both the
+  default 1 GiB and the Firefox shards' 2 GiB.
+- **Time:** a 2-hour Playwright budget. Clean runs took 23 to 43 minutes, and
+  the 25-minute per-shard cap was far too short.
+
+The gate sizes (Firefox 4 GiB, Chromium 3 GiB) stay unless the CI window or the
+controls meet the rule above.
+
+**A state-rule bug found by the controls.** `/login` shows a passkey
+availability notice, an `.error` element, when the site's `base_url` is unset.
+`admin-site.spec.ts` clears `base_url` and, under #2076's state rule, never
+restores it. Two `auth.spec.ts` tests then fail on that instance:
+
+- `login page shows form` fails its screenshot comparison;
+- `login invalid fields do not dispatch` counts three errors instead of two.
+
+Those are the merge-queue failures earlier attributed to #2095. At the user's
+decision the fix is part of this issue, and it uses the state rule's two moves:
+
+- The seeded visual appearance now includes the seeded `base_url`.
+- The password-login tests stop counting the passkey card's notice.
 
 ## Acceptance
 
@@ -92,20 +115,25 @@ these runs meet the rule above.
     sampler's lines.
   - All four control packages pass once locally. Their summaries are posted on
     #2092.
+  - A local run of `admin-site.spec.ts` followed by `auth.spec.ts` on a single
+    instance fails before the login fix and passes after it.
   - About 10 merge-queue runs after #2076 show no OOM kill and no memory-related
     failure. So far 6 are clean: 96 lanes with no OOM, kill or browser crash.
     Each run is cited on #2092. Runs after this change lands also report their
     stall totals.
 - Deliverables to commit:
   - The sampler and the summary.
-  - Any `vmMemory` change.
+  - The control resizing: workers=2 at 4 GiB, and both controls with a 4 GiB
+    disk and a 2-hour Playwright budget.
+  - The login-test state fix.
   - Sizing text describing the instrumentation and any change, in
     `CONTRIBUTING.md` (lane resources) and in the per-worker instances ADR
     draft's consequences.
 
 ## Boundaries
 
-- No change to worker counts, vCPUs, shard layout or disk sizes.
+- No change to worker counts, vCPUs or shard layout. Gate disk sizes are
+  unchanged.
 - No memory gate, alert, or host-side parser of the summary.
 - No retained measurement reports in the tree. Results live on the issue and the
   PR.
