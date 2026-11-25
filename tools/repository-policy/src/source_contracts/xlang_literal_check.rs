@@ -315,10 +315,24 @@ mod tests {
         assert_eq!(literal_in(ts_site(), src).unwrap(), "");
     }
 
-    /// Build a fixture root holding every file `PAIRS` names, with the literal of
-    /// each site set from `values` — indexed the way `PAIRS` is walked: pair 0
+    /// One agreeing literal per site, indexed the way `PAIRS` is walked: pair 0
     /// side a, pair 0 side b, pair 1 side a, and so on.
-    fn fixture_root(values: [&str; 6]) -> tempfile::TempDir {
+    const AGREEING: [&str; 6] = [
+        "data-mounted",
+        "data-mounted",
+        "jaunder.",
+        "jaunder.",
+        "csr_bg.wasm",
+        "csr_bg.wasm",
+    ];
+
+    /// Build a fixture root holding every file `PAIRS` names, each site's
+    /// literal taken from [`AGREEING`] except where `overrides` replaces it.
+    fn fixture_root(overrides: &[(usize, &str)]) -> tempfile::TempDir {
+        let mut values = AGREEING;
+        for &(index, value) in overrides {
+            values[index] = value;
+        }
         let dir = tempfile::tempdir().expect("tempdir");
         let mut values = values.into_iter();
         for pair in PAIRS {
@@ -340,41 +354,20 @@ mod tests {
 
     #[test]
     fn agreeing_pairs_report_no_problem() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mounted",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[]);
         assert_eq!(problems(dir.path()), None);
     }
 
     /// The gate asserts agreement, not a value: a consistent rename must pass.
     #[test]
     fn a_consistent_rename_on_both_sides_passes() {
-        let dir = fixture_root([
-            "data-ready",
-            "data-ready",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[(0, "data-ready"), (1, "data-ready")]);
         assert_eq!(problems(dir.path()), None);
     }
 
     #[test]
     fn mount_marker_drift_names_the_key_both_files_and_both_values() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mountd",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[(1, "data-mountd")]);
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("mount-marker"), "{detail}");
         assert!(detail.contains("csr/src/lib.rs"), "{detail}");
@@ -387,14 +380,7 @@ mod tests {
     /// case wrapped around one comparison.
     #[test]
     fn mark_prefix_drift_names_the_key_both_files_and_both_values() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mounted",
-            "jaunder.",
-            "jaunder-",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[(3, "jaunder-")]);
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("mark-prefix"), "{detail}");
         assert!(detail.contains("client/src/perf/names.rs"), "{detail}");
@@ -409,14 +395,7 @@ mod tests {
     /// A Python side is policed like a TypeScript one.
     #[test]
     fn csr_wasm_manifest_key_drift_names_the_key_both_files_and_both_values() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mounted",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr.wasm",
-        ]);
+        let dir = fixture_root(&[(5, "csr.wasm")]);
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("csr-wasm-manifest-key"), "{detail}");
         assert!(detail.contains("host/src/vite_manifest.rs"), "{detail}");
@@ -428,14 +407,7 @@ mod tests {
     /// `root` a parameter is what lets this arm be tested at all.
     #[test]
     fn a_missing_site_file_fails_and_names_the_path() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mounted",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[]);
         std::fs::remove_file(dir.path().join("csr/src/lib.rs")).expect("remove");
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("csr/src/lib.rs"), "{detail}");
@@ -447,14 +419,7 @@ mod tests {
     /// reader looking for a drift that is not there.
     #[test]
     fn an_unlocatable_site_reports_the_anchor_not_a_mismatch() {
-        let dir = fixture_root([
-            "data-mounted",
-            "data-mounted",
-            "jaunder.",
-            "jaunder.",
-            "csr_bg.wasm",
-            "csr_bg.wasm",
-        ]);
+        let dir = fixture_root(&[]);
         std::fs::write(dir.path().join("end2end/tests/mount.ts"), "nothing here\n").expect("write");
         let detail = problems(dir.path()).expect("a problem");
         assert!(detail.contains("not found"), "{detail}");

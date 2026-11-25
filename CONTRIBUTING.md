@@ -1616,9 +1616,9 @@ baseline.
 
 - **WASM Audit**: Use `dev wasm-audit report` to measure the size of the
   frontend WASM and JS bundles from the deterministic Nix build. The budget
-  never builds: `validate` realizes `.#csrBundle` as its own step, then `dev`
-  measures that output in-process (`tools/dev/dev/wasm_audit.py`, which holds
-  the ceiling).
+  never builds: the gates that run it (`validate`, `ci-validate-hermetic`)
+  realize `.#csrBundle` as its own step, then `dev` measures that output
+  in-process (`tools/dev/dev/wasm_audit.py`, which holds the ceiling).
 
   ```bash
   dev wasm-audit report

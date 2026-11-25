@@ -90,7 +90,8 @@ been measured; raw size remains only a proxy for browser compilation cost.
 `WASM_RAW_CEILING_BYTES` and `WASM_RAW_ACHIEVED_BYTES` now live in
 `tools/dev/dev/wasm_audit.py`, where `dev` measures the budget in-process after
 building `.#csrBundle`. The ceiling, its inclusive comparison, the raw-byte
-semantics and the remedy in the failure message are unchanged.
+semantics are unchanged. The failure message still gives the same remedy; it now
+names the new file.
 
 - **Breakdown attribution.** `dev wasm-audit report --breakdown` takes function
   names, sizes and demangling from `twiggy top -f json` on `.#csrWasm`. Python

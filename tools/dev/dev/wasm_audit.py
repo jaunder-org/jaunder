@@ -14,10 +14,9 @@ walks only the section headers and rolls twiggy's items up by crate.
 
 import json
 import re
-import sys
 from collections import Counter
-from pathlib import Path, PurePosixPath
-from typing import Any, NamedTuple, NoReturn
+from pathlib import Path
+from typing import Any, NamedTuple
 
 from dev import steps
 
@@ -34,7 +33,7 @@ WASM_RAW_ACHIEVED_BYTES = 4_009_656
 WASM_RAW_CEILING_BYTES = 5_000_000
 
 # The `\0asm` magic and version that precede the first section.
-HEADER = 8
+HEADER_BYTES = 8
 SECTIONS = {
     1: "type",
     2: "import",
@@ -68,20 +67,18 @@ class Artifact(NamedTuple):
     brotli: int
 
 
-def _refuse(message: str) -> NoReturn:
-    print(message, file=sys.stderr)
-    raise steps.StepFailed(1, signalled=False)
+def _listed_path(root: Path, value: object, owner: str) -> str:
+    """A manifest-listed output path, refused unless it is safe and present.
 
-
-def _output(root: Path, value: object, owner: str) -> str:
-    """A manifest-listed output path, refused unless it is safe and present."""
+    Safe is `host::vite_manifest`'s rule: every segment is a plain name, so
+    the path stays below `root` and has one spelling.
+    """
     if not isinstance(value, str):
-        _refuse(f"Vite manifest entry {owner!r} must list output paths")
-    parts = PurePosixPath(value).parts
-    if not value or value.startswith("/") or {".", ".."} & set(parts):
-        _refuse(f"unsafe Vite output path: {value!r}")
+        steps.refuse(f"Vite manifest entry {owner!r} must list output paths")
+    if {"", ".", ".."} & set(value.split("/")):
+        steps.refuse(f"unsafe Vite output path: {value!r}")
     if not (root / value).is_file():
-        _refuse(f"Vite output file is missing: {value}")
+        steps.refuse(f"Vite output file is missing: {value}")
     return value
 
 
@@ -95,24 +92,26 @@ def outputs(root: Path) -> tuple[str, list[str]]:
     try:
         manifest: Any = json.loads(path.read_bytes())
     except (OSError, ValueError) as error:
-        _refuse(f"reading Vite manifest {path}: {error}")
+        steps.refuse(f"reading Vite manifest {path}: {error}")
     if not isinstance(manifest, dict):
-        _refuse("Vite manifest root must be an object")
+        steps.refuse("Vite manifest root must be an object")
     files = set()
     for key, entry in manifest.items():
         if not isinstance(entry, dict) or "file" not in entry:
-            _refuse(f"Vite manifest has no output file for {key!r}")
-        files.add(_output(root, entry["file"], key))
+            steps.refuse(f"Vite manifest has no output file for {key!r}")
+        files.add(_listed_path(root, entry["file"], key))
         for field in ("css", "assets"):
             listed = entry.get(field, [])
             if not isinstance(listed, list):
-                _refuse(f"Vite manifest entry {key!r} field {field!r} must be a list")
-            files.update(_output(root, value, key) for value in listed)
+                steps.refuse(
+                    f"Vite manifest entry {key!r} field {field!r} must be a list"
+                )
+            files.update(_listed_path(root, value, key) for value in listed)
     if WASM_SOURCE not in manifest:
-        _refuse(f"Vite manifest has no output file for {WASM_SOURCE!r}")
+        steps.refuse(f"Vite manifest has no output file for {WASM_SOURCE!r}")
     wasm: str = manifest[WASM_SOURCE]["file"]
     if not wasm.endswith(".wasm"):
-        _refuse(f"Vite {WASM_SOURCE} mapping must resolve to a WASM output")
+        steps.refuse(f"Vite {WASM_SOURCE} mapping must resolve to a WASM output")
     return wasm, sorted(files)
 
 
@@ -127,7 +126,7 @@ def measure(root: Path) -> list[Artifact]:
             try:
                 sizes.append((root / f"{name}{suffix}").stat().st_size)
             except OSError as error:
-                _refuse(f"reading Vite output {name}{suffix}: {error}")
+                steps.refuse(f"reading Vite output {name}{suffix}: {error}")
         artifacts.append(Artifact(name, *sizes))
     return artifacts
 
@@ -148,10 +147,11 @@ def _percent(part: int, whole: int) -> str:
     return "n/a" if whole == 0 else f"{part / whole * 100:.1f}%"
 
 
-def report(root: str) -> None:
-    """Prints the size table of the bundle at `root`."""
+def report(link: str) -> None:
+    """Prints the size table of the bundle at `link`, named by its target."""
+    root = Path(link).resolve()
     with steps.phase("wasm-audit"):
-        artifacts = measure(Path(root))
+        artifacts = measure(root)
         lines = [
             "WASM bundle audit",
             f"bundle output: {root}",
@@ -191,9 +191,10 @@ def budget(root: str) -> None:
     The caller built the bundle; the budget never runs Nix.
     """
     with steps.phase("wasm-budget"):
-        raw = measure(Path(root))[0].raw
+        # Only the wasm's own size: the compressed copies are no budget input.
+        raw = (Path(root) / outputs(Path(root))[0]).stat().st_size
         if over(raw):
-            _refuse(failure_message(raw))
+            steps.refuse(failure_message(raw))
         # A headroom budget can erode quietly inside the headroom; the drift
         # from the achieved size is what makes that visible before the ceiling.
         drift = raw - WASM_RAW_ACHIEVED_BYTES
@@ -224,10 +225,10 @@ def sections(data: bytes) -> list[tuple[str, int]]:
     8-byte header account for every byte of the file: a section that would run
     past its end is refused rather than under-reported.
     """
-    if data[:4] != b"\0asm" or len(data) < HEADER:
+    if data[:4] != b"\0asm" or len(data) < HEADER_BYTES:
         raise ValueError("not a wasm module")
     spans = []
-    offset = HEADER
+    offset = HEADER_BYTES
     while offset < len(data):
         start = offset
         identity = data[offset]
@@ -308,11 +309,11 @@ def breakdown(wasm: str) -> None:
         try:
             data = Path(wasm).read_bytes()
         except OSError as error:
-            _refuse(f"reading wasm artifact {wasm}: {error}")
+            steps.refuse(f"reading wasm artifact {wasm}: {error}")
         try:
             spans = sections(data)
         except ValueError as error:
-            _refuse(f"parsing sections of {wasm}: {error}")
+            steps.refuse(f"parsing sections of {wasm}: {error}")
     items = json.loads(steps.output("twiggy", ["twiggy", "top", "-f", "json", wasm]))
     with steps.phase("wasm-crates"):
         crates = rollup(items)

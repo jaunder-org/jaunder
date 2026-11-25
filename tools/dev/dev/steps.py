@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from pathlib import Path
 from types import FrameType
-from typing import Any
+from typing import Any, NoReturn
 
 from opentelemetry.trace import Span
 
@@ -83,6 +83,12 @@ class StepFailed(Exception):
         super().__init__(code)
         self.code = code
         self.signalled = signalled
+
+
+def refuse(message: str) -> NoReturn:
+    """Fails the current step or phase with status 1, saying why on stderr."""
+    print(message, file=sys.stderr)
+    raise StepFailed(1, signalled=False)
 
 
 class _Interrupted(StepFailed):

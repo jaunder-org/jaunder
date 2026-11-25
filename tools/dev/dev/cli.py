@@ -266,11 +266,7 @@ def wasm_audit_report(site_path: str | None, breakdown: bool, wasm: str | None) 
     if breakdown:
         _gate(lambda: wasm_audit.breakdown(wasm or wasm_audit.csr_wasm()))
     else:
-        _gate(
-            lambda: wasm_audit.report(
-                site_path or str(Path(gates.csr_bundle()).resolve())
-            )
-        )
+        _gate(lambda: wasm_audit.report(site_path or gates.csr_bundle()))
 
 
 @cli.command("upgrade-test")

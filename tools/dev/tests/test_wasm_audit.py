@@ -73,6 +73,9 @@ def edit(manifest: dict[str, Any], change: str) -> object:
             entry["assets"] = ["../outside.wasm"]
         case "empty":
             entry["file"] = ""
+        case "dot":
+            # Present and below the root, but a second spelling of its path.
+            entry["file"] = "./assets/index-a1b2.js"
         case "missing":
             entry["assets"] = ["assets/gone.wasm"]
         case "assets":
@@ -94,6 +97,7 @@ def edit(manifest: dict[str, Any], change: str) -> object:
         ("absolute", "unsafe Vite output path: '/etc/passwd'"),
         ("parent", "unsafe Vite output path: '../outside.wasm'"),
         ("empty", "unsafe Vite output path: ''"),
+        ("dot", "unsafe Vite output path: './assets/index-a1b2.js'"),
         ("missing", "Vite output file is missing: assets/gone.wasm"),
         ("assets", "Vite manifest entry 'index.html' field 'assets' must be a list"),
         ("no wasm", "Vite manifest has no output file for 'csr_bg.wasm'"),
@@ -151,6 +155,15 @@ def test_a_passing_budget_reports_its_drift_from_the_achieved_size(
         )
 
 
+def test_the_budget_reads_only_the_wasm_not_its_compressed_copies(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    write_bundle(tmp_path, b"wasm")
+    (tmp_path / "assets/csr_bg-e5f6.wasm.br").unlink()
+    wasm_audit.budget(str(tmp_path))
+    assert capsys.readouterr().out.startswith("wasm-budget: 4 raw bytes ")
+
+
 def test_an_overrun_names_the_constant_to_raise_and_how_to_attribute_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -180,7 +193,7 @@ def test_section_spans_and_the_header_account_for_the_whole_file() -> None:
         "custom:producers",
         "section-42",
     ]
-    assert wasm_audit.HEADER + sum(size for _, size in spans) == len(wasm)
+    assert wasm_audit.HEADER_BYTES + sum(size for _, size in spans) == len(wasm)
 
 
 @pytest.mark.parametrize(
