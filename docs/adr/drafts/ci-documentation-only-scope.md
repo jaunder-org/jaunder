@@ -23,19 +23,20 @@ rename broad, which no check in the narrow route needed.
 - **One Markdown-only rule.** A change is Markdown-only when it is non-empty and
   every record of its raw Git diff adds, modifies or deletes a case-sensitive
   `.md` path that is a regular file on each side that exists. It is one function
-  in `dev` (`index.markdown_only`); the precommit applies it to the staged diff,
-  and `dev ci-scope` to the diff between a base commit and the tested commit.
+  in `dev` (`rawdiff.markdown_only`); the precommit applies it to the staged
+  diff, and `dev.scope` to the diff between a base commit and the tested commit.
   The precommit keeps its own conditions about the working tree (nothing
   uncertain, untracked or unstaged). A Markdown delete, and so a Markdown
   rename, now takes the precommit's narrow route.
-- **Documentation-only CI.** The `CI scope` job runs `dev ci-scope` against the
-  pull request's base or the merge-queue entry's base. A push has no base and is
-  never documentation-only. For a documentation-only change only the
-  `Validation docs` lane runs (`dev ci-validate-docs`: Markdown Prettier and the
+- **Documentation-only CI.** The `ubuntu-slim` `Merge-queue verdict` job runs
+  `dev.scope` against the pull request's base or the merge-queue entry's base,
+  with the image's own `python3` and `git`. A push has no base and is never
+  documentation-only. For a documentation-only change only the `Validation docs`
+  lane runs (`dev ci-validate-docs`: Markdown Prettier and the
   documentation-shape checks); every other validation lane, E2E producer and
-  reconciliation is skipped. `Validate (no e2e)` then requires the scope and
-  docs lane, and `e2e gate` requires the scope and passes with the E2E jobs
-  skipped as not applicable. Anything `ci-scope` cannot establish — no or
+  reconciliation is skipped. `Validate (no e2e)` then requires the verdict job
+  and docs lane, and `e2e gate` requires the verdict job and passes with the E2E
+  jobs skipped as not applicable. Anything `dev.scope` cannot establish — no or
   unfetchable base, a git error, a malformed record — runs everything. The merge
   queue uses the same rule (human decision, 2026-11-24, on #1971).
 - **Superseded pull-request runs are cancelled.** The workflow's concurrency
@@ -43,11 +44,14 @@ rename broad, which no check in the narrow route needed.
   every other run, with `cancel-in-progress`. Merge-queue and push runs are
   never cancelled. The aggregates and reconciliation use `!cancelled()` rather
   than `always()`, so a cancelled run starts no further jobs.
-- **The rule lives in Python, not in the workflow.** Classifying in the
-  `ubuntu-slim` verdict job with `github-script` would avoid the about 45 s the
-  validation lanes now wait for `CI scope`, but would be a second
-  implementation, or would make the precommit call `node` (human decision,
-  2026-11-25).
+- **The rule runs in the verdict job, in Python.** A separate full-size scope
+  job would make every lane wait for it to win a runner, the queueing the
+  verdict job's matrix projection already removed; rewriting the rule in
+  `github-script` would be a second implementation. So `dev.scope` and the rule
+  (`dev.rawdiff`) import only the standard library and run on the slim image's
+  own Python, as the matrix projection runs on its own `jq`; `dev`'s tests run
+  the same modules under the pinned Python, one without site-packages (human
+  decisions, 2026-11-25).
 
 ## Consequences
 
@@ -55,9 +59,11 @@ rename broad, which no check in the narrow route needed.
   runner-minutes instead of about 160. ADR-promoter pull requests qualify when
   they touch only Markdown; one that also rewrites a citation in code runs
   everything.
-- Full runs finish about 45 s later: the validation lanes, `Validation host`
-  included, wait for `CI scope`. `Validation host`, `main`'s kache writer, still
-  runs when `CI scope` is skipped for a merge-queue-tested push.
+- `Validation host`, `main`'s kache writer, now waits for the seconds-long
+  verdict job so it can skip a documentation-only change; it still runs for a
+  merge-queue-tested push, and when the verdict job fails.
+- `dev.scope` and `dev.rawdiff` must stay standard-library-only and run on the
+  slim image's Python (3.12 as of this decision).
 - A Markdown file that a product lane starts to read must change the rule, not
   be added silently. The source probes that used to dirty `README.md`
   ([ADR-0116](../0116-coverage-probe-dirty-tree-workaround.md)) now dirty their

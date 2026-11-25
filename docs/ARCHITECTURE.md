@@ -4206,9 +4206,9 @@ census/report/manifest union, and independently validates retries, duration
 pressure, panic phases, and boot traces. Missing, duplicated, misidentified,
 malformed, or failed evidence fails reconciliation; failed producers are still
 awaited and their recoverable evidence remains an aggregate input. The stable
-result-only `e2e gate` requires every producer, the `CI scope` job that projects
-the catalog, and all four reconciliations; for a documentation-only change it
-requires the scope and the E2E jobs skipped
+result-only `e2e gate` requires every producer, the `Merge-queue verdict` job
+that projects the catalog, and all four reconciliations; for a
+documentation-only change it requires that job and the E2E jobs skipped
 ([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
 Local `dev validate` inherits the non-E2E Elisp verdict, then calls the same
 synchronous `dev e2e` workflow; it does not rerun live ERT
@@ -4822,17 +4822,19 @@ required surfaces in success-path order, plus host Clippy
 
 A Markdown-only pull request or merge-queue entry runs none of those lanes
 ([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). The
-`CI scope` job runs `dev ci-scope` against the pull request's or queue entry's
-base with the precommit's Markdown-only rule; a push has no base, and anything
-it cannot establish runs everything. A documentation-only change runs only
-`Validation docs` (`dev ci-validate-docs`: clean tree, Markdown Prettier and the
-documentation-shape checks), and `Validate (no e2e)` then requires the scope and
-that lane instead of the four. The validation lanes, `Validation host` included,
-wait for `CI scope`; `Validation host` still runs when the scope is skipped for
-a merge-queue-tested push. A new commit on a pull request cancels its superseded
-run (one concurrency group per pull request, every other run its own group), and
-the aggregates and reconciliation use `!cancelled()` so a cancelled run starts
-no further jobs.
+`ubuntu-slim` `Merge-queue verdict` job decides it with the image's own
+`python3` and `git`, running `dev.scope` against the pull request's or queue
+entry's base with the precommit's Markdown-only rule (`dev.rawdiff`); both
+modules import only the standard library, and `dev`'s tests run them under the
+pinned Python. A push has no base, and anything it cannot establish runs
+everything. A documentation-only change runs only `Validation docs`
+(`dev ci-validate-docs`: clean tree, Markdown Prettier and the
+documentation-shape checks), and `Validate (no e2e)` then requires the verdict
+job and that lane instead of the four. `Validation host` now waits for the
+seconds-long verdict job, and still runs for a merge-queue-tested push. A new
+commit on a pull request cancels its superseded run (one concurrency group per
+pull request, every other run its own group), and the aggregates and
+reconciliation use `!cancelled()` so a cancelled run starts no further jobs.
 
 All `dev` gates **fail fast** on a required child failure. They return nonzero
 without running later ordinary diagnostics or fabricating skipped success.

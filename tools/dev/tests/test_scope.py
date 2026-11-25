@@ -1,11 +1,12 @@
 """CI's documentation-only scope, on real repositories.
 
-Each test commits a base, changes it, and asks `ci-scope` about HEAD. The
+Each test commits a base, changes it, and asks `dev.scope` about HEAD. The
 repository is its own `origin`, so the base fetch is real too.
 """
 
 import os
 import subprocess
+import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -141,3 +142,17 @@ def test_without_a_usable_base_everything_runs(
         "docs_only=false\n",
         f"ci-scope: docs_only=False reason={reason}\n",
     )
+
+
+def test_ci_runs_it_as_a_module_with_the_standard_library_alone(git: Git) -> None:
+    """As the slim verdict job does: its own Python, no site-packages."""
+    base = changed(git, lambda: Path("guide.md").write_text("# Changed\n"))
+    tools_dev = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, "-S", "-m", "dev.scope", "--base", base],
+        capture_output=True,
+        text=True,
+        check=False,
+        env={"PATH": os.environ["PATH"], "PYTHONPATH": str(tools_dev)},
+    )
+    assert (result.returncode, result.stdout) == (0, "docs_only=true\n"), result

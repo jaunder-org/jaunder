@@ -416,13 +416,13 @@ def ci_validate_host() -> None:
 
 
 def docs_checks(mode: Mode) -> None:
-    """The checks a Markdown-only change needs (`index.markdown_only`)."""
+    """The checks a Markdown-only change needs (`rawdiff.markdown_only`)."""
     markdown(mode, Docs.HOST)
     docs_shape()
 
 
 def ci_validate_docs() -> None:
-    """CI's whole verdict for a Markdown-only change (`dev ci-scope`)."""
+    """CI's whole verdict for a Markdown-only change (`dev.scope`)."""
     clean_tree()
     docs_checks(Mode.VERIFY)
 

@@ -15,7 +15,8 @@ from conftest import FAKE, REAL_GIT, Workflow
 from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
 
 from dev import index
-from dev.index import PathStatus, Reason, Refused, Snapshot
+from dev.index import PathStatus, Refused, Snapshot
+from dev.rawdiff import Reason
 
 shared_docs = pytest.mark.skipif(
     not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"

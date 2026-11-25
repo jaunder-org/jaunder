@@ -5,10 +5,20 @@ on:
   push:
     branches: [main]
   # Run the required checks on merge-queue branches (gh-readonly-queue/…) so the
-  # queue can gate on the combined-with-main state. All jobs run on merge_group:
-  # both required contexts — "Validate (no e2e)" and "e2e gate" (via its needs) —
-  # must report on the queue branch. See docs/ci-merge-queue.md.
+  # queue can gate on the combined-with-main state. Both required contexts —
+  # "Validate (no e2e)" and "e2e gate" — must report on the queue branch; a
+  # documentation-only entry runs only the docs lane, as a pull request does.
+  # See docs/ci-merge-queue.md.
   merge_group:
+
+# A new commit pushed to a pull request cancels that pull request's superseded
+# run. Every other run is its own group, so merge-queue and push runs are never
+# cancelled or queued.
+concurrency:
+  group:
+    ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number
+    || github.run_id }}
+  cancel-in-progress: true
 
 # Runner selection for every job that builds: pin the image, never `ubuntu-latest`.
 # `-latest` migrates whenever GitHub rolls the image family, so an unrelated PR is the
@@ -41,8 +51,13 @@ jobs:
   # This job also projects the e2e matrices from the lane catalog. It is the
   # first job to get a runner, so the e2e lanes never queue behind a separate
   # catalog job while the account's concurrent-job limit is saturated. The
-  # projection uses the slim image's own `jq`, its one dependency on the image's
-  # software; the pinned `jq` runs the same script in the hermetic checks.
+  # projection uses the slim image's own `jq`; the pinned `jq` runs the same
+  # script in the hermetic checks.
+  #
+  # It also decides whether the change is documentation-only, with the slim
+  # image's own `python3` and `git` running `dev.scope`, which needs only the
+  # standard library; the pinned Python runs the same module in `dev`'s tests. A
+  # push has no base, so it is never documentation-only.
   merge-queue-verdict:
     name: Merge-queue verdict
     runs-on: ubuntu-slim
@@ -55,6 +70,7 @@ jobs:
         }}
       lanes: ${{ steps.matrix.outputs.lanes }}
       reconciles: ${{ steps.matrix.outputs.reconciles }}
+      docs_only: ${{ steps.scope.outputs.docs_only }}
     steps:
       - name: Look up a passing merge-queue run of this commit
         id: lookup
@@ -99,16 +115,33 @@ jobs:
           sparse-checkout: |
             end2end/e2e-lanes.json
             scripts/e2e-matrix.jq
+            tools/dev/dev/__init__.py
+            tools/dev/dev/rawdiff.py
+            tools/dev/dev/scope.py
           sparse-checkout-cone-mode: false
       - name: Read enabled producer matrices from the catalog
         id: matrix
         run:
           jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >>
           "$GITHUB_OUTPUT"
+      - name: Decide whether the change is documentation-only
+        id: scope
+        env:
+          BASE:
+            ${{ github.event.pull_request.base.sha ||
+            github.event.merge_group.base_sha }}
+          PYTHONPATH: tools/dev
+        run: python3 -m dev.scope --base "$BASE" >> "$GITHUB_OUTPUT"
 
+  # Main's only kache writer: it still runs for a merge-queue-tested push, and
+  # skips only for a documentation-only change.
   validate-host:
     name: Validation host
     runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if:
+      ${{ !cancelled() && needs.merge-queue-verdict.outputs.docs_only != 'true'
+      }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -188,7 +221,9 @@ jobs:
     name: Validation hermetic
     runs-on: ubuntu-24.04
     needs: [merge-queue-verdict]
-    if: needs.merge-queue-verdict.outputs.tested != 'true'
+    if:
+      needs.merge-queue-verdict.outputs.tested != 'true' &&
+      needs.merge-queue-verdict.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -220,7 +255,9 @@ jobs:
     name: Validation test checks
     runs-on: ubuntu-24.04
     needs: [merge-queue-verdict]
-    if: needs.merge-queue-verdict.outputs.tested != 'true'
+    if:
+      needs.merge-queue-verdict.outputs.tested != 'true' &&
+      needs.merge-queue-verdict.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -262,7 +299,9 @@ jobs:
     name: Validation coverage
     runs-on: ubuntu-24.04
     needs: [merge-queue-verdict]
-    if: needs.merge-queue-verdict.outputs.tested != 'true'
+    if:
+      needs.merge-queue-verdict.outputs.tested != 'true' &&
+      needs.merge-queue-verdict.outputs.docs_only != 'true'
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -310,38 +349,85 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
+  # A documentation-only change runs only this lane, which alone decides it.
+  validate-docs:
+    name: Validation docs
+    runs-on: ubuntu-24.04
+    needs: [merge-queue-verdict]
+    if: needs.merge-queue-verdict.outputs.docs_only == 'true'
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Validate docs lane (via dev)
+        run: nix develop .#ci --accept-flake-config -c dev ci-validate-docs
+      # Diagnostic only: the table never decides the job's result.
+      - name: Trace summary
+        if: always()
+        run:
+          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
+      - name: Upload docs validation diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: validate-docs-diagnostics
+          path: |
+            .xtask/diagnostics/
+            .xtask/run/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
+
   validate-no-e2e:
     name: Validate (no e2e)
     runs-on: ubuntu-slim
     needs:
       [
         merge-queue-verdict,
+        validate-docs,
         validate-host,
         validate-hermetic,
         validate-test-checks,
         validate-coverage,
       ]
-    # Keep always(): without it a failed lane would skip this required check,
-    # and branch protection accepts a skipped check.
-    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
+    # Keep !cancelled(): without a status function a failed lane would skip
+    # this required check, and branch protection accepts a skipped check. A
+    # cancelled run reports skipped, but it is superseded by a newer run, and
+    # the merge queue runs the required checks again before anything lands.
+    if:
+      ${{ !cancelled() && needs.merge-queue-verdict.outputs.tested != 'true' }}
     steps:
-      - name: Require all validation lanes to pass
+      - name: Require the scope's validation lanes to pass
         run: |
+          verdict="${{ needs.merge-queue-verdict.result }}"
+          docs_only="${{ needs.merge-queue-verdict.outputs.docs_only }}"
+          docs="${{ needs.validate-docs.result }}"
           host="${{ needs.validate-host.result }}"
           hermetic="${{ needs.validate-hermetic.result }}"
           test_checks="${{ needs.validate-test-checks.result }}"
           coverage="${{ needs.validate-coverage.result }}"
-          echo "validation lane results: host=$host hermetic=$hermetic test-checks=$test_checks coverage=$coverage"
-          test "$host" = "success"
-          test "$hermetic" = "success"
-          test "$test_checks" = "success"
-          test "$coverage" = "success"
+          echo "validation lane results: verdict=$verdict docs_only=$docs_only docs=$docs host=$host hermetic=$hermetic test-checks=$test_checks coverage=$coverage"
+          test "$verdict" = "success"
+          if [ "$docs_only" = "true" ]; then
+            test "$docs" = "success"
+          else
+            test "$host" = "success"
+            test "$hermetic" = "success"
+            test "$test_checks" = "success"
+            test "$coverage" = "success"
+          fi
 
   e2e-lane:
     name: e2e (${{ matrix.lane }})
     runs-on: ubuntu-24.04
     needs: [merge-queue-verdict]
-    if: needs.merge-queue-verdict.outputs.tested != 'true'
+    if:
+      needs.merge-queue-verdict.outputs.tested != 'true' &&
+      needs.merge-queue-verdict.outputs.docs_only != 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -412,7 +498,11 @@ jobs:
     name: e2e reconcile (${{ matrix.backend }}/${{ matrix.browser }})
     runs-on: ubuntu-24.04
     needs: [merge-queue-verdict, e2e-lane]
-    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
+    # Runs after a failed lane too, to reconcile what the others produced.
+    if:
+      ${{ !cancelled() && needs.merge-queue-verdict.result == 'success' &&
+      needs.merge-queue-verdict.outputs.tested != 'true' &&
+      needs.merge-queue-verdict.outputs.docs_only != 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -473,14 +563,22 @@ jobs:
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
     needs: [merge-queue-verdict, e2e-lane, e2e-reconcile]
-    # Keep always(): without it a failed lane would skip this required check.
-    if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
+    # Keep !cancelled(): without a status function a failed lane would skip
+    # this required check.
+    if:
+      ${{ !cancelled() && needs.merge-queue-verdict.outputs.tested != 'true' }}
     steps:
-      - name: Require all e2e matrix jobs to pass
+      - name: Require all e2e matrix jobs to pass, or none to run
         run: |
           test "${{ needs.merge-queue-verdict.result }}" = "success"
+          docs_only="${{ needs.merge-queue-verdict.outputs.docs_only }}"
           lanes="${{ needs.e2e-lane.result }}"
           reconcile="${{ needs.e2e-reconcile.result }}"
-          echo "e2e results: lanes=$lanes reconcile=$reconcile"
-          test "$lanes" = "success"
-          test "$reconcile" = "success"
+          echo "e2e results: docs_only=$docs_only lanes=$lanes reconcile=$reconcile"
+          if [ "$docs_only" = "true" ]; then
+            test "$lanes" = "skipped"
+            test "$reconcile" = "skipped"
+          else
+            test "$lanes" = "success"
+            test "$reconcile" = "success"
+          fi

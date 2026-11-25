@@ -1,15 +1,21 @@
 """CI's documentation-only scope.
 
 A pull request or merge-queue entry that changes Markdown alone, by the rule
-the precommit's narrow route uses (`index.markdown_only`), runs only the
+the precommit's narrow route uses (`rawdiff.markdown_only`), runs only the
 documentation checks. Anything this cannot establish runs everything.
+
+CI's merge-queue verdict job runs it with the slim image's own Python, from a
+sparse checkout and before any Nix shell exists, so it imports only the
+standard library and `rawdiff`:
+
+    PYTHONPATH=tools/dev python3 -m dev.scope --base <sha> >> "$GITHUB_OUTPUT"
 """
 
+import argparse
 import subprocess
 import sys
 
-from dev import index
-from dev.index import Reason
+from dev.rawdiff import Reason, markdown_only, raw_changes
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
@@ -28,10 +34,10 @@ def _reason(base: str) -> str:
     if diff.returncode:
         return "diff-failed"
     uncertainty: set[str] = set()
-    changes = index.raw_changes(diff.stdout, uncertainty)
+    changes = raw_changes(diff.stdout, uncertainty)
     if uncertainty:
         return Reason.UNCERTAIN_STATUS
-    return index.markdown_only(changes)
+    return markdown_only(changes)
 
 
 def ci_scope(base: str) -> None:
@@ -43,3 +49,17 @@ def ci_scope(base: str) -> None:
     docs_only = reason == Reason.ISOLATED_STAGED_MARKDOWN
     print(f"docs_only={'true' if docs_only else 'false'}", flush=True)
     print(f"ci-scope: docs_only={docs_only} reason={reason}", file=sys.stderr)
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(
+        prog="python3 -m dev.scope", description=__doc__.splitlines()[0]
+    )
+    parser.add_argument(
+        "--base", default="", help="The commit the change is compared with."
+    )
+    ci_scope(parser.parse_args(argv).base)
+
+
+if __name__ == "__main__":
+    main()

@@ -72,8 +72,8 @@ scheduled mutation job. `ci-nix` is Linux-only and holds only `nix`, `git`,
 `dev`, `traced-run`, `jq`, basic shell utilities and the OpenSSL/dav1d libraries
 for `LD_LIBRARY_PATH`, with no Rust toolchain and no C compiler. The CI jobs
 that only run Nix builds and Nix-built tools enter `ci-nix`: the hermetic,
-test-checks and coverage validation lanes and the CI scope, e2e lane and
-reconcile jobs. `theme-thumbnail` is described in [themes](docs/themes.md).
+test-checks and coverage validation lanes and the e2e lane and reconcile jobs.
+`theme-thumbnail` is described in [themes](docs/themes.md).
 
 Enter the default, CI, mutants or `ci-nix` shell from the intended Git checkout.
 At entry, their shared startup hook creates and verifies the absolute
@@ -1191,14 +1191,17 @@ stable `Validate (no e2e)` result-only job. The coverage source-filter probe
 CI step.
 
 A pull request or merge-queue entry that changes only Markdown, by the
-precommit's own rule, runs none of those lanes and no E2E. The `CI scope` job
-runs `dev ci-scope --base <sha>` against the pull request's or queue entry's
-base, then reads the E2E catalog. When it prints `docs_only=true`, only
-`Validation docs` runs (`dev ci-validate-docs`: clean tree, Markdown Prettier
-and `docs-shape` in Verify mode); `Validate (no e2e)` requires that lane and
-`e2e gate` passes with the E2E jobs skipped. A push, or anything `ci-scope`
-cannot establish, runs everything. A new commit on a pull request cancels that
-pull request's superseded run; merge-queue and push runs are never cancelled
+precommit's own rule, runs none of those lanes and no E2E. The
+`Merge-queue verdict` job decides it with the slim image's own `python3`,
+running `PYTHONPATH=tools/dev python3 -m dev.scope --base <sha>` against the
+pull request's or queue entry's base; `dev.scope` and the rule it shares with
+the precommit (`dev.rawdiff`) import only the standard library. When it prints
+`docs_only=true`, only `Validation docs` runs (`dev ci-validate-docs`: clean
+tree, Markdown Prettier and `docs-shape` in Verify mode); `Validate (no e2e)`
+requires that lane and `e2e gate` passes with the E2E jobs skipped. A push, or
+anything `dev.scope` cannot establish, runs everything. A new commit on a pull
+request cancels that pull request's superseded run; merge-queue and push runs
+are never cancelled
 ([documentation-only CI scope](docs/adr/drafts/ci-documentation-only-scope.md)).
 
 E2E uses one catalog-derived matrix of sixteen isolated producers
