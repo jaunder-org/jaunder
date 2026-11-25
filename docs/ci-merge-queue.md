@@ -303,3 +303,4 @@ on `ALLGREEN` grouping + GitHub's documented stacked-build / bisect-on-failure
 (ADR rationale).
 
 <!-- docs-only probe salt 1 -->
+<!-- docs-only probe salt 2 -->
