@@ -537,8 +537,11 @@ def record(root: Path) -> dict[str, Any]:
 def test_provenance_records_a_clean_unchanged_checkout(
     repository: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Exactly one annotation, whatever a CI runner exports: set annotations
+    # are recorded, unset ones are left out.
+    for key in e2e_local.GITHUB_ANNOTATIONS:
+        monkeypatch.delenv(key, raising=False)
     monkeypatch.setenv("GITHUB_RUN_ID", "77")
-    monkeypatch.delenv("GITHUB_SHA", raising=False)
     marker = repository / e2e_local.MARKER
     marker.parent.mkdir(parents=True)
     marker.write_text("stale")
