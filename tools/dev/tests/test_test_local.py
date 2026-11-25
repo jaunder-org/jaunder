@@ -78,8 +78,8 @@ if args[0] != "build" and "--no-run" not in args:
         while not os.path.exists("release"):
             time.sleep(0.02)
 """
-# host-tool's package builds to FAKE_TOOL_OUT. Otherwise an evaluation prints
-# a derivation, a cache query fails, and a build links its out-link to $BUNDLE,
+# host-tool's package builds to FAKE_TOOL_OUT. Otherwise an evaluation prints a
+# derivation, a cache query fails, and a build links its out-link to $BUNDLE,
 # or fails with NIX_BUILD_CODE. No step records a cache source.
 NIX = """\
 if sys.argv[-1] == ".#host-tool":

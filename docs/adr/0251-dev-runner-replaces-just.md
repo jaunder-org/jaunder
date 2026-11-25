@@ -167,11 +167,13 @@ It also amends these decisions:
 - [ADR-0247](0247-host-tool-json-report-contract.md)'s list of host tools:
   `doctest-check` and `test-local` are gone. `admit-inputs` and
   `csr-prerequisite` render no verdict report: a refusal is their exit status
-  and stderr, and `csr-prerequisite` prints only the root it verified. Its human
-  views: `dev` renders the report (`tools/dev/dev/report.py`), and
-  `scripts/step-report.jq` and `scripts/run-report` are deleted. The shared
-  multi-checkout compile-cache environment moves from `tools/host-tool` into
-  `dev` (`tools/dev/dev/checkout.py`), which sets it for every host step.
+  and stderr, and `csr-prerequisite` prints only the root it verified. _Amended
+  by #2102:_ `admit-inputs` is host-tool's executable and `csr-prerequisite` is
+  retired. Its human views: `dev` renders the report
+  (`tools/dev/dev/report.py`), and `scripts/step-report.jq` and
+  `scripts/run-report` are deleted. The shared multi-checkout compile-cache
+  environment moves from `tools/host-tool` into `dev`
+  (`tools/dev/dev/checkout.py`), which sets it for every host step.
 - [ADR-0028](0028-devtool-vs-xtask-boundary.md)'s devtool/xtask boundary:
   superseded. Both crates are gone. The litmus test it recorded, _where must
   this code execute?_, still separates the executables above, which run inside

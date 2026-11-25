@@ -742,6 +742,10 @@ def test_two_workers_each_get_a_seeded_server_and_one_playwright_run(
 
     (admitted,) = e2e.notes("admitted")
     assert admitted == [".#sandboxArtifacts.sourceAdmits"]
+    # Admission's package is host-tool; host-proof is never built.
+    installables = {args[-1] for args in e2e.notes("nix")}
+    assert ".#host-tool" in installables
+    assert ".#host-proof" not in installables
     build = [args for args in e2e.notes("nix") if args[-1] == ".#sandboxArtifacts"]
     assert build[0] == [
         "path-info",
