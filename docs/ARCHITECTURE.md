@@ -5387,10 +5387,12 @@ decision).
 Maintainability chooses the language of infrastructure
 ([infrastructure language by maintainability](adr/0261-tool-language-by-maintainability.md)).
 A tool is Python unless it links product crates it genuinely needs or needs
-Rust-specific parsing. Product facts come from product commands or files rather
-than linked product code. A reader in another language parses data its Rust
-writer has already validated, with no generated schema and no second validation;
-format drift fails loudly at the reader
+Rust-specific parsing that no maintained tool already provides. A thin command
+over logic a Rust owner keeps for itself joins that owner. Product facts come
+from product commands or files rather than linked product code. A reader in
+another language parses data its Rust writer has already validated, with no
+generated schema and no second validation; format drift fails loudly at the
+reader
 ([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
 Bash is limited to `scripts/` host scripts that run commands and check their
 results, with traps only for cleanup or failed-step reporting and concurrency
@@ -5401,8 +5403,19 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 `dev perf*`, and `pr-observer` has already become the native `dev pr-watch`
 ([native observer decision](adr/0264-pr-watch-native-python-observer.md)), and
 `qualification` has been retired for the
-[upgrade test](adr/0265-upgrade-test.md). The placements below describe the
-current tree:
+[upgrade test](adr/0265-upgrade-test.md).
+
+`tools/host-proof` is retired across its own follow-ups (#1974):
+
+- `e2e-evidence`, `trace-analysis` (on one shared trace core), `wasm-audit`
+  (with `twiggy` for the breakdown) and the cache-safety probe move into `dev`
+  as Python. The probe then runs in `ci-validate-host`.
+- `admit-inputs` joins `repository-policy`.
+- `csr-prerequisite` is retired in favour of the server build's own bundle
+  validation.
+- The repository contract tests become pytest.
+
+Until the remaining moves land, the placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
