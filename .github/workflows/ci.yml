@@ -37,15 +37,24 @@ jobs:
   # The event test lives in the output expression, so a pull_request or
   # merge_group run can never skip. `github-script` runs on the runner's bundled
   # Node and needs none of the slim image's software (see `e2e gate` below).
+  #
+  # This job also projects the e2e matrices from the lane catalog. It is the
+  # first job to get a runner, so the e2e lanes never queue behind a separate
+  # catalog job while the account's concurrent-job limit is saturated. The
+  # projection uses the slim image's own `jq`, its one dependency on the image's
+  # software; the pinned `jq` runs the same script in the hermetic checks.
   merge-queue-verdict:
     name: Merge-queue verdict
     runs-on: ubuntu-slim
     permissions:
       actions: read
+      contents: read
     outputs:
       tested:
         ${{ github.event_name == 'push' && steps.lookup.outputs.tested == 'true'
         }}
+      lanes: ${{ steps.matrix.outputs.lanes }}
+      reconciles: ${{ steps.matrix.outputs.reconciles }}
     steps:
       - name: Look up a passing merge-queue run of this commit
         id: lookup
@@ -85,6 +94,17 @@ jobs:
               core.warning(`Merge-queue lookup failed, validating in full: ${error.message}`);
               core.setOutput("tested", "false");
             }
+      - uses: actions/checkout@v7.0.1
+        with:
+          sparse-checkout: |
+            end2end/e2e-lanes.json
+            scripts/e2e-matrix.jq
+          sparse-checkout-cone-mode: false
+      - name: Read enabled producer matrices from the catalog
+        id: matrix
+        run:
+          jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >>
+          "$GITHUB_OUTPUT"
 
   validate-host:
     name: Validation host
@@ -317,34 +337,15 @@ jobs:
           test "$test_checks" = "success"
           test "$coverage" = "success"
 
-  e2e-catalog:
-    name: E2E catalog
-    runs-on: ubuntu-24.04
-    needs: [merge-queue-verdict]
-    if: needs.merge-queue-verdict.outputs.tested != 'true'
-    outputs:
-      lanes: ${{ steps.matrix.outputs.lanes }}
-      reconciles: ${{ steps.matrix.outputs.reconciles }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: ./.github/actions/setup-ci
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Read enabled producer matrices from the catalog
-        id: matrix
-        run: |
-          nix develop .#ci-nix --accept-flake-config -c jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> "$GITHUB_OUTPUT"
-
   e2e-lane:
     name: e2e (${{ matrix.lane }})
     runs-on: ubuntu-24.04
-    needs: [merge-queue-verdict, e2e-catalog]
+    needs: [merge-queue-verdict]
     if: needs.merge-queue-verdict.outputs.tested != 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.e2e-catalog.outputs.lanes) }}
+        include: ${{ fromJSON(needs.merge-queue-verdict.outputs.lanes) }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -410,12 +411,12 @@ jobs:
   e2e-reconcile:
     name: e2e reconcile (${{ matrix.backend }}/${{ matrix.browser }})
     runs-on: ubuntu-24.04
-    needs: [merge-queue-verdict, e2e-catalog, e2e-lane]
+    needs: [merge-queue-verdict, e2e-lane]
     if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.e2e-catalog.outputs.reconciles) }}
+        include: ${{ fromJSON(needs.merge-queue-verdict.outputs.reconciles) }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: ./.github/actions/setup-ci
@@ -471,13 +472,13 @@ jobs:
     # tolerable only because the job depends on none of the image's preinstalled
     # software, which is exactly the property the paragraph above protects.
     runs-on: ubuntu-slim
-    needs: [merge-queue-verdict, e2e-catalog, e2e-lane, e2e-reconcile]
+    needs: [merge-queue-verdict, e2e-lane, e2e-reconcile]
     # Keep always(): without it a failed lane would skip this required check.
     if: always() && needs.merge-queue-verdict.outputs.tested != 'true'
     steps:
       - name: Require all e2e matrix jobs to pass
         run: |
-          test "${{ needs.e2e-catalog.result }}" = "success"
+          test "${{ needs.merge-queue-verdict.result }}" = "success"
           lanes="${{ needs.e2e-lane.result }}"
           reconcile="${{ needs.e2e-reconcile.result }}"
           echo "e2e results: lanes=$lanes reconcile=$reconcile"

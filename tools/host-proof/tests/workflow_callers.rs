@@ -108,7 +108,6 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
         "validate-hermetic",
         "validate-test-checks",
         "validate-coverage",
-        "e2e-catalog",
         "e2e-lane",
     ] {
         assert_eq!(jobs[name]["if"], lane_if, "{name}");
@@ -144,21 +143,17 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
     assert!(source.contains(".xtask/gcroots/elisp-coverage-producer/elisp-coverage/"));
     assert_eq!(
         jobs["e2e-gate"]["needs"],
-        serde_yaml::to_value([
-            "merge-queue-verdict",
-            "e2e-catalog",
-            "e2e-lane",
-            "e2e-reconcile"
-        ])
-        .unwrap()
+        serde_yaml::to_value(["merge-queue-verdict", "e2e-lane", "e2e-reconcile"]).unwrap()
     );
+    // The verdict job projects the matrices, so the e2e lanes wait on no
+    // other job for a runner.
     assert_eq!(
         jobs["e2e-lane"]["needs"],
-        serde_yaml::to_value(["merge-queue-verdict", "e2e-catalog"]).unwrap()
+        serde_yaml::to_value(["merge-queue-verdict"]).unwrap()
     );
     assert_eq!(
         jobs["e2e-reconcile"]["needs"],
-        serde_yaml::to_value(["merge-queue-verdict", "e2e-catalog", "e2e-lane"]).unwrap()
+        serde_yaml::to_value(["merge-queue-verdict", "e2e-lane"]).unwrap()
     );
     let lines = jobs["e2e-gate"]["steps"]
         .as_sequence()
@@ -181,7 +176,7 @@ fn ci_keeps_independent_job_verdicts_and_producer_artifacts_not_gate_sidecars() 
             .filter(|line| line.starts_with("test "))
             .collect::<std::collections::BTreeSet<_>>(),
         std::collections::BTreeSet::from([
-            "test \"${{ needs.e2e-catalog.result }}\" = \"success\"",
+            "test \"${{ needs.merge-queue-verdict.result }}\" = \"success\"",
             "test \"$lanes\" = \"success\"",
             "test \"$reconcile\" = \"success\"",
         ])

@@ -96,7 +96,30 @@ fn runtime_matrix_equals_enabled_catalog_and_reconciliation_waits_for_all_produc
                 .values()
                 .any(|v| v
                     .as_str()
-                    .is_some_and(|s| s.contains("fromJSON(needs.e2e-catalog.outputs.")))
+                    .is_some_and(|s| s.contains("fromJSON(needs.merge-queue-verdict.outputs.")))
+        );
+    }
+    // The verdict job's outputs are this script's projection of the catalog.
+    let verdict = &jobs["merge-queue-verdict"];
+    let projection = verdict["steps"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|step| step["id"].as_str() == Some("matrix"))
+        .unwrap();
+    assert_eq!(
+        projection["run"]
+            .as_str()
+            .unwrap()
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" "),
+        "jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >> \"$GITHUB_OUTPUT\""
+    );
+    for output in ["lanes", "reconciles"] {
+        assert_eq!(
+            verdict["outputs"][output].as_str(),
+            Some(format!("${{{{ steps.matrix.outputs.{output} }}}}").as_str())
         );
     }
     let steps = jobs["e2e-reconcile"]["steps"].as_sequence().unwrap();

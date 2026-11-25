@@ -1148,11 +1148,11 @@ E2E uses one catalog-derived matrix of sixteen isolated producers
 reconciliation job per pair waits for the complete producer matrix, downloads
 that pair's four artifacts and runs `dev e2e-reconcile` even if downloads fail;
 the SQLite/Chromium job also verifies server-function coverage. Stable
-`e2e gate` requires the catalog job, every producer, and all four
-reconciliations. Running independent surfaces across runners cuts workflow
-wall-clock; `dev validate` remains the full local equivalent and
-`dev validate-no-e2e` remains its serial non-e2e form. See
-[ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
+`e2e gate` requires the `Merge-queue verdict` job, which also projects the
+matrices from the catalog, every producer, and all four reconciliations. Running
+independent surfaces across runners cuts workflow wall-clock; `dev validate`
+remains the full local equivalent and `dev validate-no-e2e` remains its serial
+non-e2e form. See [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
 [non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
 and the
 [retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).
