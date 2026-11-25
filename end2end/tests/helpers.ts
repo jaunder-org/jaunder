@@ -65,7 +65,12 @@
  */
 
 import { BASE_URL } from "./instance";
-import { expect, type Page, type Request } from "@playwright/test";
+import {
+  expect,
+  type APIResponse,
+  type Page,
+  type Request,
+} from "@playwright/test";
 import { withTimedAction } from "./actions";
 import { allowSecondBoot, throwIfViolated } from "./bootBudget";
 import { extractLink, extractToken, type CapturedEmail } from "./mail";
@@ -172,6 +177,11 @@ export async function failServerFn(
  * the fetch, or the request escapes the route. Pass `holds` to stall only the calls
  * it accepts; the others continue at once.
  *
+ * Pass `answered` to hold the *answer* instead of the request: a held call reaches
+ * the backend at once, as sent (cookie included), `answered` receives the backend's
+ * response, and the page gets that response only on release. That delivers an
+ * answer the server gave earlier into a later client state (#2114).
+ *
  * Deliberately no `page.unroute` on release — unrouting immediately would race the
  * still-suspended handler's `continue()`, and the route is harmless once released.
  */
@@ -179,14 +189,22 @@ export async function stallServerFn(
   page: Page,
   endpoint: string,
   holds: (request: Request) => boolean = () => true,
+  answered?: (response: APIResponse) => Promise<void>,
 ): Promise<() => void> {
   let release!: () => void;
   const gate = new Promise<void>((resolve) => {
     release = resolve;
   });
   await page.route(`**/api/${endpoint}`, async (route) => {
-    if (holds(route.request())) await gate;
-    await route.continue();
+    if (!holds(route.request())) return route.continue();
+    if (!answered) {
+      await gate;
+      return route.continue();
+    }
+    const response = await route.fetch();
+    await answered(response);
+    await gate;
+    await route.fulfill({ response });
   });
   return release;
 }
