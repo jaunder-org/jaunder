@@ -144,15 +144,34 @@ def test_without_a_usable_base_everything_runs(
     )
 
 
-def test_ci_runs_it_as_a_module_with_the_standard_library_alone(git: Git) -> None:
-    """As the slim verdict job does: its own Python, no site-packages."""
+def test_an_uncertain_diff_runs_everything(
+    git: Git, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     base = changed(git, lambda: Path("guide.md").write_text("# Changed\n"))
-    tools_dev = Path(__file__).resolve().parents[1]
+    malformed = subprocess.CompletedProcess([], 0, b":not a raw record\0guide.md\0")
+    monkeypatch.setattr(scope, "_git", lambda *_: malformed)
+    assert answer(base, capsys) == (
+        "docs_only=false\n",
+        "ci-scope: docs_only=False reason=uncertain-status\n",
+    )
+
+
+@pytest.mark.parametrize(
+    "isolated", [False, True], ids=["inherited-environment", "standard-library"]
+)
+def test_ci_runs_it_as_a_module(git: Git, isolated: bool) -> None:
+    """As the slim verdict job does, with its own Python. Isolated, there are
+    no site-packages, so only the standard library can be imported."""
+    base = changed(git, lambda: Path("guide.md").write_text("# Changed\n"))
+    tools_dev = str(Path(__file__).resolve().parents[1])
+    flags, environment = (
+        (["-S"], {"PATH": os.environ["PATH"]}) if isolated else ([], dict(os.environ))
+    )
     result = subprocess.run(
-        [sys.executable, "-S", "-m", "dev.scope", "--base", base],
+        [sys.executable, *flags, "-m", "dev.scope", "--base", base],
         capture_output=True,
         text=True,
         check=False,
-        env={"PATH": os.environ["PATH"], "PYTHONPATH": str(tools_dev)},
+        env=environment | {"PYTHONPATH": tools_dev},
     )
     assert (result.returncode, result.stdout) == (0, "docs_only=true\n"), result

@@ -26,13 +26,13 @@ def _reason(base: str) -> str:
     """Why the change from `base` to HEAD is, or is not, Markdown-only."""
     if not base:
         return "no-base"
-    # Depth 1 is enough: comparing two trees needs no history between them.
-    fetched = _git("fetch", "--quiet", "--no-tags", "--depth=1", "origin", base)
-    if fetched.returncode:
-        return "base-unavailable"
+    # Depth 1 is enough: comparing two trees needs no history between them. A
+    # failed fetch needs no check of its own: the diff then fails too, unless
+    # the base is already here.
+    _git("fetch", "--quiet", "--no-tags", "--depth=1", "origin", base)
     diff = _git("diff", "--raw", "-z", "--no-abbrev", "--no-renames", base, "HEAD")
     if diff.returncode:
-        return "diff-failed"
+        return "base-unavailable"
     uncertainty: set[str] = set()
     changes = raw_changes(diff.stdout, uncertainty)
     if uncertainty:
