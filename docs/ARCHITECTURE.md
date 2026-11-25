@@ -2076,11 +2076,11 @@ The WASM artifact carries a hard budget
 ([ADR-0106](adr/0106-wasm-raw-size-budget.md)): `dev validate` resolves the Vite
 manifest's `csr_bg.wasm` source mapping to its emitted `.wasm` file and fails
 when its **raw** byte count exceeds `WASM_RAW_CEILING_BYTES` (5,000,000 bytes:
-decimal 5 MB, not 5 MiB, in `tools/host-proof/src/wasm_budget.rs`). Raw, not
-compressed, because the artifact is a compiler input rather than a download. The
-#1750 amendment accepts additional feature headroom while preserving the
-historical 4,009,656-byte achieved baseline for drift reporting. The historical
-weaker optimisation-level sizes now fit, so this size ceiling does not guarantee
+decimal 5 MB, not 5 MiB, in `tools/dev/dev/wasm_audit.py`). Raw, not compressed,
+because the artifact is a compiler input rather than a download. The #1750
+amendment accepts additional feature headroom while preserving the historical
+4,009,656-byte achieved baseline for drift reporting. The historical weaker
+optimisation-level sizes now fit, so this size ceiling does not guarantee
 detection of an optimisation downgrade; production still uses `wasm-opt -Oz`.
 Unit tests enforce the inclusive limit and failure one byte above it. The higher
 ceiling is not evidence of measured or benign startup/download impact.
@@ -3119,9 +3119,9 @@ thumbnails remain Linux-only. Actual Safari investigation is separate from
 Playwright WebKit and from mobile-device proof
 ([supported Nix platform and browser boundaries](adr/0234-supported-nix-platform-and-browser-boundaries.md)).
 `packages.jaunder` remains the deployable server-binary output. `packages.site`
-is **no longer a deployment artifact** — the binary embeds the bundle — and is
-retained only so `dev wasm-audit report` can build `.#site` and inspect the
-bundle for size analysis (`nix/packages.nix:296-305`,
+is **no longer a deployment artifact** — the binary embeds the bundle. Size
+analysis does not use it: `dev wasm-audit report` builds `.#csrBundle`, and
+`--breakdown` builds the unstripped `.#csrWasm` (`nix/packages.nix`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
 The `services.jaunder` module (`nix/nixos.nix`) has the ADR-0142 operator
 options `enable`, `bind`, `db`, and `prod`, plus the empty-by-default
@@ -4915,16 +4915,19 @@ lock flags `--no-update-lock-file --no-write-lock-file` as the doctest and
 coverage producers do. Their named output links retain producer evidence as GC
 roots; failure stops the workflow. The wasm budget builds `.#csrBundle` the same
 way as its own `csr-bundle` step, at `.xtask/gcroots/csr-bundle` (the step and
-root `dev test-local` uses), and passes that output to
-`wasm-audit budget --site-path`, which requires the path and never runs Nix. The
-budget preserves manifest, generated-shell and name-section verification, and
-applies the raw-size budget. It no longer observes unrelated `.#site`
-realization or constructs discarded Nix/phase/audit report metadata. The public
-coverage/doctest workflows retain clean-tree admission, producer then hard Nix
-status gate ordering, and output roots. Only after the coverage gate succeeds
-does `coverage-check policy --out` consume reports and apply source-aware
-coverage/CRAP policy; it does not validate producer status or invoke Nix. No
-gate-wide report substitutes for producer status. The Elisp producer returns
+root `dev test-local` uses), then measures that output in-process as the
+`wasm-budget` phase (`tools/dev/dev/wasm_audit.py`), which never runs Nix. The
+budget verifies the Vite manifest and applies the raw-size budget. Its former
+name-section check is dropped, because the ceiling's headroom is smaller than
+the name section it guarded against
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)'s #2101 amendment). It no longer
+observes unrelated `.#site` realization or constructs discarded Nix/phase/audit
+report metadata. The public coverage/doctest workflows retain clean-tree
+admission, producer then hard Nix status gate ordering, and output roots. Only
+after the coverage gate succeeds does `coverage-check policy --out` consume
+reports and apply source-aware coverage/CRAP policy; it does not validate
+producer status or invoke Nix. No gate-wide report substitutes for producer
+status. The Elisp producer returns
 `elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
 `coverage-check elisp-consume` lifts these diagnostics and reconciles source,
 census, LCOV and same-line ignore markers. Uncontrolled Nix/VM failures remain
@@ -5413,9 +5416,11 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 
 `tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
 
-- `e2e-evidence`, `trace-analysis` (on one shared trace core), `wasm-audit`
-  (with `twiggy` for the breakdown) and the cache-safety probe move into `dev`
-  as Python. The probe then runs in `ci-validate-host`.
+- `e2e-evidence`, `trace-analysis` (on one shared trace core) and the
+  cache-safety probe move into `dev` as Python. The probe then runs in
+  `ci-validate-host`. `wasm-audit` already has (#2101): `dev wasm-audit` and the
+  wasm budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the
+  breakdown.
 - `admit-inputs` joins `repository-policy`.
 - `csr-prerequisite` is retired in favour of the server build's own bundle
   validation.
@@ -5783,7 +5788,7 @@ checker registry, runner, supervisor or replacement omnibus:
 - `tools/host-proof` — focused proof (`admit-inputs`, which `test-local` and
   `e2e-local` admit through, and `test-local`'s `csr-prerequisite` step),
   artifact-only e2e verdicts (`e2e-evidence`) and host diagnostics
-  (`trace-analysis`, `wasm-audit`, `source-diagnostics`).
+  (`trace-analysis`, `source-diagnostics`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

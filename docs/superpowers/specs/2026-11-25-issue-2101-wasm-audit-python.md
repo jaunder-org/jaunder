@@ -135,7 +135,8 @@ would leave parsers that duplicate twiggy (ADR-0261).
 **To commit.**
 
 - The Python module and its tests.
-- twiggy in the devShell's `devOnly` list and in `dev-python`.
+- twiggy in the devShell's `ciInputs` (host pytest runs it in CI's shell) and in
+  `dev-python`.
 - The Rust deletions, with an updated `Cargo.lock`.
 - The pair-table row.
 - An updated comment on `csrWasm` in `nix/packages.nix` naming the new consumer.

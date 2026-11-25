@@ -7,7 +7,7 @@ not derived from `dev`'s own tables.
 import platform
 
 import pytest
-from conftest import REAL_GIT, Workflow, launch
+from conftest import REAL_GIT, Workflow, launch, write_bundle
 
 PREPUSH_SHARES_DOCS = (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
@@ -245,12 +245,9 @@ TEST_LOCAL = [
     ),
 ]
 
-# The bundle is its own Nix step; the budget measures the output it linked.
-WASM_BUDGET = [
-    *CSR_BUNDLE,
-    *HOST_PROOF_BUILD,
-    *commands("wasm-audit budget --site-path /nix/store/fake-csr-bundle"),
-]
+# The bundle is its own Nix step; the budget measures the output it linked
+# in-process, running nothing.
+WASM_BUDGET = CSR_BUNDLE
 E2E = [["bash", "scripts/e2e-workflow", "all", ""]]
 
 
@@ -507,16 +504,14 @@ def test_a_failing_gate_records_the_failed_step_and_status(
     assert "static-code" not in slices
 
 
-def test_a_report_step_without_a_report_fails_closed(workflow: Workflow) -> None:
-    # In the hermetic lane only the wasm budget runs a tools-workspace binary,
-    # and it prints a non-report.
-    workflow.checkout.built("wasm-audit", 'print("not a report")')
+def test_the_hermetic_lane_fails_on_a_wasm_over_the_budget(workflow: Workflow) -> None:
+    write_bundle(workflow.store / "fake-csr-bundle", b"\0" * 5_000_001)
     result = workflow.dev("ci-validate-hermetic")
     assert result.returncode == 1, result
-    assert result.stdout == b"not a report\n"
-    assert result.stderr == b"dev: wasm-budget: output is not a step report\n"
-    order = (workflow.root / "order").read_text().splitlines()
-    assert order == [" ".join(WASM_BUDGET[-1])]
+    assert b"5000001 bytes, over the 5000000 byte ceiling by 1" in result.stderr
+    assert workflow.commands() == [*CLEAN, *STATIC, *CSR_BUNDLE]
+    step = workflow.checkout.merged()["wasm-budget"]["args"]
+    assert (step["jaunder.status"], step["process.exit.code"]) == ("failed", 1)
 
 
 def test_the_wasm_budget_never_runs_without_its_bundle(workflow: Workflow) -> None:

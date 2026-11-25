@@ -1123,16 +1123,18 @@ dev wasm-audit report
 ```
 
 This reports raw, gzip, and brotli sizes for the manifest-selected WASM and JS
-identity assets. Host-proof's `wasm-audit` prints one JSON report on stdout (the
-rendered table in `report`, measurements in `evidence`); `dev` renders the human
-view.
+identity assets, as read from the `.gz` and `.br` copies Vite writes beside
+each. It is `dev`'s own Python (`tools/dev/dev/wasm_audit.py`) and prints the
+table directly.
 
 Useful options:
 
 - `--site-path /nix/store/...-jaunder-csr-wasm-bundle` to reuse a previously
   built bundle
 - `--breakdown [--wasm F]` for per-section and per-crate attribution of the
-  pre-wasm-bindgen `.#csrWasm` artifact
+  pre-wasm-bindgen `.#csrWasm` artifact. Section shares are of the file. Crate
+  shares are of twiggy's function total (code and function sections), and
+  twiggy's JSON supplies the function names and sizes.
 
 The Jiff time-model migration (#1272, 2026-09-06) requires a bundled IANA TZDB
 for browser-local named-zone conversion. It increased the `-Oz` artifact to 3

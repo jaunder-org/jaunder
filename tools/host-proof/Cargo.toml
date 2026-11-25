@@ -21,10 +21,6 @@ name = "e2e-evidence"
 path = "src/bin/e2e-evidence.rs"
 
 [[bin]]
-name = "wasm-audit"
-path = "src/bin/wasm-audit.rs"
-
-[[bin]]
 name = "source-diagnostics"
 path = "src/bin/source-diagnostics.rs"
 
@@ -42,8 +38,6 @@ opentelemetry_sdk = "0.32.1"
 regex = "1.12.3"
 repository-policy = { path = "../repository-policy" }
 host-tool = { path = "../host-tool" }
-# Wasm bundle attribution (#836): section spans, the name section and demangling.
-rustc-demangle = "0.1.28"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 sha2 = "0.11.0"
@@ -51,10 +45,7 @@ tabled = "0.22.0"
 tar = "0.4.46"
 tempfile = "3.27.0"
 url = "2.5.9"
-wasmparser = "0.258.0"
 
 [dev-dependencies]
 # Maintained YAML-org successor for CI workflow contract tests (#1939).
 serde_yaml = { package = "yaml_serde", version = "0.10.7" }
-# Synthesizes the fixture modules the attribution tests parse.
-wasm-encoder = "0.258.0"

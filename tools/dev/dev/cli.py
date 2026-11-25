@@ -23,6 +23,7 @@ from dev import (
     steps,
     summary,
     upgrade,
+    wasm_audit,
 )
 from dev.gates import Docs
 from dev.static import Mode
@@ -230,8 +231,6 @@ _forwarding(
     "Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.",
 )
 for _binary, _summary in {
-    "wasm-audit": "Bundle size diagnostics: report [--site-path P] "
-    "[--breakdown [--wasm F]] | budget --site-path P.",
     "source-diagnostics": "Eval-only Nix guard: cache-safety-probe.",
     "trace-analysis": "Manual OTel trace diagnostics: analyze <files> | "
     "run [--single-worker] | boot-phases <files>.",
@@ -239,6 +238,39 @@ for _binary, _summary in {
     _forwarding(
         _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
     )
+
+
+@cli.group("wasm-audit")
+def wasm_audit_group() -> None:
+    """Frontend bundle size diagnostics; `validate` runs the raw wasm budget."""
+
+
+@wasm_audit_group.command("report")
+@click.option("--site-path", help="Measure this built CSR bundle root.")
+@click.option(
+    "--breakdown",
+    is_flag=True,
+    help="Attribute the unstripped `.#csrWasm` to sections and crates; "
+    "its total is not the shipped size.",
+)
+@click.option("--wasm", help="With --breakdown: this wasm instead of `.#csrWasm`.")
+def wasm_audit_report(site_path: str | None, breakdown: bool, wasm: str | None) -> None:
+    """Measure the shipped bundle, building `.#csrBundle` unless given a root.
+
+    Run after a change expected to move it, or periodically to watch the trend.
+    """
+    if wasm is not None and not breakdown:
+        raise click.UsageError("--wasm requires --breakdown")
+    if site_path is not None and breakdown:
+        raise click.UsageError("--site-path is the shipped bundle; --breakdown is not")
+    if breakdown:
+        _gate(lambda: wasm_audit.breakdown(wasm or wasm_audit.csr_wasm()))
+    else:
+        _gate(
+            lambda: wasm_audit.report(
+                site_path or str(Path(gates.csr_bundle()).resolve())
+            )
+        )
 
 
 @cli.command("upgrade-test")

@@ -54,6 +54,8 @@ pub fn csr_outputs(root: &Path) -> Result<CsrViteOutputs> {
     };
 
     let entry_js = file_for("index.html")?;
+    // `tools/dev/dev/wasm_audit.py` spells this key too; ADR-0109's
+    // `xlang-literal` table keeps the two equal.
     let wasm = file_for("csr_bg.wasm")?;
     ensure!(
         Path::new(&wasm)

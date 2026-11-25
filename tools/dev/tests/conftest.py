@@ -194,7 +194,6 @@ TOOL_PACKAGES = {
         "e2e-evidence",
         "source-diagnostics",
         "trace-analysis",
-        "wasm-audit",
     ),
     "coverage-check": ("coverage-check",),
     "system-artifacts": ("system-artifacts",),
@@ -212,7 +211,8 @@ TOOL_PACKAGES = {
 # its root under `/verified`.
 # An evaluation prints a fake derivation named after the installable's last
 # component. Nix cache queries fail, so Nix steps record no cache source; a
-# build's out-link points at a fake store path named after the link. A tool
+# build's out-link points at a path named after the link in $FAKE_STORE, where
+# `fake-csr-bundle` is a small valid CSR bundle (`write_bundle`). A tool
 # package's build prints $FAKE_TOOL_OUT, the one fake output of every tool
 # package (`Checkout.built`).
 FAKE = r"""#!/bin/sh
@@ -244,7 +244,7 @@ if [ "$name $1" = "nix build" ]; then
     previous=
     for argument in "$@"; do
         if [ "$previous" = --out-link ]; then
-            ln -sfn "/nix/store/fake-${argument##*/}" "$argument"
+            ln -sfn "$FAKE_STORE/fake-${argument##*/}" "$argument"
         fi
         previous=$argument
     done
@@ -297,7 +297,7 @@ case "$name $*" in
     for root; do :; done
     printf '/verified%s\n' "$root" ;;
   'admit-inputs '*|'e2e-evidence '*|'source-diagnostics '*|\
-  'trace-analysis '*|'wasm-audit '*|'coverage-check '*)
+  'trace-analysis '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """.replace(
@@ -441,6 +441,67 @@ GIT_OVERRIDES = {
 }
 
 
+def leb128(value: int) -> bytes:
+    encoded = bytearray()
+    while True:
+        byte, value = value & 0x7F, value >> 7
+        encoded.append(byte | (0x80 if value else 0))
+        if not value:
+            return bytes(encoded)
+
+
+def _name(text: str) -> bytes:
+    return leb128(len(text.encode())) + text.encode()
+
+
+def section(identity: int, payload: bytes) -> bytes:
+    return bytes([identity]) + leb128(len(payload)) + payload
+
+
+def module(names: list[str] | None = None, functions: int = 1) -> bytes:
+    """A valid wasm module of `functions` functions returning 7, each named
+    from `names` in a name section when given."""
+    body = b"\x00\x41\x07\x0b"  # no locals; i32.const 7; end
+    sections = [
+        section(1, leb128(1) + b"\x60\x00\x01\x7f"),  # one type: () -> i32
+        section(3, leb128(functions) + b"\x00" * functions),
+        section(10, leb128(functions) + (leb128(len(body)) + body) * functions),
+    ]
+    if names is not None:
+        entries = b"".join(leb128(i) + _name(name) for i, name in enumerate(names))
+        functions_map = leb128(len(names)) + entries
+        sections.append(
+            section(
+                0, _name("name") + b"\x01" + leb128(len(functions_map)) + functions_map
+            )
+        )
+    return b"\0asm\x01\0\0\0" + b"".join(sections)
+
+
+def write_bundle(root: Path, wasm: bytes) -> dict[str, Any]:
+    """A CSR bundle at `root` as Vite emits it: the entry JavaScript and the
+    wasm, each with `.gz` and `.br` copies, and the manifest naming them."""
+    files = {"assets/index-a1b2.js": b"export {}", "assets/csr_bg-e5f6.wasm": wasm}
+    for name, content in files.items():
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+        path.with_name(path.name + ".gz").write_bytes(b"g" * 3)
+        path.with_name(path.name + ".br").write_bytes(b"b" * 2)
+    manifest = {
+        "index.html": {
+            "file": "assets/index-a1b2.js",
+            "src": "index.html",
+            "isEntry": True,
+            "assets": ["assets/csr_bg-e5f6.wasm"],
+        },
+        "csr_bg.wasm": {"file": "assets/csr_bg-e5f6.wasm", "src": "csr_bg.wasm"},
+    }
+    (root / ".vite").mkdir(parents=True, exist_ok=True)
+    (root / ".vite/manifest.json").write_text(json.dumps(manifest))
+    return manifest
+
+
 @dataclass
 class Workflow:
     """A checkout whose every workflow tool is a recording fake."""
@@ -451,6 +512,10 @@ class Workflow:
     def root(self) -> Path:
         return self.checkout.root
 
+    @property
+    def store(self) -> Path:
+        return self.root.parent / "store"
+
     def dev(
         self, *args: str, failure: str = "", cwd: Path | None = None, **extra: str
     ) -> subprocess.CompletedProcess[bytes]:
@@ -458,6 +523,7 @@ class Workflow:
         log.write_bytes(b"")
         environment = {
             "FAKE_LOG": str(log),
+            "FAKE_STORE": str(self.store),
             "FAIL_COMMAND": failure,
             "REAL_GIT": REAL_GIT,
             "EARLIER": EARLIER,
@@ -479,7 +545,9 @@ def workflow(checkout: Checkout) -> Workflow:
         path = checkout.bin / name
         path.write_text(FAKE, encoding="utf-8")
         path.chmod(0o755)
-    return Workflow(checkout)
+    workflow = Workflow(checkout)
+    write_bundle(workflow.store / "fake-csr-bundle", module())
+    return workflow
 
 
 @pytest.fixture(autouse=True)

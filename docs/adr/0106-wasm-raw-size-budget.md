@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-06
 - Issue: [#836](https://github.com/jaunder-org/jaunder/issues/836)
+- Amended: 2026-11-25 — `dev` owns the budget; twiggy attributes crates (#2101)
 
 ## Context
 
@@ -30,7 +31,8 @@ Two facts shape what the budget must measure:
 
 `cargo xtask validate` fails when the **raw** byte count of the
 manifest-selected WASM identity artifact (ADR-0175) exceeds
-`WASM_RAW_CEILING_BYTES`, a committed constant in `xtask/src/wasm_budget.rs`.
+`WASM_RAW_CEILING_BYTES`, a committed constant in `xtask/src/wasm_budget.rs`
+(since #2101, `tools/dev/dev/wasm_audit.py`).
 
 **The budget is on raw bytes, and must stay that way.** A budget on the
 compressed figure would be satisfied by a change that compresses better while
@@ -82,6 +84,27 @@ Boundary tests enforce the inclusive 5,000,000-byte limit and rejection at
 5,000,001 bytes, and explicitly record which historical sizes fit. This
 acceptance does not establish that startup or download impact is benign or has
 been measured; raw size remains only a proxy for browser compilation cost.
+
+## Amendment — `dev` owns the budget and the breakdown (#2101)
+
+`WASM_RAW_CEILING_BYTES` and `WASM_RAW_ACHIEVED_BYTES` now live in
+`tools/dev/dev/wasm_audit.py`, where `dev` measures the budget in-process after
+building `.#csrBundle`. The ceiling, its inclusive comparison, the raw-byte
+semantics and the remedy in the failure message are unchanged.
+
+- **Breakdown attribution.** `dev wasm-audit report --breakdown` takes function
+  names, sizes and demangling from `twiggy top -f json` on `.#csrWasm`. Python
+  rolls the functions up by crate under the existing rule. twiggy charges each
+  function its code body plus its function-section entry, so crate shares are
+  shares of twiggy's function total ("code + function sections") and sum to
+  100%. Section shares are still shares of the file, from a header-only section
+  walk. On the same artifact as the Rust rollup, the crate set and the top 20
+  ranks were identical. Byte counts were within about 1–4%, and the remaining
+  differences were neighbouring-rank swaps among crates under 0.1%.
+- **The strip check is dropped.** The Rust measurement refused a shipped wasm
+  that still had a `name` section. The ceiling covers that case: the headroom is
+  990,344 bytes, and #836 measured the name section at 1.28 MiB. The budget
+  therefore reads the shipped file's size only and parses none of it.
 
 ## Consequences
 

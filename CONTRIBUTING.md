@@ -927,10 +927,10 @@ ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`), `host-proof` (`e2e-evidence`,
-`trace-analysis`, `wasm-audit`, `source-diagnostics`, `admit-inputs`, which
-`test-local` and `e2e-local` use, and `test-local`'s `csr-prerequisite`) and
-`coverage` (`coverage-check`, nondefault `host` feature). `dev` runs them with
-locked Cargo from the active checkout; CI's E2E verifier uses its Nix output
+`trace-analysis`, `source-diagnostics`, `admit-inputs`, which `test-local` and
+`e2e-local` use, and `test-local`'s `csr-prerequisite`) and `coverage`
+(`coverage-check`, nondefault `host` feature). `dev` runs them with locked Cargo
+from the active checkout; CI's E2E verifier uses its Nix output
 (`packages.host-proof`). Host tools run only on the host, never inside
 derivations. Runtime paths belong to the active checkout, not the tool's store
 build directory. The executables that run inside derivations are likewise owned
@@ -1083,19 +1083,19 @@ The fast local lane and `dev validate-no-e2e` do not run the same tests in
 different environments. They have the following explicit authority split
 ([ADR-0029](docs/adr/0029-git-enforced-verify-gate.md), #1117 supplement):
 
-| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                            | Authority / rationale                                                                                                                                                    |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`. | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                                          |
-| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                    | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                                     |
-| Host-native product Rust tests                           | Runs `test-local`.                                                                                            | The host-native product verdict is cheap and cache-friendly.                                                                                                             |
-| Root-workspace doctests and fence reconciliation         | Runs the Nix `doctests` producer and `doctests-gate`.                                                         | The same sandboxed verdict validation requests; there is no host doctest run.                                                                                            |
-| Platform contract                                        | Does not run.                                                                                                 | Platform output boundaries and native shell/package evaluation are checked at validation, not per push.                                                                  |
-| Nix static proof, including `tools-doctests`             | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                   | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                                                   |
-| Rust coverage/CRAP                                       | Does not run.                                                                                                 | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                                            |
-| Wasm browser tests                                       | Does not run.                                                                                                 | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                                          |
-| Elisp coverage                                           | Does not run.                                                                                                 | The coverage VM is the authoritative execution environment.                                                                                                              |
-| Wasm budget                                              | Does not run.                                                                                                 | The verdict is defined by the Nix-built artifact's size semantics: `dev` builds `.#csrBundle` as its own step and passes that output to `wasm-audit budget --site-path`. |
-| Server-function flow verification (full `validate` only) | Does not run.                                                                                                 | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                                                                |
+| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                            | Authority / rationale                                                                                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`. | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment.                      |
+| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                    | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                                 |
+| Host-native product Rust tests                           | Runs `test-local`.                                                                                            | The host-native product verdict is cheap and cache-friendly.                                                                                         |
+| Root-workspace doctests and fence reconciliation         | Runs the Nix `doctests` producer and `doctests-gate`.                                                         | The same sandboxed verdict validation requests; there is no host doctest run.                                                                        |
+| Platform contract                                        | Does not run.                                                                                                 | Platform output boundaries and native shell/package evaluation are checked at validation, not per push.                                              |
+| Nix static proof, including `tools-doctests`             | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                   | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.                               |
+| Rust coverage/CRAP                                       | Does not run.                                                                                                 | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                                        |
+| Wasm browser tests                                       | Does not run.                                                                                                 | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                                      |
+| Elisp coverage                                           | Does not run.                                                                                                 | The coverage VM is the authoritative execution environment.                                                                                          |
+| Wasm budget                                              | Does not run.                                                                                                 | The verdict is defined by the Nix-built artifact's size semantics: `dev` builds `.#csrBundle` as its own step, then measures that output in-process. |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                 | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                                            |
 
 The Nix doctest producer/gate is the only execution of the root-workspace
 doctests and reconciles their fence population in both directions; it may not
@@ -1615,18 +1615,18 @@ baseline.
   request does not promise a gate-generated excerpt.
 
 - **WASM Audit**: Use `dev wasm-audit report` to measure the size of the
-  frontend WASM and JS bundles from the deterministic Nix build. The budget gate
-  never builds: `dev` realizes `.#csrBundle` as its own step, then runs
-  `wasm-audit budget --site-path <that output>`, which requires the path.
+  frontend WASM and JS bundles from the deterministic Nix build. The budget
+  never builds: `validate` realizes `.#csrBundle` as its own step, then `dev`
+  measures that output in-process (`tools/dev/dev/wasm_audit.py`, which holds
+  the ceiling).
 
   ```bash
   dev wasm-audit report
   ```
 
   Useful options: `--site-path P` to reuse a built bundle, or
-  `--breakdown [--wasm F]` for per-section/per-crate attribution. The underlying
-  host-proof `wasm-audit` prints one JSON report on stdout (tables in `report`,
-  measurements in `evidence`); `dev` renders it.
+  `--breakdown [--wasm F]` for per-section and per-crate attribution of the
+  unstripped `.#csrWasm`. The crate rollup reads `twiggy`'s JSON.
 
 - **Run & Analyze**: Use `dev trace-analysis run` to build the full VM e2e suite
   and immediately analyze the results.

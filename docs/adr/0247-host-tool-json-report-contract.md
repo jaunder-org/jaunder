@@ -4,6 +4,7 @@
 - Date: 2026-11-12
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
 - Amended: 2026-11-24 — `e2e-local` is no longer a JSON-report tool (#2066)
+- Amended: 2026-11-25 — `wasm-audit` is no longer a JSON-report tool (#2101)
 
 ## Context
 
@@ -38,6 +39,12 @@ failed lifecycle step and 128+n on a signal. Its admission and Nix build are
 ordinary `dev` steps, which end the run with their own status and no summary. No
 JSON report is written.
 
+_Amended by #2101._ `wasm-audit` has also left this list and the host-proof list
+below. `dev wasm-audit report` and `validate`'s wasm budget run as `dev`'s own
+Python (`tools/dev/dev/wasm_audit.py`). It prints its tables directly, prints a
+refusal on stderr, and uses its exit status as the verdict. Nothing read its
+JSON report, so none is written.
+
 The shared argument parser sends help and usage text to stderr and then points
 the process's stdout descriptor at stderr, reserving the real stdout for the
 report. Every child process and stray print therefore lands on stderr; only the
@@ -55,12 +62,12 @@ reports or process execution, as ADR-0246 requires.
 Concern owners for the residual executables: host-proof owns focused proof
 (`test-local`, `e2e-local`, and `pg-run`, which only propagates its wrapped
 command's status), artifact-only e2e verdicts (`e2e-evidence`) and host
-diagnostics (`trace-analysis`, `wasm-audit`, `source-diagnostics`);
-`tools/coverage` (nondefault `host` feature) owns `coverage-check`;
-`tools/doctests` (nondefault `host` feature) owns `doctest-check`;
-`tools/qualification` keeps `qualification-host` and its own plain detail output
-under [ADR-0239](0239-qualification-workflow-ownership.md). CI's e2e shell runs
-the Nix-built `packages.host-proof` verifier.
+diagnostics (`trace-analysis`, `source-diagnostics`); `tools/coverage`
+(nondefault `host` feature) owns `coverage-check`; `tools/doctests` (nondefault
+`host` feature) owns `doctest-check`; `tools/qualification` keeps
+`qualification-host` and its own plain detail output under
+[ADR-0239](0239-qualification-workflow-ownership.md). CI's e2e shell runs the
+Nix-built `packages.host-proof` verifier.
 
 ## Consequences
 
