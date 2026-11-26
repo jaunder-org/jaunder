@@ -3093,9 +3093,9 @@ it disables the dev-only auto-initialization of a missing database on `serve`
 (`server/src/commands.rs:501-512`).
 
 **What the flake ships.** `flake.nix` exports `packages.jaunder` (the deployable
-server binary), `packages.site`, the narrow `nixosModules.jaunder` module, the
-single-host `nixosModules.jaunder-stack` module, and, for each explicitly
-declared output system (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
+server binary), the narrow `nixosModules.jaunder` module, the single-host
+`nixosModules.jaunder-stack` module, and, for each explicitly declared output
+system (`x86_64-linux`, `aarch64-linux`, `aarch64-darwin`),
 `emacsPackages.${system}.jaunder` (a standalone Emacs Protocol Client package
 for installed-package lists such as Home Manager's
 `programs.emacs.extraPackages`). The Protocol Client package contains the
@@ -3118,9 +3118,9 @@ patching, diagnostic coverage producers, canonical screenshot updates, and theme
 thumbnails remain Linux-only. Actual Safari investigation is separate from
 Playwright WebKit and from mobile-device proof
 ([supported Nix platform and browser boundaries](adr/0234-supported-nix-platform-and-browser-boundaries.md)).
-`packages.jaunder` remains the deployable server-binary output. `packages.site`
-is **no longer a deployment artifact** — the binary embeds the bundle. Size
-analysis does not use it: `dev wasm-audit report` builds `.#csrBundle`, and
+`packages.jaunder` remains the deployable server-binary output; the binary
+embeds the CSR bundle, and no separate site-tree output exists. Size analysis
+uses the CSR outputs directly: `dev wasm-audit report` builds `.#csrBundle`, and
 `--breakdown` builds the unstripped `.#csrWasm` (`nix/packages.nix`,
 [declarative NixOS deployment and package outputs](adr/0142-declarative-nixos-deployment-package-outputs.md)).
 The `services.jaunder` module (`nix/nixos.nix`) has the ADR-0142 operator
@@ -4921,20 +4921,19 @@ root `dev test-local` uses), then measures that output in-process as the
 budget verifies the Vite manifest and applies the raw-size budget. Its former
 name-section check is dropped, because the ceiling's headroom is smaller than
 the name section it guarded against
-([ADR-0106](adr/0106-wasm-raw-size-budget.md)'s #2101 amendment). It no longer
-observes unrelated `.#site` realization or constructs discarded Nix/phase/audit
-report metadata. The public coverage/doctest workflows retain clean-tree
-admission, producer then hard Nix status gate ordering, and output roots. Only
-after the coverage gate succeeds does `coverage-check policy --out` consume
-reports and apply source-aware coverage/CRAP policy; it does not validate
-producer status or invoke Nix. No gate-wide report substitutes for producer
-status. The Elisp producer returns
-`elisp-coverage/{lcov.info,summary.txt,status.json}` for controlled outcomes;
-`coverage-check elisp-consume` lifts these diagnostics and reconciles source,
-census, LCOV and same-line ignore markers. Uncontrolled Nix/VM failures remain
-failures. The E2E workflow retains its own diagnostic lift and reconciliation.
-Host tools remain host-only; Nix never invokes them back
-([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
+([ADR-0106](adr/0106-wasm-raw-size-budget.md)'s #2101 amendment). It realizes no
+other Nix output and constructs no discarded Nix/phase/audit report metadata.
+The public coverage/doctest workflows retain clean-tree admission, producer then
+hard Nix status gate ordering, and output roots. Only after the coverage gate
+succeeds does `coverage-check policy --out` consume reports and apply
+source-aware coverage/CRAP policy; it does not validate producer status or
+invoke Nix. No gate-wide report substitutes for producer status. The Elisp
+producer returns `elisp-coverage/{lcov.info,summary.txt,status.json}` for
+controlled outcomes; `coverage-check elisp-consume` lifts these diagnostics and
+reconciles source, census, LCOV and same-line ignore markers. Uncontrolled
+Nix/VM failures remain failures. The E2E workflow retains its own diagnostic
+lift and reconciliation. Host tools remain host-only; Nix never invokes them
+back ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md)).
 
 ### What the ladder actually runs
 
@@ -5061,15 +5060,14 @@ equate distinct formatter or Clippy populations, permanently defer further
 design, or close the parent issue.
 
 The two CSR-facing source filters follow resolved target reachability rather
-than crate names. The `.#site`/CSR closure contains workspace manifests, the
-sources reachable from the `csr` target, required shell inputs, and
-deterministic workspace placeholders. The client `wasm-tests` closure
-analogously contains workspace manifests, sources reachable from the `client`
-wasm-test target, and its required inputs/placeholders. `common` and `macros`
-remain in each closure where reachable; unrelated `server`, `storage`, and other
-host-only sources are excluded. The broad product, coverage, and
-workspace-doctest source sets remain broad because their semantics require the
-full product graph.
+than crate names. The CSR closure contains workspace manifests, the sources
+reachable from the `csr` target, required shell inputs, and deterministic
+workspace placeholders. The client `wasm-tests` closure analogously contains
+workspace manifests, sources reachable from the `client` wasm-test target, and
+its required inputs/placeholders. `common` and `macros` remain in each closure
+where reachable; unrelated `server`, `storage`, and other host-only sources are
+excluded. The broad product, coverage, and workspace-doctest source sets remain
+broad because their semantics require the full product graph.
 
 Tooling dependency preparation uses Crane-generated dummy workspaces and a
 file-scoped tools lockfile. Compiler/target/profile/features/configuration and

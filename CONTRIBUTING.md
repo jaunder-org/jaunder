@@ -1982,9 +1982,9 @@ dev test-local -p storage site_config_primitives_round_trip
    automatically; tracked dirty and intent-to-add inputs participate, unrelated
    notes do not.
 3. `csr-bundle` realizes the native-platform `.#csrBundle` from the evaluated
-   checkout as the GC root `.xtask/gcroots/csr-bundle` (not the incomplete
-   `.#site`), recording its cache state. Nix and the configured Cachix
-   substituter own artifact identity/reuse; no cached test verdict is used.
+   checkout as the GC root `.xtask/gcroots/csr-bundle`, recording its cache
+   state. Nix and the configured Cachix substituter own artifact identity/reuse;
+   no cached test verdict is used.
 4. `image-worker` builds `target/debug/jaunder`, which storage and seeding tests
    start even when nextest selects only storage. Its build script validates the
    bundle (Vite manifest and outputs, system artifacts, `index.html`) and fails

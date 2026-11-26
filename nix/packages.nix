@@ -1221,21 +1221,10 @@ let
     };
   });
 
-  # The CSR client's Vite-rendered HTML entry and emitted assets, assembled as
-  # a static tree. The build-only .vite manifest and private system inventory
-  # stay outside the public site output.
-  site = pkgs.runCommand "jaunder-site" { } ''
-    mkdir -p $out
-    for path in ${csrWasmBundle}/*; do
-      case "$(basename "$path")" in system-artifacts) continue ;; esac
-      cp -a "$path" $out/
-    done
-  '';
-
   # --- leptos-CSR client (#177/#180) --------------------------------------
   # The client-side-render wasm binary — the only client (#180).
-  # `csrWasmBundle` runs wasm-bindgen over it; `site`
-  # (above) bundles it with the public assets + rendered CSR shell.
+  # `csrWasmBundle` runs wasm-bindgen over it, then Vite bundles it with the
+  # public assets + rendered CSR shell.
   mkCsrWasm =
     {
       debug ? false,
@@ -1332,7 +1321,7 @@ let
   # link as the diagnostic artifact would lose the exact source-mappable module.
   # The pinned nightly emits every target crate's IR without a root link; LLVM
   # 22 Clang compiles that exact closed graph and links it with minicov's archive.
-  # This derivative is not an input to `site` or `jaunderBin`.
+  # This derivative is not an input to `csrWasmBundle` or `jaunderBin`.
   diagnosticCsrWasmBundle =
     pkgs.runCommand "jaunder-diagnostic-csr-wasm-bundle"
       {
@@ -1566,7 +1555,6 @@ in
 {
   packages = {
     jaunder = jaunderBin;
-    site = site;
     # The pre-wasm-bindgen, unstripped wasm. Exposed so
     # `dev wasm-audit report --breakdown` (`tools/dev/dev/wasm_audit.py`) can
     # hand twiggy an artifact that still carries a name section: `wasm-opt`
