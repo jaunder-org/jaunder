@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout
+from conftest import Checkout, cells
 
 from dev import chrome, runner
 from dev.summary import BEFORE_DEV
@@ -44,12 +44,10 @@ def test_records_survive_a_sigkilled_writer(checkout: Checkout) -> None:
 
     summary = checkout.dev("trace", "summary", str(run))
     assert summary.returncode == 0, summary
-    lines = summary.stdout.decode().splitlines()
-    assert [line.endswith(("dev static tsc", "  tsc")) for line in lines[1:]] == [
-        True,
-        True,
-    ]
-    assert all("incomplete" in line for line in lines[1:])
+    heading, *rows = cells(summary.stdout.decode())
+    assert sorted(row[-1] for row in rows) == ["dev static tsc", "tsc"]
+    status = heading.index("Status")
+    assert all(row[status] == "incomplete" for row in rows)
 
 
 def test_child_dev_joins_the_run_under_its_step_and_a_killed_child_is_incomplete(
@@ -169,7 +167,8 @@ def test_summary_does_not_sum_overlapping_children(
         run,
         start("gate", None, 0, name="dev check"),
         start("a", "gate", 1 * second, name="nix build"),
-        start("b", "gate", 3 * second, name="cargo test"),
+        # A `|` Markdown must escape.
+        start("b", "gate", 3 * second, name="cargo test | tee"),
         end(
             "a",
             "gate",
@@ -182,14 +181,22 @@ def test_summary_does_not_sum_overlapping_children(
     text = checkout.dev("trace", "summary", str(run))
     assert text.returncode == 0, text
     assert text.stdout.decode() == (
-        "Duration  Untraced  Depth  Status  Cache   Fetched  Span\n"
-        " 10.000s    4.000s      0  failed                   dev check\n"
-        "  4.000s                1  ok      reused           nix build\n"
-        "  4.000s                1  failed                   cargo test\n"
+        "┌────────────┬────────────┬─────────┬──────────┬─────────┬───────────┬──────────────────┐\n"
+        "│   Duration │   Untraced │   Depth │ Status   │ Cache   │   Fetched │ Span             │\n"
+        "├────────────┼────────────┼─────────┼──────────┼─────────┼───────────┼──────────────────┤\n"
+        "│    10.000s │     4.000s │       0 │ failed   │         │           │ dev check        │\n"
+        "│     4.000s │            │       1 │ ok       │ reused  │           │ nix build        │\n"
+        "│     4.000s │            │       1 │ failed   │         │           │ cargo test | tee │\n"
+        "└────────────┴────────────┴─────────┴──────────┴─────────┴───────────┴──────────────────┘\n"
     )
     markdown = checkout.dev("trace", "summary", "--markdown", str(run))
-    assert markdown.stdout.decode().splitlines()[2] == (
-        "| 10.000s | 4.000s | 0 | failed |  |  | dev check |"
+    # Numbers align right, text left, in GitHub's rendering too.
+    assert markdown.stdout.decode() == (
+        "|   Duration |   Untraced |   Depth | Status   | Cache   |   Fetched | Span              |\n"
+        "|-----------:|-----------:|--------:|:---------|:--------|----------:|:------------------|\n"
+        "|    10.000s |     4.000s |       0 | failed   |         |           | dev check         |\n"
+        "|     4.000s |            |       1 | ok       | reused  |           | nix build         |\n"
+        "|     4.000s |            |       1 | failed   |         |           | cargo test \\| tee |\n"
     )
 
 
@@ -226,16 +233,19 @@ def test_summary_shows_the_runner_the_time_before_dev_and_fetched_bytes(
     assert text.returncode == 0, text
     assert text.stdout.decode() == (
         "Runner: AMD EPYC 7763 64-Core Processor, nproc 4, cloud azure\n"
-        "Duration  Untraced  Depth  Status  Cache        Fetched  Span\n"
-        " 90.000s                0                                before dev\n"
-        " 10.000s    6.000s      0  ok                            dev check\n"
-        "  4.000s                1  ok      substituted   3.5MiB  static-code\n"
+        "┌────────────┬────────────┬─────────┬──────────┬─────────────┬───────────┬─────────────┐\n"
+        "│   Duration │   Untraced │   Depth │ Status   │ Cache       │   Fetched │ Span        │\n"
+        "├────────────┼────────────┼─────────┼──────────┼─────────────┼───────────┼─────────────┤\n"
+        "│    90.000s │            │       0 │          │             │           │ before dev  │\n"
+        "│    10.000s │     6.000s │       0 │ ok       │             │           │ dev check   │\n"
+        "│     4.000s │            │       1 │ ok       │ substituted │    3.5MiB │ static-code │\n"
+        "└────────────┴────────────┴─────────┴──────────┴─────────────┴───────────┴─────────────┘\n"
     )
     markdown = checkout.dev("trace", "summary", "--markdown", str(run))
     assert markdown.stdout.decode().splitlines()[:3] == [
         "Runner: AMD EPYC 7763 64-Core Processor, nproc 4, cloud azure",
         "",
-        "| Duration | Untraced | Depth | Status | Cache | Fetched | Span |",
+        "|   Duration |   Untraced |   Depth | Status   | Cache       |   Fetched | Span        |",
     ]
 
 
@@ -258,11 +268,14 @@ def test_summary_omits_what_the_root_did_not_record(
         start("gate", None, 100_000_000_000, name="dev check"),
         end("gate", None, 110_000_000_000, **{"jaunder.status": "ok", **root}),
     )
-    lines = checkout.dev("trace", "summary", str(run)).stdout.decode().splitlines()
+    summary = checkout.dev("trace", "summary", str(run))
+    lines = summary.stdout.decode().splitlines()
     assert BEFORE_DEV not in "\n".join(lines)
     expected = ["Runner: Intel Xeon"] if "host.cpu.model.name" in root else []
     assert lines[: len(expected)] == expected
-    assert lines[len(expected)].startswith("Duration")
+    # The table follows at once.
+    assert lines[len(expected)].startswith("┌")
+    assert cells(summary.stdout.decode())[0][0] == "Duration"
 
 
 def test_the_time_before_dev_is_shown_beyond_the_slowest(
@@ -278,8 +291,8 @@ def test_the_time_before_dev_is_shown_beyond_the_slowest(
         )
     records.append(end("gate", None, 100_000_002_000, **root))
     write_records(run, *records)
-    lines = checkout.dev("trace", "summary", str(run)).stdout.decode().splitlines()
-    assert lines[-1].endswith(BEFORE_DEV)
+    summary = checkout.dev("trace", "summary", str(run))
+    assert cells(summary.stdout.decode())[-1][-1] == BEFORE_DEV
 
 
 def test_the_root_records_its_runner_and_the_ci_job_start(checkout: Checkout) -> None:
@@ -350,7 +363,7 @@ def test_summary_lists_every_unsuccessful_span_beyond_the_slowest(
 
     result = checkout.dev("trace", "summary", str(tmp_path / "run.trace.d"))
     assert result.returncode == 0, result
-    names = [line.rsplit(" ", 1)[-1] for line in result.stdout.decode().splitlines()]
+    names = [row[-1] for row in cells(result.stdout.decode())]
     # The slowest twenty, then the unsuccessful spans, slowest first.
     assert names == [
         "Span",
@@ -372,7 +385,7 @@ def test_summary_defaults_to_the_latest_run(checkout: Checkout) -> None:
     write_records(runs / "2-1.trace.d", start("new", None, 0), end("new", None, 1))
     latest = checkout.dev("trace", "summary", cwd=checkout.root / "sub")
     assert latest.returncode == 0, latest
-    assert latest.stdout.decode().splitlines()[1].endswith("new")
+    assert cells(latest.stdout.decode())[1][-1] == "new"
 
 
 def outcome(result: subprocess.CompletedProcess[bytes]) -> tuple[int, bytes, bytes]:
@@ -444,9 +457,8 @@ def test_malformed_records_change_neither_the_merge_nor_the_outcome(
     summary = checkout.dev("trace", "summary", str(run))
     assert summary.returncode == 0, summary
     # The root's runner line, then the table: the gate is its slowest span.
-    lines = summary.stdout.decode().splitlines()
-    assert lines[0].startswith("Runner: ")
-    assert lines[2].endswith("dev static tsc")
+    assert summary.stdout.decode().startswith("Runner: ")
+    assert cells(summary.stdout.decode())[1][-1] == "dev static tsc"
 
 
 def test_a_failed_merge_warns_once_and_changes_nothing_else(

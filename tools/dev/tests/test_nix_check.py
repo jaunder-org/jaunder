@@ -12,6 +12,7 @@ from conftest import (
     OUTPUT_SIZE,
     REGISTERED_LATER,
     Checkout,
+    cells,
     launch,
 )
 
@@ -234,8 +235,9 @@ def test_cache_shows_in_the_summary(checkout: Checkout) -> None:
     (run,) = checkout.runs()
     summary = checkout.dev("trace", "summary", str(run))
     assert summary.returncode == 0, summary
-    (line,) = [line for line in summary.stdout.decode().splitlines() if "demo" in line]
-    assert line.split()[-2:] == ["reused", "demo"]
+    heading, *rows = cells(summary.stdout.decode())
+    (row,) = [row for row in rows if row[-1] == "demo"]
+    assert row[heading.index("Cache")] == "reused"
 
 
 def test_steps_that_cannot_use_a_cache_record_none(checkout: Checkout) -> None:

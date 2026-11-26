@@ -7,7 +7,7 @@ cell helpers format the trace diagnostics' tables.
 
 import json
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, Literal
 
 from tabulate import tabulate
 
@@ -40,14 +40,32 @@ def render(document: bytes) -> str | None:
         return None
 
 
-def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
-    """`rows` under `headers` as a box-drawn table, without a final newline.
+# A table column's alignment.
+Align = Literal["left", "right"]
+
+
+def table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    align: Sequence[Align] | None = None,
+    markdown: bool = False,
+) -> str:
+    """`rows` under `headers` as a box-drawn table, or with `markdown` a GitHub
+    pipe table, without a final newline.
 
     Cells arrive already formatted: number parsing is off, so `1.000` stays
-    `1.000` rather than becoming `1`.
+    `1.000` rather than becoming `1`. `align` gives each column's alignment;
+    every column is left-aligned without it. A pipe table's rule carries the
+    alignment; tabulate does not escape a `|` in a cell, so it is escaped here.
     """
+    if markdown:
+        rows = [[cell.replace("|", "\\|") for cell in row] for row in rows]
     return tabulate(
-        rows, headers=headers, tablefmt="simple_outline", disable_numparse=True
+        rows,
+        headers=headers,
+        tablefmt="pipe" if markdown else "simple_outline",
+        colalign=align,
+        disable_numparse=True,
     )
 
 

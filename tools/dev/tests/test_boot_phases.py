@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout
+from conftest import Checkout, cells
 
 from dev.boot_phases import (
     BRIDGE_SCHEMA,
@@ -159,15 +159,6 @@ def one_nav_span(source: str, project: str, mount_done_ms: float) -> list[Span]:
         [nav(1, "warm", mount_done_ms, mount_done_ms + 50.0)],
         [(1, boot_marks(mount_done_ms))],
     )
-
-
-def cells(out: str) -> list[tuple[str, ...]]:
-    """Every table row in `out`, as its stripped cells."""
-    return [
-        tuple(cell.strip() for cell in line.strip("│").split("│"))
-        for line in out.splitlines()
-        if line.startswith("│")
-    ]
 
 
 def rows_of(spans: list[Span]) -> list[Population]:

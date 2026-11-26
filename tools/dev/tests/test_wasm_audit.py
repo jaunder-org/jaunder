@@ -291,9 +291,12 @@ def test_report_measures_a_given_bundle_root(checkout: Checkout) -> None:
     assert result.stdout.decode() == (
         "WASM bundle audit\n"
         f"bundle output: {root}\n"
-        "artifact          raw        gzip       brotli\n"
-        "assets/csr_bg-e5f6.wasm    2.0 MiB        3 B        2 B\n"
-        "assets/index-a1b2.js        9 B        3 B        2 B\n"
+        "┌─────────────────────────┬─────────┬────────┬──────────┐\n"
+        "│ artifact                │     raw │   gzip │   brotli │\n"
+        "├─────────────────────────┼─────────┼────────┼──────────┤\n"
+        "│ assets/csr_bg-e5f6.wasm │ 2.0 MiB │    3 B │      2 B │\n"
+        "│ assets/index-a1b2.js    │     9 B │    3 B │      2 B │\n"
+        "└─────────────────────────┴─────────┴────────┴──────────┘\n"
     )
 
 
@@ -333,10 +336,6 @@ def twiggy(checkout: Checkout) -> None:
     (checkout.bin / "twiggy").symlink_to(present)
 
 
-def row(name: str, size: str, share: str) -> str:
-    return f"{name:<18}  {size:>9}  {share:>12}\n"
-
-
 def test_breakdown_attributes_a_named_module_with_twiggy(checkout: Checkout) -> None:
     twiggy(checkout)
     wasm = checkout.root.parent / "csr.wasm"
@@ -350,17 +349,23 @@ def test_breakdown_attributes_a_named_module_with_twiggy(checkout: Checkout) -> 
         "total: 106 B — this is the unstripped pre-wasm-bindgen artifact, "
         "NOT the shipped bundle size (see `dev wasm-audit report` for that)\n"
         "\n"
-        "section               bytes     share of file\n"
-        f"{row('type', '7 B', '6.6%')}"
-        f"{row('function', '6 B', '5.7%')}"
-        f"{row('code', '18 B', '17.0%')}"
-        f"{row('custom:name', '67 B', '63.2%')}"
+        "┌─────────────┬─────────┬─────────────────┐\n"
+        "│ section     │   bytes │   share of file │\n"
+        "├─────────────┼─────────┼─────────────────┤\n"
+        "│ type        │     7 B │            6.6% │\n"
+        "│ function    │     6 B │            5.7% │\n"
+        "│ code        │    18 B │           17.0% │\n"
+        "│ custom:name │    67 B │           63.2% │\n"
+        "└─────────────┴─────────┴─────────────────┘\n"
         "\n"
         "crate attribution, share of the functions "
         "(code + function sections, 18 B)\n"
-        "crate                 bytes     share of functions\n"
-        f"{row(UNATTRIBUTED, '12 B', '66.7%')}"
-        f"{row('orgize', '6 B', '33.3%')}"
+        "┌────────────────┬─────────┬──────────────────────┐\n"
+        "│ crate          │   bytes │   share of functions │\n"
+        "├────────────────┼─────────┼──────────────────────┤\n"
+        f"│ {UNATTRIBUTED} │    12 B │                66.7% │\n"
+        "│ orgize         │     6 B │                33.3% │\n"
+        "└────────────────┴─────────┴──────────────────────┘\n"
     )
 
 
