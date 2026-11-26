@@ -4,6 +4,7 @@
 - Date: 2026-08-14
 - Issue: [#938](https://github.com/jaunder-org/jaunder/issues/938)
 - Amended: 2026-11-25 — no tool reads `packages.site` any longer (#2101)
+- Amended: 2026-11-25 — `packages.site` is removed (#2120)
 
 ## Context
 
@@ -26,7 +27,9 @@ PostgreSQL passwords.
 `packages.site` is a near-miss. It once looked like a deployment artifact, but
 the server binary now embeds the CSR bundle and public assets. The `site` output
 survives because `cargo xtask audit-wasm` builds it to inspect the wasm bundle
-for size, not because a production service should serve it from disk.
+for size, not because a production service should serve it from disk. _Amended
+by #2120:_ the flake no longer exports `packages.site`; this paragraph records
+why it once existed.
 
 ## Decision
 
@@ -69,8 +72,10 @@ reverse-proxy boundary remains in force.
 bundle tree used by `cargo xtask audit-wasm` for bundle-size analysis. _Amended
 by #2101:_ that reason no longer holds. Size analysis (`dev wasm-audit`) reads
 `.#csrBundle` and `.#csrWasm`, and no tool reads `packages.site`. Retiring the
-output is follow-up work. The interactive and PostgreSQL NixOS configurations
-are development/test VMs, not supported deployment presets.
+output is follow-up work. _Amended by #2120:_ the flake no longer exports
+`packages.site`; `.#csrBundle` is the CSR bundle tree. The interactive and
+PostgreSQL NixOS configurations are development/test VMs, not supported
+deployment presets.
 
 ## Consequences
 
@@ -85,15 +90,17 @@ handling.
 
 The deployable artifact is unambiguous: use `packages.jaunder`. `packages.site`
 may change to support audit tooling and must not be documented as a runtime
-bundle.
+bundle. _Amended by #2120:_ with `packages.site` removed, `packages.jaunder` is
+the only package output that ships the CSR bundle to a deployment, embedded in
+the binary.
 
 Rejected alternatives:
 
 - Treating the NixOS module as incidental test scaffolding. It is exported as a
   public flake module and has stable operator-facing options.
-- Serving `packages.site` in production. The binary embeds assets, and keeping a
-  separate site tree would reintroduce the external asset edge ADR-0008 and the
-  embedded-asset work removed.
+- Serving a separate site tree (formerly `packages.site`) in production. The
+  binary embeds assets, and keeping a separate site tree would reintroduce the
+  external asset edge ADR-0008 and the embedded-asset work removed.
 - Adding module-managed TLS or reverse-proxy configuration here. ADR-0008 keeps
   TLS outside Jaunder.
 - Adding database password options without a design. Secret ownership affects
