@@ -121,12 +121,12 @@ def require(present: bool, prerequisite: str) -> None:
     pytest.fail(f"missing prerequisite: {prerequisite}")
 
 
-def cells(result: subprocess.CompletedProcess[bytes]) -> list[list[str]]:
-    """A box-drawn table's heading and rows on `result`'s stdout, each as its
+def cells(out: str) -> list[tuple[str, ...]]:
+    """Every row of the box-drawn tables in `out`, headings included, as its
     stripped cells."""
     return [
-        [cell.strip() for cell in line.split("│")[1:-1]]
-        for line in result.stdout.decode().splitlines()
+        tuple(cell.strip() for cell in line.strip("│").split("│"))
+        for line in out.splitlines()
         if line.startswith("│")
     ]
 

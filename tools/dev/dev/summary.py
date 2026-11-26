@@ -157,15 +157,13 @@ _COLUMNS = (
 
 
 def render(summary: Summary, markdown: bool) -> str:
-    lines = [
-        report.table(
-            [column.heading for column in _COLUMNS],
-            [[column.cell(row) for column in _COLUMNS] for row in summary.rows],
-            ["right" if column.numeric else "left" for column in _COLUMNS],
-            markdown,
-        )
-    ]
-    if summary.runner is not None:
-        # A blank line keeps Markdown from reading the heading into the table.
-        lines = [summary.runner, *([""] if markdown else []), *lines]
-    return "\n".join(lines) + "\n"
+    table = report.table(
+        [column.heading for column in _COLUMNS],
+        [[column.cell(row) for column in _COLUMNS] for row in summary.rows],
+        ["right" if column.numeric else "left" for column in _COLUMNS],
+        markdown=markdown,
+    )
+    if summary.runner is None:
+        return table + "\n"
+    # A blank line keeps Markdown from reading the heading into the table.
+    return "\n".join([summary.runner, *([""] if markdown else []), table]) + "\n"

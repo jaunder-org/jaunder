@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from dev import steps
-from dev.report import table
+from dev.report import Align, table
 
 # The Vite manifest key of wasm-bindgen's wasm. Spelled in Rust too
 # (`host::vite_manifest`); ADR-0109's literal table keeps the two equal.
@@ -305,8 +305,8 @@ def csr_wasm() -> str:
     return steps.nix_build("csr-wasm", ".#csrWasm") + "/lib/csr.wasm"
 
 
-# A breakdown table's alignment: the name, then its bytes and share.
-_SHARES = ("left", "right", "right")
+# The breakdown tables: a name on the left, its bytes and share on the right.
+_BREAKDOWN_ALIGN: tuple[Align, ...] = ("left", "right", "right")
 
 
 def breakdown(wasm: str) -> None:
@@ -340,7 +340,7 @@ def breakdown(wasm: str) -> None:
                     [name, format_bytes(size), _percent(size, len(data))]
                     for name, size in spans
                 ],
-                _SHARES,
+                _BREAKDOWN_ALIGN,
             ),
             "",
             (
@@ -353,7 +353,7 @@ def breakdown(wasm: str) -> None:
                     [name, format_bytes(size), _percent(size, functions)]
                     for name, size in crates
                 ],
-                _SHARES,
+                _BREAKDOWN_ALIGN,
             ),
         ]
         print("\n".join(lines))
