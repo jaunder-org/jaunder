@@ -154,15 +154,23 @@ def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     ]
 
 
+# The longest measured phase; the fake producer sleeps this long before
+# reporting, so every phase it reports has ended.
+LONGEST_PHASE_MS = 3
+
 # A failed producer that leaves this run's phase manifest, unless PHASES is
-# empty; "@NOW@" is the producer's own clock.
+# empty. "@NOW@" is the producer's clock when its phases start. Like a real
+# producer, it reports them only once they have ended, so `dev` reading the
+# manifest straight away still finds them inside the step.
 PHASE_PRODUCER = f"""#!{sys.executable}
 import os, pathlib, sys, time
 lane = sys.argv[-1]
 directory = pathlib.Path(".xtask", "diagnostics", f"e2e-{{lane}}")
 directory.mkdir(parents=True, exist_ok=True)
 if os.environ["PHASES"]:
-    text = os.environ["PHASES"].replace("@NOW@", str(time.time_ns()))
+    started = time.time_ns()
+    time.sleep({LONGEST_PHASE_MS} / 1000)
+    text = os.environ["PHASES"].replace("@NOW@", str(started))
     (directory / f"e2e-phase-{{lane}}.json").write_text(text)
 sys.exit(1)
 """
@@ -173,13 +181,13 @@ MEASURED = json.dumps(
             {
                 "name": "vm-startup-readiness",
                 "started_at_unix_ns": NOW,
-                "duration_ms": 3,
+                "duration_ms": LONGEST_PHASE_MS,
                 "outcome": "success",
             },
             {
                 "name": "gate-execution",
                 "started_at_unix_ns": NOW,
-                "duration_ms": 2,
+                "duration_ms": LONGEST_PHASE_MS - 1,
                 "outcome": "failed",
             },
             {"name": "nix-evaluation", "duration_ms": None, "outcome": "unavailable"},
@@ -200,7 +208,10 @@ MEASURED = json.dumps(
     [
         (
             MEASURED,
-            {"vm-startup-readiness": (3000, "ok"), "gate-execution": (2000, "failed")},
+            {
+                "vm-startup-readiness": (LONGEST_PHASE_MS * 1000, "ok"),
+                "gate-execution": ((LONGEST_PHASE_MS - 1) * 1000, "failed"),
+            },
             False,
         ),
         ("", {}, False),
