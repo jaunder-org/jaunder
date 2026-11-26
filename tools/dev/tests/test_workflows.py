@@ -399,7 +399,7 @@ def test_a_forwarded_tool_keeps_its_streams_and_status(
 
 
 @pytest.mark.parametrize("output", [b"not a report\n", b"", b" \n"])
-@pytest.mark.parametrize("command", ["trace-analysis", "coverage-check"])
+@pytest.mark.parametrize("command", ["coverage-check"])
 def test_report_tools_fail_closed_without_a_report(
     checkout: Checkout, command: str, output: bytes
 ) -> None:

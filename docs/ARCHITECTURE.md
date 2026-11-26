@@ -75,7 +75,7 @@ the host coverage denominator
 
 One sibling tree is outside the root workspace as its own cargo workspace:
 `tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
-`host-proof`, `host-tool`, `perf-producer`, `performance`, `repository-policy`,
+`host-tool`, `perf-producer`, `performance`, `repository-policy`,
 `system-artifacts`, and `traced-run`). The host-side dev/CI commands live in its
 concern packages rather than a separate driver workspace, and each executable
 that runs inside a Nix derivation lives in the crate that owns its logic
@@ -4632,7 +4632,7 @@ and the `just sandbox` front door of the
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
 the workflows those decisions defined keep their names, arguments and steps as
 `dev` subcommands. Direct tools and concern-owned host executables in the
-`tools` workspace (`repository-policy`, `host-proof`, `coverage-check`) perform
+`tools` workspace (`repository-policy`, `host-tool`, `coverage-check`) perform
 the work. This is not a blanket Rust-necessity or permanent-ownership claim. The
 Rust gate catalogs, phases, execution-policy switches and old cargo workflow
 aliases are removed, not forwarded. A step is a Python function call that runs
@@ -5428,42 +5428,43 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 `qualification` has been retired for the
 [upgrade test](adr/0265-upgrade-test.md).
 
-`tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
+The former `tools/host-proof` crate is retired, its executables moved or retired
+one follow-up at a time (#2100–#2105):
 
-- `e2e-evidence` and `trace-analysis` have moved into `dev` as Python (#2100):
-  the e2e verdicts and `dev trace-analysis` are `tools/dev/dev/e2e_evidence.py`,
-  `server_fn_coverage.py` and `trace_analysis.py` on one trace core,
-  `traces.py`. `wasm-audit` already has (#2101): `dev wasm-audit` and the wasm
-  budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown.
+- The e2e verdicts and `dev trace-analysis` are `dev`'s Python (#2100):
+  `tools/dev/dev/e2e_evidence.py`, `server_fn_coverage.py` and
+  `trace_analysis.py` on one trace core, `traces.py`. `dev wasm-audit` and the
+  wasm budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown
+  (#2101).
+- `admit-inputs` is `tools/host-tool`'s one executable, and `csr-prerequisite`
+  is retired (#2102).
 - The cache-safety probe is retired rather than ported: CI honours
   `nonSubstitutable` and `dev` checks each coverage and e2e verdict ran on the
   runner
-  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md)).
-- The repository contract tests become pytest.
+  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md))
+  (#2103).
+- The repository contract tests are pytest (#2104).
+- With no executable or test left, the crate and its `packages.host-proof`
+  output are deleted (#2105).
 
-Until the remaining moves land, the placements below describe the current tree:
+The placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
   (`repository-docs`, `source-contracts`, and the shared `host_tool::report`
-  contract), `tools/host-proof` (below), `tools/coverage` with its nondefault
-  `host` feature
+  contract), `tools/host-tool` (`admit-inputs`), `tools/coverage` with its
+  nondefault `host` feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`).
   `dev` owns gate composition. These commands invoke `nix build` and
   consume/analyze exfiltrated build artifacts (coverage gate, CRAP gate,
-  reports). Every host tool prints exactly one JSON report on stdout
-  (`host_tool::report`: `command`, `ok`, `duration_ms`,
-  `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
-  optional rendered `report` text and optional structured `evidence`). The
-  shared argument parser points fd 1 at stderr and reserves the real stdout for
-  that report, so child output goes to stderr; the exit status is the verdict.
-  `dev` renders the human view from it (`tools/dev/dev/report.py`).
-- **`tools/host-proof`** (retiring; see the pending moves above) — focused host
-  proof (ADR-0246): `source-diagnostics`. It prints exactly one JSON report on
-  stdout (steps, outcomes, durations, details, verdict) and sends child output
-  to stderr; its exit status is the verdict. `dev` renders the human step view;
-  there is no sidecar, `--json` flag or completion sentinel. It does not join
-  the calling `dev` run's trace.
+  reports). `coverage-check`, the one host tool that renders a verdict, prints
+  exactly one JSON report on stdout (`host_tool::report`: `command`, `ok`,
+  `duration_ms`, `steps[{name, ok, skipped, duration_ms, detail}]`, optional
+  `exit_override`, optional rendered `report` text and optional structured
+  `evidence`). The shared argument parser points fd 1 at stderr and reserves the
+  real stdout for that report, so child output goes to stderr; the exit status
+  is the verdict. `dev` renders the human view from it
+  (`tools/dev/dev/report.py`).
 - **`dev test-local`** sequences CSR admission (host-tool's `admit-inputs`), the
   `.#csrBundle` build, the image worker build (whose server build script
   validates the bundle) and `pg-run cargo nextest` itself, holding the
@@ -5570,17 +5571,16 @@ would otherwise default to resolver 1
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.host-proof`, `packages.host-tool`, `packages.coverage-check` and
-`packages.system-artifacts` are built by one shared host-tool builder
-(`nix/host-tool.nix`) from each package's own Cargo path closure, on a
-dependencies-only build that only the lockfile, member manifests, toolchain and
-features change (`nix/tools-workspace-package.nix`, which
-`packages.repository-policy` shares); application coverage/E2E dependencies and
-explicit host-unit-test authorities remain separate. `dev` runs every Rust host
-tool from these outputs and `packages.repository-policy`, locally and in CI, so
-CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
-caches no compiled tool output; jobs that run host Cargo opt in to a cache of
-its downloads only
+`packages.host-tool`, `packages.coverage-check` and `packages.system-artifacts`
+are built by one shared host-tool builder (`nix/host-tool.nix`) from each
+package's own Cargo path closure, on a dependencies-only build that only the
+lockfile, member manifests, toolchain and features change
+(`nix/tools-workspace-package.nix`, which `packages.repository-policy` shares);
+application coverage/E2E dependencies and explicit host-unit-test authorities
+remain separate. `dev` runs every Rust host tool from these outputs and
+`packages.repository-policy`, locally and in CI, so CI substitutes unchanged
+tools from Cachix instead of compiling them. setup-ci caches no compiled tool
+output; jobs that run host Cargo opt in to a cache of its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped

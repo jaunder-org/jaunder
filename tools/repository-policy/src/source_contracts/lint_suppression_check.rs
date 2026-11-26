@@ -40,8 +40,6 @@ const POLICED_ROOTS: &[&str] = &[
     "tools/coverage/tests",
     "tools/doctests/src",
     "tools/doctests/tests",
-    "tools/host-proof/src",
-    "tools/host-proof/tests",
     "tools/host-tool/src",
     "tools/perf-producer/src",
     "tools/system-artifacts/src",

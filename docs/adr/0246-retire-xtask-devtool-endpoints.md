@@ -7,6 +7,8 @@
 - Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
   retired (#2102)
 - Amended: 2026-11-25 — e2e verdicts and trace analysis moved to `dev` (#2100)
+- Amended: 2026-11-25 — the focused host proof concern ends with
+  `tools/host-proof` (#2105)
 
 ## Context
 
@@ -84,7 +86,12 @@ Choose these concern homes for the three residual clusters:
   adapters. Each child gets its own process group, and a `psutil` descendant
   snapshot is taken at stop. Its source admission, immutable-artifact, root,
   readiness, capture and cleanup status contracts are unchanged, except that
-  readiness identifies the server by pid alone.
+  readiness identifies the server by pid alone. _Amended by #2105:_ as of
+  2026-11-25, the focused host proof concern had ended. Its last executables had
+  moved into `dev` or retired (#2100–#2103), its contract tests had become
+  pytest (#2104), and the `tools/host-proof` crate and `packages.host-proof` had
+  been deleted; current state: ARCHITECTURE.md §Residual tooling owners after
+  xtask retirement.
 
 The complete finite ignored surviving-owner delta names remaining interfaces,
 not “their concern owners” placeholders. Existing coverage/doctests/performance

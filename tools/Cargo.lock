@@ -1516,19 +1516,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "host-proof"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "host-tool",
- "regex",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "host-tool"
 version = "0.1.0"
 dependencies = [

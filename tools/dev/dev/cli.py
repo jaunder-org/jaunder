@@ -1,7 +1,6 @@
 """The `dev` command line: one subcommand per workflow."""
 
 import dataclasses
-import functools
 import re
 from collections.abc import Callable
 from pathlib import Path

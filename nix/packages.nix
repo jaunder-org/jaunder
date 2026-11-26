@@ -457,7 +457,7 @@ let
     assert productSourceFilter "${toString (craneLib.path ../.)}/tools/performance/src/lib.rs" "regular";
     assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/traced-run/src/main.rs" "regular");
     assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/system-artifacts/src/main.rs" "regular");
-    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml" "regular");
+    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/host-tool/Cargo.toml" "regular");
     pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter = productSourceFilter;
@@ -888,7 +888,6 @@ let
     || (
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
-      && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       # Host-run Git/checkout admission and reports; no in-derivation producer links it.
       && !(pkgs.lib.hasPrefix "tools/host-tool/" relative && relative != "tools/host-tool/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
@@ -954,7 +953,6 @@ let
         "test-support"
         "web"
         "tools/repository-policy"
-        "tools/host-proof"
         "tools/host-tool"
       ];
   # `checks.tools-doctests` documents every tools member, so the members toolsSrc
@@ -964,7 +962,6 @@ let
     let
       hostRunMembers = [
         "tools/repository-policy"
-        "tools/host-proof"
         "tools/host-tool"
       ];
     in
@@ -1584,7 +1581,6 @@ in
         ;
     };
     repository-policy = repositoryPolicyBin;
-    host-proof = hostProofBin;
     host-tool = hostToolBin;
     coverage-check = coverageCheckBin;
     adr-promoter = adrPromoter;

@@ -10,6 +10,7 @@
 - Amended: 2026-11-25 — `host-proof` no longer ships `source-diagnostics`
   (#2103)
 - Amended: 2026-11-25 — nor `e2e-evidence` and `trace-analysis` (#2100)
+- Amended: 2026-11-25 — `host-proof` leaves the package list (#2105)
 
 ## Context
 
@@ -51,7 +52,10 @@ packages:
   _Amended by #2100:_ nor are `e2e-evidence` and `trace-analysis`, which are now
   `dev`'s own Python. Server-function coverage builds `repository-policy`
   instead, for its `source-contracts server-fn-inventory` listing, so CI's e2e
-  reconcile no longer builds `host-proof`.
+  reconcile no longer builds `host-proof`. _Amended by #2105:_ as of 2026-11-25,
+  with no binary left, `packages.host-proof` and the `tools/host-proof` crate
+  had been deleted, so `host-proof` had left this list; current state:
+  ARCHITECTURE.md §Development tooling.
 - `host-tool` (_amended by #2102_): admit-inputs, the shared library's one
   executable, whose small closure keeps admission cheap to build
 - `coverage-check` (the `coverage` crate with its `host` feature)

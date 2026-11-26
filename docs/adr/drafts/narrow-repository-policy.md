@@ -32,8 +32,8 @@ package's only dependency on the product crate `common`.
 
 - **Git and checkout admission belong to `tools/host-tool`.** host-tool is the
   shared contract of the host tools: their JSON report, and how they select and
-  admit the caller's checkout and repair `core.hooksPath`. host-proof, coverage
-  and repository-policy import these helpers from host-tool. Its one executable,
+  admit the caller's checkout and repair `core.hooksPath`. coverage and
+  repository-policy import these helpers from host-tool. Its one executable,
   `admit-inputs` (`packages.host-tool`, #2102), is that admission as a command
   for `dev test-local` and `dev e2e-local`.
 - **One checkout entry point.** Every host tool calls host-tool's
@@ -64,10 +64,9 @@ This narrows three earlier decisions:
 
 ## Consequences
 
-- coverage and host-proof still depend on repository-policy, for the gate
-  markers and the server-function inventory. They still compile its syntax-tree
-  dependencies. The Git move gives the helpers a clearer owner but removes no
-  dependency edge.
+- coverage still depends on repository-policy, for the gate markers. It still
+  compiles its syntax-tree dependencies. The Git move gives the helpers a
+  clearer owner but removes no dependency edge.
 - repository-policy now also links host-tool's `clap` and `rustix`.
 - A later audit that wants a machine-generated census must build a new tool
   justified by a consumer, not revive this one.

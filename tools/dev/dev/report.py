@@ -1,4 +1,4 @@
-"""The human view of a step report: a host-proof tool's JSON, or `dev`'s own.
+"""The human view of a step report: a host tool's JSON, or `dev`'s own.
 
 A diagnostic's rendered `report` (trace tables) comes first, verbatim, then one
 line per step. The producing executable's exit status remains the verdict. The

@@ -8,6 +8,7 @@
 - Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
   retired (#2102)
 - Amended: 2026-11-25 — nor are `e2e-evidence` and `trace-analysis` (#2100)
+- Amended: 2026-11-25 — no host-proof JSON-report tool remains (#2105)
 
 ## Context
 
@@ -88,6 +89,14 @@ Nix-built `packages.host-proof` verifier.
 
 _Amended by #2102._ `admit-inputs` is host-tool's one executable and renders no
 report: a refusal is exit 1 and stderr. `csr-prerequisite` is retired.
+
+_Amended by #2105:_ as of 2026-11-25, no host-proof JSON-report tool remained:
+the `tools/host-proof` crate and the Nix-built `packages.host-proof` verifier
+had been deleted, so the host-proof concern owner above had ended. The report
+contract still lived in `tools/host-tool`, and `coverage-check`
+(`tools/coverage`, nondefault `host` feature) was the one host tool whose
+verdict `dev` rendered from it; current state: ARCHITECTURE.md §Residual tooling
+owners after xtask retirement.
 
 ## Consequences
 
