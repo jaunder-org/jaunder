@@ -293,6 +293,11 @@ convention). See the Status column below for each ADR's current status.
 | [0263](adr/0263-dev-traces-producer-timed-phases.md)                     | Dev traces the phases a sandboxed producer timed itself                                                      | accepted   |
 | [0264](adr/0264-pr-watch-native-python-observer.md)                      | PR observation is a native `dev pr-watch` with membership-based early failure                                | accepted   |
 | [0265](adr/0265-upgrade-test.md)                                         | An upgrade test replaces deployment qualification                                                            | accepted   |
+| [0266](adr/0266-ci-documentation-only-scope.md)                          | CI runs only the documentation checks for a Markdown-only change                                             | accepted   |
+| [0267](adr/0267-ci-honours-non-substitutable-verdicts.md)                | CI honours non-substitutable verdicts, and dev checks they ran                                               | accepted   |
+| [0268](adr/0268-narrow-repository-policy.md)                             | Narrow repository-policy to source contracts and documentation checks                                        | accepted   |
+| [0269](adr/0269-per-worker-e2e-server-instances.md)                      | Every Playwright worker owns its own E2E server instance                                                     | accepted   |
+| [0270](adr/0270-perf-data-python-reads-validated-data.md)                | Performance host work is Python that reads already-validated data                                            | accepted   |
 
 <!-- adr-table:end -->
 

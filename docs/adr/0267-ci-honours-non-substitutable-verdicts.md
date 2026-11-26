@@ -1,14 +1,14 @@
-# ADR-DRAFT: CI honours non-substitutable verdicts, and dev checks they ran
+# ADR-0267: CI honours non-substitutable verdicts, and dev checks they ran
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-25
 - Issue: [#2103](https://github.com/jaunder-org/jaunder/issues/2103)
 
 ## Context
 
-[ADR-0192](../0192-split-ci-non-e2e-validation-lanes.md) requires every tested
+[ADR-0192](0192-split-ci-non-e2e-validation-lanes.md) requires every tested
 commit to execute its Rust coverage and e2e verdicts.
-[ADR-0252](../0252-substitutable-static-verdicts.md) let static verdicts be
+[ADR-0252](0252-substitutable-static-verdicts.md) let static verdicts be
 substituted and kept coverage and e2e unsubstitutable. `nonSubstitutable`
 (`nix/checks.nix`) marks those derivations `allowSubstitutes = false`. But
 `cachix/install-nix-action` writes `always-allow-substitutes = true`, which

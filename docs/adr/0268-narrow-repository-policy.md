@@ -1,12 +1,12 @@
-# ADR-DRAFT: Narrow repository-policy to source contracts and documentation checks
+# ADR-0268: Narrow repository-policy to source contracts and documentation checks
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-25
 - Issue: [#1975](https://github.com/jaunder-org/jaunder/issues/1975)
 
 ## Context
 
-[ADR-0246](../0246-retire-xtask-devtool-endpoints.md) made
+[ADR-0246](0246-retire-xtask-devtool-endpoints.md) made
 `tools/repository-policy` the home of the fixed source contracts and
 documentation checks. It also made the package the owner of three things those
 checks do not use:
@@ -17,7 +17,7 @@ checks do not use:
 
 host-proof and coverage reached the Git and checkout helpers only through this
 package. Those two tools already share `tools/host-tool`, the report contract of
-[ADR-0247](../0247-host-tool-json-report-contract.md).
+[ADR-0247](0247-host-tool-json-report-contract.md).
 
 The census was built for the codebase-audit method (#1222) and gated nothing. By
 #1975 its report ordered candidates alphabetically or by hash rather than by

@@ -1,15 +1,15 @@
-# ADR-DRAFT: Performance host work is Python that reads already-validated data
+# ADR-0270: Performance host work is Python that reads already-validated data
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-25
 - Issue: [#2068](https://github.com/jaunder-org/jaunder/issues/2068)
 
 ## Context
 
-[ADR-0261](../0261-tool-language-by-maintainability.md) moved the host side of
-the performance workflow, the Rust `perf-data` CLI, to Python. It required the
-Rust writer to publish a JSON Schema generated from its types, and every reader
-in another language to validate against it.
+[ADR-0261](0261-tool-language-by-maintainability.md) moved the host side of the
+performance workflow, the Rust `perf-data` CLI, to Python. It required the Rust
+writer to publish a JSON Schema generated from its types, and every reader in
+another language to validate against it.
 
 Each measurement VM already validates its own output in Rust. The seeder
 (`test-support`) checks the dataset manifest before writing it. `perf-producer`
@@ -58,12 +58,12 @@ fails loudly either way.
 
 ## Consequences
 
-- This amends [ADR-0241](../0241-performance-workflow-ownership.md). No host
-  Rust command owns performance-domain decisions any more: `dev` owns host
-  assembly, comparison and import, and the VM-side Rust owns validation.
-- It amends [ADR-0251](../0251-dev-runner-replaces-just.md): `perf-producer` no
+- This amends [ADR-0241](0241-performance-workflow-ownership.md). No host Rust
+  command owns performance-domain decisions any more: `dev` owns host assembly,
+  comparison and import, and the VM-side Rust owns validation.
+- It amends [ADR-0251](0251-dev-runner-replaces-just.md): `perf-producer` no
   longer needs to stay apart from a `perf-data` binary, which no longer exists.
-- It amends [ADR-0258](../0258-dev-runs-nix-built-host-tools.md): `perf-data`
+- It amends [ADR-0258](0258-dev-runs-nix-built-host-tools.md): `perf-data`
   leaves its list of Nix-built host tools.
 - It amends ADR-0261's cross-language rule, as above.
 - `invocation.json` and each producer's `metadata.json` existed only to pass

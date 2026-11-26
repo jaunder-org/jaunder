@@ -887,7 +887,7 @@ Audience, Media Upload Capability and Site Theme are global to the instance. So:
   `mailbox`, `verifiedUser`) or `seedUserViaTool`.
 
 The decision is recorded in
-[per-worker E2E server instances](docs/adr/drafts/per-worker-e2e-server-instances.md).
+[per-worker E2E server instances](docs/adr/0269-per-worker-e2e-server-instances.md).
 
 ### One boot per page
 
@@ -1199,7 +1199,7 @@ requires that lane and `e2e gate` passes with the E2E jobs skipped. A push, or
 anything `dev.scope` cannot establish, runs everything. A new commit on a pull
 request cancels that pull request's superseded run; merge-queue and push runs
 are never cancelled
-([documentation-only CI scope](docs/adr/drafts/ci-documentation-only-scope.md)).
+([documentation-only CI scope](docs/adr/0266-ci-documentation-only-scope.md)).
 
 E2E uses one catalog-derived matrix of sixteen isolated producers
 (`dev e2e-producer <identity>`), four per backend/browser pair. A `!cancelled()`
@@ -2372,7 +2372,7 @@ them for every tested commit: setup-ci sets `always-allow-substitutes = false`
 so their `nonSubstitutable` wrapper holds, and `dev` fails a Rust coverage or
 e2e verdict step whose output this machine did not build. Build those verdicts
 on the machine running `dev`, not a remote builder
-([CI honours non-substitutable verdicts](docs/adr/drafts/ci-honours-non-substitutable-verdicts.md)).
+([CI honours non-substitutable verdicts](docs/adr/0267-ci-honours-non-substitutable-verdicts.md)).
 A push to `main` of a commit whose merge-queue run passed reuses that run's
 verdict rather than executing them again
 ([merge-queue verdict draft](docs/adr/0260-merge-queue-verdict-covers-landed-commit.md)).
@@ -2558,7 +2558,7 @@ nix build .#checks.x86_64-linux.elisp-coverage-producer
   - A format written by Rust and read in another language is parsed, not
     validated again: its Rust writer has already validated it, and no schema is
     generated for it
-    ([docs/adr/drafts/perf-data-python-reads-validated-data.md](docs/adr/drafts/perf-data-python-reads-validated-data.md)).
+    ([docs/adr/0270-perf-data-python-reads-validated-data.md](docs/adr/0270-perf-data-python-reads-validated-data.md)).
   - Bash is allowed only for host scripts in `scripts/` that run commands and
     check their results, use traps only to remove temporary files or report the
     failed step, and get concurrency only from a standard tool (bounded

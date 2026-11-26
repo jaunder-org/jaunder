@@ -70,5 +70,5 @@ _Superseded by #2103:_ as of 2026-11-25, CI set
 `always-allow-substitutes = false`, `dev` failed a coverage or e2e verdict step
 whose output this machine had not built, and the cache-safety probe had been
 retired. The static-verdict rule carried forward unchanged
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §The verify ladder & git-enforced gate.
