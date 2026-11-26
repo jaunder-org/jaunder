@@ -1,8 +1,7 @@
 """The human view of a step report: a host tool's JSON, or `dev`'s own.
 
-A diagnostic's rendered `report` (trace tables) comes first, verbatim, then one
-line per step. The producing executable's exit status remains the verdict. The
-cell helpers format the trace diagnostics' tables.
+Each step renders as one line. The producing executable's exit status remains the verdict.
+The cell helpers format the trace diagnostics' tables.
 """
 
 import json
@@ -15,8 +14,6 @@ from tabulate import tabulate
 def render_report(report: Any) -> str:
     """A report already in hand, as a dict, rendered."""
     lines = []
-    if report.get("report"):
-        lines.append(report["report"])
     for step in report["steps"]:
         mark = "skip" if step.get("skipped") else " ok " if step["ok"] else "FAIL"
         line = f"[{mark}] {step['name']}"
