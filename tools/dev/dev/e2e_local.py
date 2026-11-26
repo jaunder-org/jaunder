@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from dev import checkout, report, steps, supervision, trace
-from dev.commands import host_proof
+from dev.commands import ADMIT_INPUTS
 from dev.spans import STATUS, Status
 from dev.supervision import Child, Signals
 
@@ -830,7 +830,7 @@ def run(browser: str | None, test_filter: str | None, update: bool) -> None:
         # assigned below, not this initial False.
         stack.callback(lambda: provenance.close(succeeded))
         attribute = "sandboxArtifactsReleaseCsr" if update else "sandboxArtifacts"
-        admit = steps.tool(host_proof("admit-inputs"))
+        admit = steps.tool(ADMIT_INPUTS)
         steps.run("e2e-local-admission", [*admit, f".#{attribute}.sourceAdmits"])
         # A root of this run's own, so a concurrent run never repoints it;
         # removed on every exit, whether or not the build made it.

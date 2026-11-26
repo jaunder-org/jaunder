@@ -4,8 +4,7 @@ Every process in a run appends a start and an end record for each of its spans
 to its own JSON Lines file in the run directory named by `JAUNDER_TRACE_DIR`.
 The root, the process that finds that variable unset, creates the directory and
 merges every file into `<run_id>.trace.json` when it finishes (`chrome.py`).
-The record format is shared with host-proof's Rust writer and locked by
-`tests/golden/span-records.jsonl`.
+The record format is locked by `tests/golden/span-records.jsonl`.
 """
 
 import json

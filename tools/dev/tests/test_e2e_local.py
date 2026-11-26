@@ -52,7 +52,7 @@ if args[0] == "path-info":
         print("/nix/store/fake.drv")
         sys.exit()
     sys.exit(1)
-if args[-1] != ".#host-proof" and mode("FAKE_BUILD") == "fail":
+if args[-1] != ".#host-tool" and mode("FAKE_BUILD") == "fail":
     sys.exit(9)
 if "--out-link" in args:
     os.symlink(os.environ["FAKE_TOOL_OUT"], args[args.index("--out-link") + 1])
@@ -742,6 +742,10 @@ def test_two_workers_each_get_a_seeded_server_and_one_playwright_run(
 
     (admitted,) = e2e.notes("admitted")
     assert admitted == [".#sandboxArtifacts.sourceAdmits"]
+    # Admission's package is host-tool; host-proof is never built.
+    installables = {args[-1] for args in e2e.notes("nix")}
+    assert ".#host-tool" in installables
+    assert ".#host-proof" not in installables
     build = [args for args in e2e.notes("nix") if args[-1] == ".#sandboxArtifacts"]
     assert build[0] == [
         "path-info",

@@ -9,14 +9,6 @@ publish.workspace = true
 workspace = true
 
 [[bin]]
-name = "admit-inputs"
-path = "src/bin/admit-inputs.rs"
-
-[[bin]]
-name = "csr-prerequisite"
-path = "src/bin/csr-prerequisite.rs"
-
-[[bin]]
 name = "e2e-evidence"
 path = "src/bin/e2e-evidence.rs"
 
@@ -33,8 +25,6 @@ anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 flate2 = "1.1.10"
 host = { path = "../../host" }
-opentelemetry = "0.32.0"
-opentelemetry_sdk = "0.32.1"
 regex = "1.12.3"
 repository-policy = { path = "../repository-policy" }
 host-tool = { path = "../host-tool" }

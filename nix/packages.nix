@@ -502,12 +502,17 @@ let
     pname = "host-proof";
     member = "tools/host-proof";
     bins = [
-      "admit-inputs"
-      "csr-prerequisite"
       "e2e-evidence"
       "source-diagnostics"
       "trace-analysis"
     ];
+  };
+  # The shared host-tool library ships only checkout admission's command, so
+  # `test-local` and `e2e-local` admit without building any larger tool.
+  hostToolBin = mkHostTool {
+    pname = "host-tool";
+    member = "tools/host-tool";
+    bins = [ "admit-inputs" ];
   };
   coverageCheckBin = mkHostTool {
     pname = "coverage-check";
@@ -1595,6 +1600,7 @@ in
     };
     repository-policy = repositoryPolicyBin;
     host-proof = hostProofBin;
+    host-tool = hostToolBin;
     coverage-check = coverageCheckBin;
     adr-promoter = adrPromoter;
     dev = devBin;

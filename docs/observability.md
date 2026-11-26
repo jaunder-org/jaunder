@@ -407,8 +407,8 @@ snapshot field, publishing no datapoint rather than zero or a partial value.
 ### Host command-run traces (#1858, #1965)
 
 Every `dev` command records its gate and each step as an OpenTelemetry span.
-Each process in the run, including host-proof, writes start and end span records
-under `.xtask/run/<run_id>.trace.d/`; host-proof joins through
+Each `dev` process in the run writes start and end span records under
+`.xtask/run/<run_id>.trace.d/`; nested ones join through
 `TRACEPARENT`/`TRACESTATE` and `JAUNDER_TRACE_DIR`
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)). When the root
 `dev` process ends it merges the records into one Perfetto-compatible Chrome

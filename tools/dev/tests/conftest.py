@@ -192,14 +192,13 @@ class Checkout:
 # fake's copy of `nix/packages.nix` and `nix/repository-policy.nix`: it cannot
 # catch a binary those packages lack, which building each package proves.
 TOOL_PACKAGES = {
+    "host-tool": ("admit-inputs",),
     "repository-policy": (
         "source-contracts",
         "repository-docs",
         "scoped-leptosfmt",
     ),
     "host-proof": (
-        "admit-inputs",
-        "csr-prerequisite",
         "e2e-evidence",
         "source-diagnostics",
         "trace-analysis",
@@ -216,8 +215,7 @@ TOOL_PACKAGES = {
 # answers index custody's queries (the only Git that honours a hook's
 # overrides) for a clean index, refuses inherited repository overrides
 # anywhere else with 23, answers checkout discovery from the real Git, and
-# reports a dirty tree while `dirty-status` exists. The CSR prerequisite prints
-# its root under `/verified`.
+# reports a dirty tree while `dirty-status` exists.
 # An evaluation prints a fake derivation named after the installable's last
 # component. Nix cache queries fail, so Nix steps record no cache source; a
 # build's out-link points at a path named after the link in $FAKE_STORE, where
@@ -302,9 +300,6 @@ case "$name $*" in
   'nix path-info --derivation '*)
     for installable; do :; done
     printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
-  'csr-prerequisite '*)
-    for root; do :; done
-    printf '/verified%s\n' "$root" ;;
   'admit-inputs '*|'e2e-evidence '*|'source-diagnostics '*|\
   'trace-analysis '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;

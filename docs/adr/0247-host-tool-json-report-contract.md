@@ -5,6 +5,8 @@
 - Issue: [#1898](https://github.com/jaunder-org/jaunder/issues/1898)
 - Amended: 2026-11-24 — `e2e-local` is no longer a JSON-report tool (#2066)
 - Amended: 2026-11-25 — `wasm-audit` is no longer a JSON-report tool (#2101)
+- Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
+  retired (#2102)
 
 ## Context
 
@@ -68,6 +70,9 @@ diagnostics (`trace-analysis`, `source-diagnostics`); `tools/coverage`
 `qualification-host` and its own plain detail output under
 [ADR-0239](0239-qualification-workflow-ownership.md). CI's e2e shell runs the
 Nix-built `packages.host-proof` verifier.
+
+_Amended by #2102._ `admit-inputs` is host-tool's one executable and renders no
+report: a refusal is exit 1 and stderr. `csr-prerequisite` is retired.
 
 ## Consequences
 

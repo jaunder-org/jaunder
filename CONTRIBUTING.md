@@ -925,17 +925,17 @@ tree's code with no virtualenv. Bytecode caching stays on; `__pycache__/` is
 ignored. Nix checks run a `dev` package built from a filtered `tools/dev/`
 source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
-(`repository-docs`, `source-contracts`), `host-proof` (`e2e-evidence`,
-`trace-analysis`, `source-diagnostics`, `admit-inputs`, which `test-local` and
-`e2e-local` use, and `test-local`'s `csr-prerequisite`) and `coverage`
-(`coverage-check`, nondefault `host` feature). `dev` runs them with locked Cargo
-from the active checkout; CI's E2E verifier uses its Nix output
-(`packages.host-proof`). Host tools run only on the host, never inside
-derivations. Runtime paths belong to the active checkout, not the tool's store
-build directory. The executables that run inside derivations are likewise owned
-by the crates whose logic they run: `coverage-sandbox` (`coverage`), `doctests`
-(`doctests`), and the dedicated `perf-producer` and `system-artifacts` crates.
-Each is its own Nix package, and a derivation takes only the one it runs.
+(`repository-docs`, `source-contracts`), `host-tool` (`admit-inputs`, which
+`test-local` and `e2e-local` use), `host-proof` (`e2e-evidence`,
+`trace-analysis`, `source-diagnostics`) and `coverage` (`coverage-check`,
+nondefault `host` feature). `dev` runs them with locked Cargo from the active
+checkout; CI's E2E verifier uses its Nix output (`packages.host-proof`). Host
+tools run only on the host, never inside derivations. Runtime paths belong to
+the active checkout, not the tool's store build directory. The executables that
+run inside derivations are likewise owned by the crates whose logic they run:
+`coverage-sandbox` (`coverage`), `doctests` (`doctests`), and the dedicated
+`perf-producer` and `system-artifacts` crates. Each is its own Nix package, and
+a derivation takes only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -1326,11 +1326,10 @@ the root span and each step is a child span, nested as the gates compose. Child
 processes join through the OpenTelemetry environment carrier
 (`TRACEPARENT`/`TRACESTATE`) plus `JAUNDER_TRACE_DIR`, which names the run
 directory; the root is the `dev` process that finds `JAUNDER_TRACE_DIR` unset.
-`host-proof csr-prerequisite`, a step of `dev test-local`, writes its validation
-phases into the same run; no other host-proof executable joins it. An
-`e2e-producer` step adds its VM run's measured phases, read from the lifted
-phase manifest, and the `coverage` step adds its producer's stages (below), both
-as [producer-timed phases](docs/adr/0263-dev-traces-producer-timed-phases.md)
+No Rust host tool joins the run. An `e2e-producer` step adds its VM run's
+measured phases, read from the lifted phase manifest, and the `coverage` step
+adds its producer's stages (below), both as
+[producer-timed phases](docs/adr/0263-dev-traces-producer-timed-phases.md)
 ([observability](docs/observability.md)). A step span records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
@@ -1397,12 +1396,12 @@ Neither elapsed time nor a missing `cache` attribute proves a fresh build,
 substitution or newly executed Nix builder work. Nested or overlapping spans are
 not additive CPU or human effort and must not be summed as such.
 
-Every process appends span start and end records, one JSON object per line, to
-its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`; the
-format is locked by `tools/dev/tests/golden/span-records.jsonl` for both the
-Python and the Rust writer. When the root ends, even after a failure, it merges
-the records into `.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span
-ids in `args` and overlapping siblings on separate tracks. Open that file at
+Every `dev` process appends span start and end records, one JSON object per
+line, to its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`;
+the format is locked by `tools/dev/tests/golden/span-records.jsonl`. When the
+root ends, even after a failure, it merges the records into
+`.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span ids in `args` and
+overlapping siblings on separate tracks. Open that file at
 <https://ui.perfetto.dev>. `dev trace summary [PATH] [--markdown]` reads a run
 directory (the latest under `.xtask/run/` by default, or one downloaded from CI)
 and prints the slowest spans, plus every span that did not end `ok`, with depth,
@@ -1977,7 +1976,7 @@ dev test-local -p storage site_config_primitives_round_trip
 1. `host-artifacts-lock` waits for the checkout-local
    `.xtask/host-artifacts.lock` (an exclusive `flock`, held by `dev` itself in a
    descriptor no child inherits) and keeps it until the run ends.
-2. `csr-admission` (`host-proof admit-inputs .#csrBundle.sourceAdmits`) refuses
+2. `csr-admission` (host-tool's `admit-inputs .#csrBundle.sourceAdmits`) refuses
    relevant nonignored untracked source/producer/Nix inputs: use `git add -N` or
    `git add` to include them in the Git flake snapshot. Nothing is staged
    automatically; tracked dirty and intent-to-add inputs participate, unrelated
@@ -1986,26 +1985,26 @@ dev test-local -p storage site_config_primitives_round_trip
    checkout as the GC root `.xtask/gcroots/csr-bundle` (not the incomplete
    `.#site`), recording its cache state. Nix and the configured Cachix
    substituter own artifact identity/reuse; no cached test verdict is used.
-4. `csr-prerequisite` (`host-proof csr-prerequisite <root>`) validates the
-   complete immutable output and prints its absolute root.
-5. `image-worker` builds `target/debug/jaunder`, which storage and seeding tests
-   start even when nextest selects only storage.
-6. `nextest-build`, without args only, compiles the workspace's tests
+4. `image-worker` builds `target/debug/jaunder`, which storage and seeding tests
+   start even when nextest selects only storage. Its build script validates the
+   bundle (Vite manifest and outputs, system artifacts, `index.html`) and fails
+   closed.
+5. `nextest-build`, without args only, compiles the workspace's tests
    (`cargo nextest run --no-run --workspace`). Hand-typed args compile in
    `nextest`: nextest refuses some run options, such as `--no-fail-fast`, with
    `--no-run`.
-7. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without
+6. `nextest` runs `pg-run cargo nextest run <args>` (`--workspace` without
    args).
 
-Steps 5–7 share one environment, so build scripts that track it never rebuild
+Steps 4–6 share one environment, so build scripts that track it never rebuild
 between them: `CFLAGS` set empty when absent (an inherited value is kept),
-`JAUNDER_CSR_BUNDLE_DIR` set to the verified root and `JAUNDER_TEST_EXECUTABLE`
-to the image worker.
+`JAUNDER_CSR_BUNDLE_DIR` set to the bundle's resolved absolute root (so a new
+bundle is a new value) and `JAUNDER_TEST_EXECUTABLE` to the image worker.
 
 An explicit `JAUNDER_CSR_BUNDLE_DIR` skips steps 2 and 3; step 4 validates it
-instead. The first failing step stops the run, so admission, realization or
-validation failure prevents compilation, without fallback to an older root or
-`target/site`.
+the same way. The first failing step stops the run, so admission, realization or
+validation failure prevents the tests from compiling or running, without
+fallback to an older root or `target/site`.
 
 The lock guards the bundle's GC root and the image worker: without it a
 concurrent `test-local` in the same checkout could repoint the root (leaving the
