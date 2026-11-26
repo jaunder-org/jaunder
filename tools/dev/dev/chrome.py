@@ -1,6 +1,7 @@
 """Merges a run directory into one Chrome trace JSON file for Perfetto."""
 
 import json
+import math
 from pathlib import Path
 
 from dev import spans
@@ -11,23 +12,33 @@ def tracks(run: list[RunSpan]) -> dict[str, int]:
     """Assigns each span a track from the span tree.
 
     Perfetto nests slices on one track by time, so a child shares its parent's
-    track only when it fits inside the parent and after its earlier siblings;
-    an overlapping sibling, or one outside its parent, opens a new track.
+    track only when it fits inside the parent and after its earlier siblings.
+    An overlapping sibling, or one outside its parent, takes the first track
+    whose every slice has ended by its start, or a new one: an e2e lane's
+    thousands of overlapping spans then need tens of tracks, not thousands.
     """
     children = spans.children(run)
     assigned: dict[str, int] = {}
-    opened = 1
+    # When each track's last slice ends. The top level nests on track 0, so it
+    # is never free; a slice nested on a track ends within one already counted.
+    free_at: list[float] = [math.inf]
+
+    def claim(span: RunSpan) -> int:
+        for track, end in enumerate(free_at):
+            if end <= span.start_ns:
+                free_at[track] = span.end_ns
+                return track
+        free_at.append(span.end_ns)
+        return len(free_at) - 1
 
     def place(parent: str | None, track: int, start: int, end: int) -> None:
-        nonlocal opened
         cursor = start
         for child in children[parent]:
             if child.start_ns >= cursor and child.end_ns <= end:
                 assigned[child.span_id] = track
                 cursor = child.end_ns
             else:
-                assigned[child.span_id] = opened
-                opened += 1
+                assigned[child.span_id] = claim(child)
             place(child.span_id, assigned[child.span_id], child.start_ns, child.end_ns)
 
     place(None, 0, 0, max((span.end_ns for span in run), default=0))

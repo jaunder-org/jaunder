@@ -40,11 +40,25 @@ if [[ $1 == build ]]; then
   echo "producer $lane" >> "$EVENTS"
   echo "producer exit ${{BUILD_STATUS:-23}}" >&2
   if [[ -n ${{PHASES-}} ]]; then
-    # A VM run during this step: its phase manifest starts now.
+    # A VM run during this step: its phase manifest, and any CAPTURE trace,
+    # start now. "@NOW+<ms>@" is that many milliseconds later.
     fresh=$(mktemp -d)
     [[ -z ${{LANE_EVIDENCE-}} ]] || cp "$LANE_EVIDENCE"/* "$fresh/"
     now=$(date +%s%N)
-    printf '%s' "${{PHASES//@NOW@/$now}}" > "$fresh/e2e-phase-$lane.json"
+    stamp() {{
+      local text=$1 later='@NOW\\+([0-9]+)@'
+      while [[ $text =~ $later ]]; do
+        text=${{text//"${{BASH_REMATCH[0]}}"/$((now + BASH_REMATCH[1] * 1000000))}}
+      done
+      printf '%s' "${{text//@NOW@/$now}}"
+    }}
+    stamp "$PHASES" > "$fresh/e2e-phase-$lane.json"
+    if [[ -n ${{CAPTURE-}} ]]; then
+      mkdir -p "$fresh/vm/capture"
+      stamp "$CAPTURE" > "$fresh/vm/capture/otel-traces.jsonl"
+      tar -czf "$fresh/capture-$lane.tar.gz" -C "$fresh/vm" capture
+      rm -r "$fresh/vm"
+    fi
     OUTPUT=$("$REAL_NIX" store add-path --name e2e-phase-fixture "$fresh")
     echo "$OUTPUT" > "$EVENTS.output"
     echo "$now" > "$EVENTS.now"
@@ -450,6 +464,188 @@ def test_a_producer_without_this_runs_phases_shows_no_children(
     assert phase_children(e2e) == {}
     step = e2e.checkout.merged()["e2e-producer"]
     assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
+
+
+INJECTED = "2b2b2b2b2b2b2b2b"
+# A gate lasting 50 ms from the fake build's clock, for capture spans to fit in.
+GATE_PHASES = manifest(phase_entry("gate-execution", "success", 50, "@NOW@"))
+
+
+def otlp(
+    name: str,
+    span_id: str,
+    parent: str,
+    start_ms: int,
+    end_ms: int,
+    *attributes: dict[str, Any],
+    status: object = None,
+) -> dict[str, Any]:
+    """One OTLP span, timed in milliseconds after the fake build's clock."""
+    return {
+        "traceId": "2b" * 16,
+        "spanId": span_id,
+        "parentSpanId": parent,
+        "name": name,
+        "startTimeUnixNano": f"@NOW+{start_ms}@",
+        "endTimeUnixNano": f"@NOW+{end_ms}@",
+        "attributes": list(attributes),
+        **({} if status is None else {"status": {"code": status}}),
+    }
+
+
+def otlp_capture(*spans: dict[str, Any]) -> str:
+    """OTLP JSONL as the collector writes it, one span per line."""
+    return "".join(
+        json.dumps({"resourceSpans": [{"scopeSpans": [{"spans": [span]}]}]}) + "\n"
+        for span in spans
+    )
+
+
+# Two overlapping tests, one with a failed request and its storage span, plus
+# a request made before any test owned it, a background root and an orphan.
+TEST_TREE = otlp_capture(
+    otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 40),
+    otlp("e2e.test", "t1", "l1", 6, 30),
+    otlp(
+        "request",
+        "r1",
+        "t1",
+        10,
+        20,
+        {"key": "method", "value": {"stringValue": "GET"}},
+        {"key": "status", "value": {"intValue": "500"}},
+        {"key": "busy_ns", "value": {"intValue": 7}},
+        {"key": "cached", "value": {"boolValue": False}},
+        {"key": "ratio", "value": {"doubleValue": 0.5}},
+        {"key": "tags", "value": {"arrayValue": {"values": []}}},
+        status=2,
+    ),
+    otlp("storage.posts.get", "s1", "r1", 11, 12),
+    otlp("e2e.test.lifecycle", "l2", INJECTED, 10, 35),
+    otlp("unattributed", "p1", INJECTED, 8, 9, status=1),
+    otlp("storage.write_scope", "b1", "", 1, 2),
+    otlp("lost-parent", "o1", "gone", 12, 13),
+)
+
+
+def capture_events(e2e: E2E) -> dict[str, dict[str, Any]]:
+    """The merged slices of the gate's test tree, keyed by span name."""
+    events = e2e.checkout.events()
+    by_id = {event["args"]["span_id"]: event for event in events}
+    (gate,) = [event for event in events if event["name"] == "gate-execution"]
+
+    def under_gate(event: dict[str, Any]) -> bool:
+        parent = by_id.get(event["args"]["parent_id"])
+        return parent is not None and (parent is gate or under_gate(parent))
+
+    return {event["name"]: event for event in events if under_gate(event)}
+
+
+@pytest.mark.parametrize("status", ["0", "23"])
+def test_a_lanes_test_tree_is_shown_under_its_gate_execution_phase(
+    e2e: E2E, status: str
+) -> None:
+    result = e2e.run(
+        "e2e-producer",
+        LANE,
+        status=status,
+        PHASES=GATE_PHASES,
+        CAPTURE=TEST_TREE,
+        PRODUCER_SECONDS="0.1",
+    )
+    # A built lane goes on to e2e-evidence, which this lane's fixture fails.
+    assert result.returncode == (1 if status == "0" else 23), result
+    assert b"no capture spans" not in result.stderr, result.stderr
+    tree = capture_events(e2e)
+    assert set(tree) == {
+        "e2e.test.lifecycle",
+        "e2e.test",
+        "request",
+        "storage.posts.get",
+        "unattributed",
+    }
+    lifecycles = [
+        event
+        for event in e2e.checkout.events()
+        if event["name"] == "e2e.test.lifecycle"
+    ]
+    (gate,) = [e for e in e2e.checkout.events() if e["name"] == "gate-execution"]
+    assert len(lifecycles) == 2
+    for top in [*lifecycles, tree["unattributed"]]:
+        assert top["args"]["parent_id"] == gate["args"]["span_id"]
+    assert tree["e2e.test"]["args"]["parent_id"] in {
+        event["args"]["span_id"] for event in lifecycles
+    }
+    assert tree["request"]["args"]["parent_id"] == tree["e2e.test"]["args"]["span_id"]
+    child = tree["storage.posts.get"]["args"]["parent_id"]
+    assert child == tree["request"]["args"]["span_id"]
+    now_us = int((e2e.root / "events.now").read_text()) // 1000
+    assert (tree["request"]["ts"], tree["request"]["dur"]) == (now_us + 10_000, 10_000)
+    request = tree["request"]["args"]
+    assert {key: request[key] for key in ["method", "status", "busy_ns"]} == {
+        "method": "GET",
+        "status": 500,
+        "busy_ns": 7,
+    }
+    assert (request["cached"], request["ratio"]) == (False, 0.5)
+    assert "tags" not in request
+    assert request["otel.status_code"] == "ERROR"
+    assert tree["unattributed"]["args"]["otel.status_code"] == "OK"
+    assert "otel.status_code" not in tree["e2e.test"]["args"]
+    assert {event["args"]["jaunder.status"] for event in tree.values()} == {""}
+    step = e2e.checkout.merged()["e2e-producer"]
+    assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
+
+
+@pytest.mark.parametrize(
+    ("phases", "capture", "warned"),
+    [
+        # A reused output's gate ran before this step: nothing to place under.
+        (
+            manifest(phase_entry("gate-execution", "success", 50, 1_000_000_000)),
+            TEST_TREE,
+            False,
+        ),
+        # A failed lane may lift no capture.
+        (GATE_PHASES, None, False),
+        (GATE_PHASES, "not json\n", True),
+        # Lifecycle spans naming different parents: no one injected parent.
+        (
+            GATE_PHASES,
+            otlp_capture(
+                otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 10),
+                otlp("e2e.test.lifecycle", "l2", "other", 12, 20),
+            ),
+            True,
+        ),
+        # A tree span without a start time.
+        (GATE_PHASES, TEST_TREE.replace('"@NOW+11@"', "null"), True),
+        # The VM's clock put a test past the end of the gate.
+        (
+            GATE_PHASES,
+            otlp_capture(otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 500)),
+            True,
+        ),
+    ],
+    ids=["reused", "no-capture", "malformed", "no-single-parent", "untimed", "skewed"],
+)
+def test_a_capture_that_cannot_be_placed_shows_no_spans(
+    e2e: E2E, phases: str, capture: str | None, warned: bool
+) -> None:
+    result = e2e.run(
+        "e2e-producer",
+        LANE,
+        status="23",
+        PHASES=phases,
+        # An empty CAPTURE lifts none.
+        CAPTURE=capture or "",
+        PRODUCER_SECONDS="0.1",
+    )
+    assert result.returncode == 23, result
+    assert (b"no capture spans" in result.stderr) == warned, result.stderr
+    names = {event["name"] for event in e2e.checkout.events()}
+    assert not names & {"e2e.test.lifecycle", "e2e.test", "request"}
+    assert e2e.checkout.merged()["e2e-producer"]["args"]["jaunder.status"] == "failed"
 
 
 def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:

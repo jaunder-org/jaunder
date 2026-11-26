@@ -1330,7 +1330,13 @@ No Rust host tool joins the run. An `e2e-producer` step adds its VM run's
 measured phases, read from the lifted phase manifest, and the `coverage` step
 adds its producer's stages (below), both as
 [producer-timed phases](docs/adr/0263-dev-traces-producer-timed-phases.md)
-([observability](docs/observability.md)). A step span records:
+([observability](docs/observability.md)). Under the lane's `gate-execution`
+phase, the `e2e-producer` step also adds its lifted capture's test tree: each
+test's spans and the server requests under them. The tree is written whole, and
+only when its top-level spans fit inside that phase
+([e2e capture spans](docs/adr/drafts/dev-trace-shows-e2e-capture-spans.md)). A
+capture span carries `otel.status_code` instead of `jaunder.status`. A step span
+records:
 
 - `jaunder.status`: `ok`, `failed`, `signalled`, or `incomplete` (set by the
   merge for a span with no end record or no parent, as when a child is killed);
@@ -1400,19 +1406,20 @@ Every `dev` process appends span start and end records, one JSON object per
 line, to its own `<pid>-<random>.jsonl` file in `.xtask/run/<run_id>.trace.d/`;
 the format is locked by `tools/dev/tests/golden/span-records.jsonl`. When the
 root ends, even after a failure, it merges the records into
-`.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span ids in `args` and
-overlapping siblings on separate tracks. Open that file at
-<https://ui.perfetto.dev>. `dev trace summary [PATH] [--markdown]` reads a run
-directory (the latest under `.xtask/run/` by default, or one downloaded from CI)
-and prints the slowest spans, plus every span that did not end `ok`, with depth,
-status, cache, fetched bytes and each parent's untraced time; overlapping
-children are not summed. A runner line heads the table, and a `before dev` row
-shows a CI job's time from its start to the root (setup-ci, earlier steps and
-devShell entry). Only "Set up job" and checkout precede the mark, and the
-trace-summary step, uploads and post-job cleanup follow the root. Spans go only
-to these files; `dev` exports nothing over OTLP. Inside a Nix check the trace
-lands in the build directory and is discarded; the host-side Nix step records
-the cache result and, for coverage, the stages its producer timed.
+`.xtask/run/<run_id>.trace.json` (Chrome trace JSON) with span ids in `args`.
+Overlapping siblings go on separate tracks, and a track is reused once all of
+its slices have ended. Open that file at <https://ui.perfetto.dev>.
+`dev trace summary [PATH] [--markdown]` reads a run directory (the latest under
+`.xtask/run/` by default, or one downloaded from CI) and prints the slowest
+spans, plus every span that did not end `ok`, with depth, status, cache, fetched
+bytes and each parent's untraced time; overlapping children are not summed. A
+runner line heads the table, and a `before dev` row shows a CI job's time from
+its start to the root (setup-ci, earlier steps and devShell entry). Only "Set up
+job" and checkout precede the mark, and the trace-summary step, uploads and
+post-job cleanup follow the root. Spans go only to these files; `dev` exports
+nothing over OTLP. Inside a Nix check the trace lands in the build directory and
+is discarded; the host-side Nix step records the cache result and, for coverage,
+the stages its producer timed.
 
 Tracing never changes a step's exit status, stdout or stderr. If the trace
 directory cannot be written, `dev` warns once on stderr and otherwise behaves

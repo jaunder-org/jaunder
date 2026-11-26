@@ -7,12 +7,13 @@ does not depend on where it ran. The verdicts themselves run here, in-process
 
 import json
 import sys
+from collections import defaultdict
 from collections.abc import Callable
 from pathlib import Path
 
 from opentelemetry.trace import Span
 
-from dev import e2e_evidence, server_fn_coverage, steps, trace
+from dev import e2e_evidence, server_fn_coverage, steps, trace, traces
 from dev.commands import SOURCE_CONTRACT
 from dev.evidence import CATALOG, EvidenceError
 from dev.server_fn_coverage import Coverage
@@ -21,6 +22,12 @@ from dev.server_fn_coverage import Coverage
 DIAGNOSTICS = ".xtask/diagnostics"
 # Server-function flow coverage is derived from this pair's reconciled lanes.
 COVERAGE_PAIR = ("sqlite", "chromium")
+# The VM phase that runs Playwright, under which the lane's test tree is shown.
+GATE_PHASE = "gate-execution"
+# The e2e harness's root span for each test.
+LIFECYCLE_SPAN = "e2e.test.lifecycle"
+# Where a capture span keeps its OTLP status: `jaunder.status` is a step's.
+OTEL_STATUS_CODE = "otel.status_code"
 
 
 def run_all(jobs: str) -> None:
@@ -59,8 +66,81 @@ def _measured(entry: object) -> trace.Phase | None:
     return trace.Phase(name, start, start + duration * 1_000_000, outcome == "success")
 
 
+def capture_tree(spans: list[traces.Span]) -> list[trace.Imported]:
+    """The lane's test tree: every capture span below the parent span the VM
+    driver injects into Playwright, which the capture itself never holds.
+
+    The host never sees that parent, so it is the one every
+    `e2e.test.lifecycle` span names. Background spans no test owns, and spans
+    whose parent was lost, are not in the tree. A capture without exactly one
+    such parent, or with a tree span lacking times, is malformed.
+    """
+    parents = {span.parent_span_id for span in spans if span.name == LIFECYCLE_SPAN}
+    known = {span.span_id for span in spans}
+    if len(parents) != 1 or "" in parents or parents & known:
+        raise EvidenceError(
+            f"capture has no single injected parent for its {LIFECYCLE_SPAN} spans"
+        )
+    children: dict[str, list[traces.Span]] = defaultdict(list)
+    for span in spans:
+        children[span.parent_span_id].append(span)
+    seen: set[str] = set()
+
+    def imported(span: traces.Span) -> trace.Imported:
+        if span.span_id in seen:
+            raise EvidenceError(f"capture span id {span.span_id} repeats in its tree")
+        seen.add(span.span_id)
+        if span.start_unix_nano is None or span.end_unix_nano is None:
+            raise EvidenceError(f"capture span {span.name} has no start or end time")
+        attributes = traces.attributes(span.raw)
+        code = traces.status_code(span.raw)
+        if code is not None:
+            attributes[OTEL_STATUS_CODE] = code
+        return trace.Imported(
+            span.name,
+            span.start_unix_nano,
+            span.end_unix_nano,
+            attributes,
+            [imported(child) for child in children[span.span_id]],
+        )
+
+    return [imported(span) for span in children[parents.pop()]]
+
+
+def _capture_spans(capture: Path, gate: trace.Phase, span: Span) -> None:
+    """Adds the lane's test tree, from its lifted capture, under the
+    `gate-execution` span this run wrote.
+
+    The capture is on the VM's clock and the phase on the host's, so a tree
+    whose top-level spans do not all fit inside the phase is left out whole
+    rather than misplaced. A failed lane may lift no capture; any other read
+    failure is reported, and none changes the step.
+    """
+    if not capture.exists():
+        return
+    try:
+        content = traces.read_trace_member(capture)
+        tree = capture_tree(traces.parse_spans(content, traces.Filters(), str(capture)))
+    except (EvidenceError, RecursionError) as error:
+        print(f"dev: {capture}: no capture spans: {error}", file=sys.stderr, flush=True)
+        return
+    outside = sum(
+        not gate.start_ns <= top.start_ns <= top.end_ns <= gate.end_ns for top in tree
+    )
+    if outside:
+        print(
+            f"dev: {capture}: no capture spans: {outside} of {len(tree)} top-level"
+            f" spans fall outside {GATE_PHASE}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return
+    trace.record_spans(span, tree)
+
+
 def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
-    """Adds the lane's VM phases, from its lifted manifest, under the step.
+    """Adds the lane's VM phases, from its lifted manifest, under the step,
+    and its capture's test tree under the `gate-execution` phase.
 
     Only phases this step's own run measured are shown: a reused output's
     manifest, or one from another run, falls outside the step. Anything
@@ -68,20 +148,27 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     changes the step. A failed lane may leave no manifest at all; any other
     read failure is reported.
     """
+    lifted = e2e_evidence.lane_evidence(lane, Path(DIAGNOSTICS, check))
 
     def add(step: Span, started_ns: int) -> None:
-        path = Path(DIAGNOSTICS, check, f"e2e-phase-{lane}.json")
         try:
-            entries = json.loads(path.read_bytes()).get("phases")
+            entries = json.loads(lifted.phase.read_bytes()).get("phases")
         except FileNotFoundError:
             return
         except (OSError, ValueError, AttributeError, RecursionError) as error:
-            print(f"dev: {path}: no phase spans: {error}", file=sys.stderr, flush=True)
+            print(
+                f"dev: {lifted.phase}: no phase spans: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
             return
         measured = map(_measured, entries if isinstance(entries, list) else [])
-        trace.record_phases(
+        written = trace.record_phases(
             step, started_ns, [phase for phase in measured if phase is not None]
         )
+        for phase, span in written:
+            if phase.name == GATE_PHASE:
+                _capture_spans(lifted.capture, phase, span)
 
     return add
 

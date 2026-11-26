@@ -60,16 +60,17 @@ failed rows; the measured green lane had 13.
 clock. The NixOS test driver times `gate-execution` on the host. On the measured
 lane, the test tree began 1.8 s after `gate-execution` began and ended 0.39 s
 before it ended. Following ADR-0263, which leaves out phases it cannot place,
-`dev` checks only that every lifecycle span lies inside `gate-execution`. A
-server span may outlive its test, and the track fix places such a span
-correctly.
+`dev` checks only that every top-level span of the tree lies inside
+`gate-execution`. Those are the spans directly under the injected parent: each
+lifecycle span, plus any request made before a test owned it. A server span may
+outlive its test, and the track fix places such a span correctly.
 
 | Situation, checked in this order                                                 | Result                               |
 | -------------------------------------------------------------------------------- | ------------------------------------ |
 | No `gate-execution` span this run (reused output; a timed-out gate records none) | no capture spans, silent             |
 | No capture file (a failed lane lifted nothing)                                   | no capture spans, silent             |
 | Capture unreadable or malformed                                                  | no capture spans, one `dev:` warning |
-| Any lifecycle span outside `gate-execution`                                      | no capture spans, one `dev:` warning |
+| Any top-level tree span outside `gate-execution`                                 | no capture spans, one `dev:` warning |
 | Otherwise                                                                        | the whole test tree                  |
 
 The capture never changes the step's status or exit code, or the child's output.

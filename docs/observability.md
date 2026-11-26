@@ -415,8 +415,9 @@ Each `dev` process in the run writes start and end span records under
 Trace Event JSON file, `.xtask/run/<run_id>.trace.json`, and marks a span with
 no end record or no parent as `incomplete`. A child process that does not join
 is opaque time inside the step that started it. These spans are process timing,
-written only to files: they are not OpenTelemetry request attribution and are
-never exported over OTLP.
+written only to files and never exported over OTLP. The one exception is an e2e
+lane's capture spans (below). They are request attribution, copied in from the
+lane's OTLP capture after the run.
 
 An `e2e-producer` step's children are its VM run's measured phases (#2030):
 `vm-startup-readiness`, `gate-execution`, `result-lift` and `post-gate-checks`.
@@ -429,6 +430,22 @@ run. A missing manifest, as after a timed-out lane, gives no children; an
 unreadable or malformed one gives none either, with one `dev:` warning. The Nix
 build and the work between phases (package copy, seeding, census preflight) stay
 the step's untraced time.
+
+Under `gate-execution`, the step also writes the lane's test tree from its
+lifted `capture-<lane>.tar.gz` (#2115). That is every span below the parent span
+the VM driver injects into Playwright: each test's `e2e.test.lifecycle` span and
+everything under it, with its server `request`, server and storage spans.
+Background spans no test owns are left out.
+
+- Each span keeps its capture times and its plain-valued attributes.
+- Its OTLP status becomes `otel.status_code`.
+- It carries no `jaunder.status`.
+
+The tree is written whole or not at all. It is left out, with one `dev:`
+warning, when one of its top-level spans falls outside `gate-execution`, since
+the capture runs on the guest's clock, or when the capture is unreadable. It is
+left out silently when this run wrote no `gate-execution` or the lane lifted no
+capture ([e2e capture spans](adr/drafts/dev-trace-shows-e2e-capture-spans.md)).
 
 The `coverage` step's `build` child likewise has, as children, the stages its
 producer timed (#2031): `workspace-resolution` through `crap-report`, read from

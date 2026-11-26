@@ -4672,7 +4672,13 @@ it cannot trace (the Rust coverage producer's `status.json` stages, an E2E
 lane's VM phase manifest), `dev` writes them afterwards as children of the step
 that ran it, at the producer's recorded start and duration. Only phases inside
 that step are written, so a reused output's or an earlier run's are left out
-([producer-timed phases](adr/0263-dev-traces-producer-timed-phases.md)). Rust
+([producer-timed phases](adr/0263-dev-traces-producer-timed-phases.md)). Under
+an E2E lane's `gate-execution` phase, `dev` likewise writes the lane's test tree
+from its lifted OTLP capture: every span below the parent injected into
+Playwright, with plain-valued attributes, `otel.status_code` and no
+`jaunder.status`. It writes the whole tree only when every top-level span fits
+inside the phase, and otherwise none of it
+([e2e capture spans](adr/drafts/dev-trace-shows-e2e-capture-spans.md)). Rust
 host tools come from their flake packages, each built as its own
 `<package>-build` Nix step and run from its output
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)),
@@ -4697,14 +4703,15 @@ Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 Every `dev` process appends start and end span records to its own file in
 `.xtask/run/<run_id>.trace.d/`, in one format locked by a golden file. When the
 root ends it always merges them into `<run_id>.trace.json`, Chrome trace JSON
-that Perfetto opens, assigning tracks from the span tree and marking a span with
-no end or no parent `incomplete`. `dev trace summary [PATH] [--markdown]` reads
-a run's records locally or from a CI artifact; CI uploads `.xtask/run/` from
-every validation and E2E job and appends the summary to its step summary,
-diagnostically only. Spans go only to files, never OTLP, and tracing never
-changes a step's exit status or output. This replaces traced-run's custom span
-mechanism (`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding).
-Product telemetry is unchanged.
+that Perfetto opens. It assigns tracks from the span tree and reuses a track
+once all of its slices have ended. It marks a span with no end or no parent
+`incomplete`. `dev trace summary [PATH] [--markdown]` reads a run's records
+locally or from a CI artifact; CI uploads `.xtask/run/` from every validation
+and E2E job and appends the summary to its step summary, diagnostically only.
+Spans go only to files, never OTLP, and tracing never changes a step's exit
+status or output. This replaces traced-run's custom span mechanism
+(`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding). Product
+telemetry is unchanged.
 
 The auxiliary repository-policy package owns only the fixed documentation
 policies (`repository-docs`) and the fixed Rust/TypeScript source contracts
