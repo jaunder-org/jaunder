@@ -89,7 +89,8 @@ def producer(lane: str) -> None:
 
     The script builds the lane's check and lifts its artifacts, and the step
     records where that output came from and the VM phases its run measured;
-    only a successful lift is verified.
+    only a successful lift is verified. The lane is a verdict that must execute
+    here (ADR-0192), so an output this machine did not build fails the step.
     """
     check = f"e2e-{lane}"
     steps.run(
@@ -97,6 +98,7 @@ def producer(lane: str) -> None:
         ["bash", "scripts/e2e-workflow", "producer", lane],
         realizes=lambda: _selected_output(check),
         finished=_phase_spans(check, lane),
+        verdict=True,
     )
     output = _selected_output(check)
     steps.run(

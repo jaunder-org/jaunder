@@ -269,14 +269,17 @@ def wasm_tests() -> None:
 
 
 def _producer_and_gate(
-    check: str, finished: Callable[[Span, int], None] | None = None
+    check: str,
+    finished: Callable[[Span, int], None] | None = None,
+    verdict: bool = False,
 ) -> None:
     """Realizes a hermetic producer as a GC root, then its hard status gate.
 
-    `finished` is as for the producer's `build` step (`steps.nix_build`).
+    `finished` is as for the producer's `build` step and `verdict` as for both
+    builds (`steps.nix_build`).
     """
-    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished)
-    steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False)
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished, verdict=verdict)
+    steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False, verdict=verdict)
 
 
 def _non_negative_int(value: object) -> bool:
@@ -339,7 +342,9 @@ def _coverage_stage_spans(build: Span, started_ns: int) -> None:
 
 
 def coverage_workflow() -> None:
-    _producer_and_gate("coverage", _coverage_stage_spans)
+    # Rust coverage must execute for every tested commit (ADR-0192); static
+    # doctests may be substituted.
+    _producer_and_gate("coverage", _coverage_stage_spans, verdict=True)
     steps.run(
         "coverage-policy",
         [*steps.tool(COVERAGE_CHECK), "policy", "--out", COVERAGE_ROOT],

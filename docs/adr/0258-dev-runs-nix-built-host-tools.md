@@ -7,6 +7,8 @@
 - Amended: 2026-11-25 — `host-proof` no longer ships `wasm-audit` (#2101)
 - Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
   retired (#2102)
+- Amended: 2026-11-25 — `host-proof` no longer ships `source-diagnostics`
+  (#2103)
 
 ## Context
 
@@ -42,7 +44,9 @@ packages:
   now `dev`'s own Python. Its breakdown runs `twiggy` from the devShell rather
   than a Nix-built host tool. _Amended by #2102:_ `admit-inputs` moved to
   `host-tool` and `csr-prerequisite` is retired, so neither `test-local` nor
-  `e2e-local` builds `host-proof`.
+  `e2e-local` builds `host-proof`. _Amended by #2103:_ as of 2026-11-25,
+  `source-diagnostics` had been retired with the cache-safety probe
+  ([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
 - `host-tool` (_amended by #2102_): admit-inputs, the shared library's one
   executable, whose small closure keeps admission cheap to build
 - `coverage-check` (the `coverage` crate with its `host` feature)

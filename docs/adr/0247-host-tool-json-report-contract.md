@@ -47,6 +47,11 @@ Python (`tools/dev/dev/wasm_audit.py`). It prints its tables directly, prints a
 refusal on stderr, and uses its exit status as the verdict. Nothing read its
 JSON report, so none is written.
 
+_Amended by #2103:_ as of 2026-11-25, `source-diagnostics` had left this list
+and the host-proof list below, retired with the cache-safety probe
+([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+current state: ARCHITECTURE.md §Residual tooling owners after xtask retirement.
+
 The shared argument parser sends help and usage text to stderr and then points
 the process's stdout descriptor at stderr, reserving the real stdout for the
 report. Every child process and stray print therefore lands on stderr; only the

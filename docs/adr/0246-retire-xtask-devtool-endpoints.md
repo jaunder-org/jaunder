@@ -93,15 +93,19 @@ e2e-evidence and trace- analysis/source-diagnostics interfaces serve their real
 evidence/measurement consumers; Just sequences finite trace/benchmark workflows.
 _Amended by #2101:_ the bundle-size diagnostic and the raw wasm budget
 (`wasm-audit`) are no longer a host-proof interface. They are `dev`'s own
-Python, and twiggy does the wasm name and size reading. Existing test-support
-owns canonical seed-e2e. PG's scoped ephemeral closure/custody moves into
-coverage's nondefault ephemeral-postgres library module, shared by its producer
-and host-proof pg-run. No coverage-to-host-proof dependency, product-host
-source/ feature expansion, second PG implementation or new ProcessKit dependency
-is added. Qualification's separate system-artifacts target is a Nix-executed
-producer, not host qualification execution. No package becomes a catch-all
-dispatcher. Source/disposition evidence remains ignored; maintained docs explain
-interfaces and invariants, not a permanent command catalog.
+Python, and twiggy does the wasm name and size reading. _Amended by #2103:_ as
+of 2026-11-25, `source-diagnostics` had been retired
+([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+current state: ARCHITECTURE.md §Residual tooling owners after xtask retirement.
+Existing test-support owns canonical seed-e2e. PG's scoped ephemeral
+closure/custody moves into coverage's nondefault ephemeral-postgres library
+module, shared by its producer and host-proof pg-run. No coverage-to-host-proof
+dependency, product-host source/ feature expansion, second PG implementation or
+new ProcessKit dependency is added. Qualification's separate system-artifacts
+target is a Nix-executed producer, not host qualification execution. No package
+becomes a catch-all dispatcher. Source/disposition evidence remains ignored;
+maintained docs explain interfaces and invariants, not a permanent command
+catalog.
 
 Disposition manual commands individually. Preserve known operator/safety
 capabilities, measurement windows and failure/diagnostic interpretation;

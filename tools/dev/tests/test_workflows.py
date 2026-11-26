@@ -7,6 +7,7 @@ import json
 import shutil
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 from conftest import PACKAGE, REGISTERED_LONG_AGO, TOOL_PACKAGES, Checkout, Workflow
@@ -64,15 +65,9 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             ["coverage-check", "probe-source", "--help"],
         ],
     ),
-    *(
-        (
-            [binary, "--flag", SHELL_SYNTAX],
-            [*build("host-proof"), [binary, "--flag", SHELL_SYNTAX]],
-        )
-        for binary in [
-            "source-diagnostics",
-            "trace-analysis",
-        ]
+    (
+        ["trace-analysis", "--flag", SHELL_SYNTAX],
+        [*build("host-proof"), ["trace-analysis", "--flag", SHELL_SYNTAX]],
     ),
     (
         ["adr-format"],
@@ -109,7 +104,16 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 
 SELECTED = "/nix/store/0000-selected"
 VERIFIER_NIX = r"""#!/bin/sh
-case "$1 $2" in 'path-info --derivation') ;; eval*|path-info*) exit 1 ;; esac
+case "$1 $2" in
+  'path-info --derivation') ;;
+  path-info*)
+    # Built here unless ULTIMATE says otherwise, with no registration time: no
+    # cache source is recorded.
+    for path; do :; done
+    printf '{"%s":{"ultimate":%s}}\n' "$path" "${ULTIMATE:-true}"
+    exit 0 ;;
+  eval*) exit 1 ;;
+esac
 printf '%s\037' nix "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
 case "$*" in
@@ -124,12 +128,13 @@ printf '{"steps":[]}\n'
 """
 
 
-def test_a_producer_builds_then_verifies_the_output_its_build_selected(
-    workflow: Workflow,
-) -> None:
-    lane = "sqlite-chromium-1-of-3"
+LANE = "sqlite-chromium-1-of-3"
+
+
+def _selected_lane(workflow: Workflow) -> Path:
+    """A lane whose build record selects SELECTED; returns the verifier output."""
     root = workflow.root
-    record = root / ".xtask" / "diagnostics" / f"e2e-{lane}" / "build.json"
+    record = root / ".xtask" / "diagnostics" / f"e2e-{LANE}" / "build.json"
     record.parent.mkdir(parents=True)
     record.write_text(json.dumps([{"outputs": {"out": SELECTED}}]))
     workflow.checkout.executable("nix", VERIFIER_NIX)
@@ -139,6 +144,26 @@ def test_a_producer_builds_then_verifies_the_output_its_build_selected(
     (verifier / "bin" / "e2e-evidence").symlink_to(
         workflow.checkout.bin / "e2e-evidence"
     )
+    return verifier
+
+
+def test_a_lane_this_machine_did_not_build_fails_before_verification(
+    workflow: Workflow,
+) -> None:
+    verifier = _selected_lane(workflow)
+    result = workflow.dev(
+        "e2e-producer", LANE, VERIFIER_OUT=str(verifier), ULTIMATE="false"
+    )
+    assert result.returncode == 1, result
+    assert b"dev: e2e-producer: verdict not executed here" in result.stderr
+    assert workflow.commands() == [["bash", "scripts/e2e-workflow", "producer", LANE]]
+
+
+def test_a_producer_builds_then_verifies_the_output_its_build_selected(
+    workflow: Workflow,
+) -> None:
+    lane = LANE
+    verifier = _selected_lane(workflow)
     result = workflow.dev("e2e-producer", lane, VERIFIER_OUT=str(verifier))
     assert result.returncode == 0, result
     assert workflow.commands() == [
@@ -385,7 +410,6 @@ def test_report_tools_fail_closed_without_a_report(
 @pytest.mark.parametrize(
     "command",
     [
-        "source-diagnostics",
         "trace-analysis",
         "coverage-check",
     ],

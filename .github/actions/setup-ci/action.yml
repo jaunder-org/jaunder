@@ -25,19 +25,22 @@ runs:
       run: echo "JAUNDER_CI_JOB_START_NS=$(date +%s%N)" >> "$GITHUB_ENV"
     - uses: cachix/install-nix-action@v31
       with:
+        # install-nix-action writes `always-allow-substitutes = true`, which
+        # would let CI fetch the Rust coverage and e2e verdicts that
+        # `nonSubstitutable` marks `allowSubstitutes = false`. Turning it off
+        # makes every tested commit execute them, as it does locally.
         extra_nix_config: |
           experimental-features = nix-command flakes
+          always-allow-substitutes = false
         github_access_token: ${{ inputs.github-token }}
     - uses: cachix/cachix-action@v17
       with:
         name: jaunder-org
         authToken: ${{ inputs.cachix-auth-token }}
-        # Push build products and static verdicts to the cache, but not coverage
-        # or e2e outputs. This filter is what keeps those verdicts executing in
-        # CI: install-nix-action sets `always-allow-substitutes = true`, which
-        # overrides their `allowSubstitutes = false`. The structural probe
-        # proves which support outputs could be admitted; the measured decision
-        # report records why the broad boundary remains.
+        # Push build products and static verdicts to the cache, but keep every
+        # `jaunder-coverage*` and `jaunder-e2e*` output, support included, out
+        # of it. A second layer: the setting above and `dev`'s check that each
+        # verdict was built here are what keep those verdicts executing.
         pushFilter: "jaunder-coverage|jaunder-e2e"
     # `dev` runs host tools from Cachix-served Nix packages, so no compiled
     # output is cached here. Jobs that still run host Cargo cache only its

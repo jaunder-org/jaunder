@@ -927,15 +927,15 @@ source, so any edit there rebuilds them. The Rust host commands are
 concern-owned executables in the `tools` workspace — `repository-policy`
 (`repository-docs`, `source-contracts`), `host-tool` (`admit-inputs`, which
 `test-local` and `e2e-local` use), `host-proof` (`e2e-evidence`,
-`trace-analysis`, `source-diagnostics`) and `coverage` (`coverage-check`,
-nondefault `host` feature). `dev` runs them with locked Cargo from the active
-checkout; CI's E2E verifier uses its Nix output (`packages.host-proof`). Host
-tools run only on the host, never inside derivations. Runtime paths belong to
-the active checkout, not the tool's store build directory. The executables that
-run inside derivations are likewise owned by the crates whose logic they run:
-`coverage-sandbox` (`coverage`), `doctests` (`doctests`), and the dedicated
-`perf-producer` and `system-artifacts` crates. Each is its own Nix package, and
-a derivation takes only the one it runs.
+`trace-analysis`) and `coverage` (`coverage-check`, nondefault `host` feature).
+`dev` runs them with locked Cargo from the active checkout; CI's E2E verifier
+uses its Nix output (`packages.host-proof`). Host tools run only on the host,
+never inside derivations. Runtime paths belong to the active checkout, not the
+tool's store build directory. The executables that run inside derivations are
+likewise owned by the crates whose logic they run: `coverage-sandbox`
+(`coverage`), `doctests` (`doctests`), and the dedicated `perf-producer` and
+`system-artifacts` crates. Each is its own Nix package, and a derivation takes
+only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
@@ -2358,10 +2358,11 @@ inputs aggressively. Every other Nix verdict, for example formatting, lint,
 Clippy, type checks, ERT, the census, doctests and `dev-python`, is sandboxed
 and input-addressed, so a stamp substituted for an identical derivation is
 acceptable. Coverage and e2e verdicts are never substituted, and CI executes
-them for every tested commit: the Cachix `pushFilter` keeps them out of the
-cache in CI, where install-nix-action's `always-allow-substitutes = true`
-overrides their `nonSubstitutable` wrapper
-([substitutable static verdicts](docs/adr/0252-substitutable-static-verdicts.md)).
+them for every tested commit: setup-ci sets `always-allow-substitutes = false`
+so their `nonSubstitutable` wrapper holds, and `dev` fails a Rust coverage or
+e2e verdict step whose output this machine did not build. Build those verdicts
+on the machine running `dev`, not a remote builder
+([CI honours non-substitutable verdicts](docs/adr/drafts/ci-honours-non-substitutable-verdicts.md)).
 A push to `main` of a commit whose merge-queue run passed reuses that run's
 verdict rather than executing them again
 ([merge-queue verdict draft](docs/adr/0260-merge-queue-verdict-covers-landed-commit.md)).

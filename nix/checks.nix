@@ -52,12 +52,11 @@ let
   # Only coverage and e2e verdicts are barred from substitution. Static verdicts
   # are sandboxed and input-addressed, so a substituted stamp for an identical
   # derivation is acceptable; see
-  # docs/adr/0252-substitutable-static-verdicts.md.
-  # These flags guard local builds and do not
-  # rerun outputs already valid in the local store. In CI, install-nix-action
-  # sets `always-allow-substitutes = true`, which overrides them; there the
-  # setup-ci Cachix `pushFilter` keeps these verdicts out of the cache. The
-  # cache-safety probe checks both.
+  # docs/adr/drafts/ci-honours-non-substitutable-verdicts.md.
+  # These flags do not rerun outputs already valid in the local store. CI
+  # honours them too: setup-ci turns off install-nix-action's
+  # `always-allow-substitutes = true`, and `dev` fails a verdict step whose
+  # output this machine did not build.
   nonSubstitutable =
     derivation:
     if derivation ? overrideAttrs then
@@ -3006,30 +3005,9 @@ mkWasmCoverageMeasurementProducer =
         ''}
       '';
     };
-  # These are the existing cache-filtered support derivations in the e2e
-  # graph. Exposing them does not create work: e2e checks already depend on
-  # both derivations, whose output names match the current broad filter.
-  e2eTestDriverPackages =
-    let
-      drivers = checks:
-        pkgs.lib.mapAttrs' (name: check: {
-          name = "${name}-driver";
-          value = check.driver;
-        }) checks;
-    in
-    drivers e2eGateChecks // drivers e2eWorkers2ControlPackages // drivers e2eWorkers4ControlPackages // drivers e2eSingleWorkerPackages;
-  e2eSupportPackages = {
-    # These derivations already sit beneath each NixOS test result and have
-    # names caught by the broad Cachix exclusion. They contain test machinery,
-    # not test evidence.
-    e2e-support = e2ePackage;
-    e2e-npm-deps = e2ePackage.npmDeps;
-  }
-  // e2eTestDriverPackages;
-  # This concern-owned attrset is the sole definition of Rust coverage outputs.
-  # The source probe is preparation only; the producer and its consumer are
-  # verdict-bearing and therefore final.
-  coverageFinalCacheChecks = rec {
+  # The Rust coverage producer and its consumer are verdicts; the source probe
+  # is preparation for `coverage-check probe-source` only.
+  coverageChecks = rec {
     coverage = nonSubstitutable (craneLib.mkCargoDerivation (
       hostArgs
       # Source-based coverage uses LLVM's embedded coverage map
@@ -3108,8 +3086,6 @@ mkWasmCoverageMeasurementProducer =
       coverage-sandbox validate-status --status ${coverage}/status.json
       touch $out
     '');
-  };
-  coverageSupportCacheChecks = {
     # Probe-only identity: its sole varying input is the filtered coverage
     # source. Keep this separate from coverage.drvPath, which also includes the
     # coverage producer's tooling and runtime inputs.
@@ -3117,71 +3093,6 @@ mkWasmCoverageMeasurementProducer =
       touch $out
     '';
   };
-  coverageCacheChecks = coverageFinalCacheChecks // coverageSupportCacheChecks;
-  coveragePartitionAssertion =
-    let
-      final = builtins.attrNames coverageFinalCacheChecks;
-      support = builtins.attrNames coverageSupportCacheChecks;
-      complete = builtins.attrNames coverageCacheChecks;
-    in
-    assert pkgs.lib.intersectLists final support == [ ];
-    assert builtins.sort builtins.lessThan complete == builtins.sort builtins.lessThan (final ++ support);
-    true;
-  # These classifications are derived directly from the concern-owned attrsets.
-  # The JSON inventory below is the probe's authority; cache-policy.json must
-  # reconcile to it and cannot classify an attr by name convention.
-  cacheSafetyFinalAttrs =
-    assert coveragePartitionAssertion;
-    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageFinalCacheChecks))
-    ++ (map (name: "checks.${system}.${name}") (builtins.attrNames e2eGateChecks))
-    ++ [ "checks.${system}.e2e" "packages.${system}.e2e-checks" ]
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers2ControlPackages))
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eWorkers4ControlPackages))
-    ++ (map (name: "packages.${system}.${name}") (builtins.attrNames e2eSingleWorkerPackages));
-  cacheSafetyDriverAttrs =
-    map (name: "packages.${system}.${name}") (builtins.attrNames e2eTestDriverPackages);
-  cacheSafetyPackageSupportAttrs = map (name: "packages.${system}.${name}") [ "e2e-support" "e2e-npm-deps" ];
-  cacheSafetySupportAttrs =
-    (map (name: "checks.${system}.${name}") (builtins.attrNames coverageSupportCacheChecks))
-    ++ cacheSafetyPackageSupportAttrs
-    ++ cacheSafetyDriverAttrs;
-  cacheSafetySourceFamilies = {
-    coverage = {
-      categories = [
-        { name = "cargo-workspace"; relevant = "server/src/lib.rs"; excluded = "tools/host-proof/src/lib.rs"; }
-        { name = "nextest-profile"; relevant = ".config/nextest.toml"; excluded = "docs/README.md"; }
-        { name = "csr-shell"; relevant = "csr/index.html"; excluded = "flake.nix"; }
-        { name = "embedded-assets"; relevant = "server/assets/jaunder.css"; excluded = "end2end/tests/visual.css"; }
-        { name = "migrations"; relevant = "storage/migrations/sqlite/0001_create_site_config.sql"; excluded = "tools/host-proof/src/lib.rs"; }
-        { name = "backup-corpus"; relevant = "server/tests/misc/backup_corpus/index.json"; excluded = "docs/README.md"; }
-      ];
-    };
-    e2e-package = {
-      # buildNpmPackage's `src = ../end2end` is the universal boundary; these
-      # finite paths are regression arms, not a substitute for that input.
-      categories = [
-        { name = "npm-manifest"; relevant = "end2end/package.json"; excluded = "docs/README.md"; }
-        { name = "npm-lock"; relevant = "end2end/package-lock.json"; excluded = "tools/host-proof/src/lib.rs"; }
-        { name = "playwright-config"; relevant = "end2end/playwright.config.ts"; excluded = "docs/README.md"; }
-        { name = "playwright-tests"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
-        { name = "otel-config"; relevant = "end2end/otel-collector.yaml"; excluded = "docs/README.md"; }
-      ];
-    };
-    e2e-driver = {
-      # Driver expressions explicitly interpolate jaunderBin, e2ePackage, and
-      # this NixOS test definition; all three are inputs to every driver.
-      categories = [
-        { name = "application"; relevant = "server/src/lib.rs"; excluded = "docs/README.md"; }
-        { name = "e2e-package"; relevant = "end2end/tests/fixtures.ts"; excluded = "tools/host-proof/src/lib.rs"; }
-        { name = "nix-test-definition"; relevant = "nix/checks.nix"; excluded = "docs/README.md"; }
-        { name = "otel-privacy-policy"; relevant = "nix/otel-processors.yaml"; excluded = "docs/README.md"; }
-      ];
-    };
-  };
-  cacheSafetySupportFamilies =
-    (map (attr: { inherit attr; family = "coverage"; }) (map (name: "checks.${system}.${name}") (builtins.attrNames coverageSupportCacheChecks)))
-    ++ (map (attr: { inherit attr; family = "e2e-package"; }) cacheSafetyPackageSupportAttrs)
-    ++ (map (attr: { inherit attr; family = "e2e-driver"; }) cacheSafetyDriverAttrs);
   clippySourceFilter =
     path: type:
     # The generic Cargo-manifest fallback must not admit excluded patch metadata.
@@ -3278,19 +3189,10 @@ in
     inherit mkE2eCheck mkPerformanceProducer selectPerformanceProducers mkUpgradeCheck;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
-    e2eSupportPackages
-    // {
-      # The probe realizes only this declarative inventory before it evaluates
-      # closures. The inventory is not a cache-policy output.
-      cache-safety-inventory = pkgs.writeText "jaunder-cache-safety-inventory.json" (
-        builtins.toJSON {
-          schemaVersion = 1;
-          finalAttrs = cacheSafetyFinalAttrs;
-          supportAttrs = cacheSafetySupportAttrs;
-          supportFamilies = cacheSafetySupportFamilies;
-          sourceFamilies = cacheSafetySourceFamilies;
-        }
-      );
+    {
+# The Playwright package beneath each NixOS test result: test machinery, not
+# test evidence. The upgrade check reads an earlier revision's copy.
+e2e-support = e2ePackage;
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
 # check, exposed as `checks.e2e`; `dev` uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its
@@ -3347,7 +3249,7 @@ wasm-coverage-measure-firefox-instrumented = mkWasmCoverageMeasurementProducer {
 
   checks = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
 e2eGateChecks
-// coverageCacheChecks
+// coverageChecks
 // {
   wasm-tests = assert sourceMembershipAssertions; craneLib.cargoTest (
     commonArgs
