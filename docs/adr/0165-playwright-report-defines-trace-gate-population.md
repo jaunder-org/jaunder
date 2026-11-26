@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-31
 - Issue: [#831](https://github.com/jaunder-org/jaunder/issues/831)
+- Amended: 2026-11-25 — the host consumer is `dev`'s Python (#2100)
 
 ## Context
 
@@ -29,12 +30,14 @@ between the report and trace-derived evidence; a missing or unexpected project
 is an evidence-integrity failure.
 
 Artifacts remain produced inside the Nix E2E derivation and analyzed by host
-`xtask`, preserving [ADR-0028](0028-devtool-vs-xtask-boundary.md). Each
-backend×browser combination is reconciled independently under
-[ADR-0034](0034-ci-e2e-matrix-distribution.md). Artifacts are still lifted
-unconditionally before a failed Playwright result is propagated under
-[ADR-0037](0037-e2e-failure-diagnostics-capture.md); trace-derived gates run
-only after the combination itself succeeds, so they cannot mask the primary
+`xtask`, preserving [ADR-0028](0028-devtool-vs-xtask-boundary.md). _Amended by
+#2100:_ the host consumer is now `dev`'s Python e2e verdicts, which read the
+report and the capture through one trace core (`tools/dev/dev/traces.py`). The
+population rule is unchanged. Each backend×browser combination is reconciled
+independently under [ADR-0034](0034-ci-e2e-matrix-distribution.md). Artifacts
+are still lifted unconditionally before a failed Playwright result is propagated
+under [ADR-0037](0037-e2e-failure-diagnostics-capture.md); trace-derived gates
+run only after the combination itself succeeds, so they cannot mask the primary
 failure.
 
 ## Consequences

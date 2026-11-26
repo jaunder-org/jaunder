@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-08-11
+- Amended: 2026-11-25 — the seed cross-check is `repository-policy`'s (#2100)
 
 ## Context
 
@@ -20,6 +21,13 @@ comparison at all. What verifies the computed endpoint instead is
 `server_fn_coverage_check`'s seed cross-check, which compares it against URIs
 observed in a real captured run — ground truth produced by the macro's actual
 expansion, not a second restatement of the rule.
+
+_Amended by #2100._ The coverage verdict moved to `dev`'s Python, but the seed
+cross-check stays live in Rust as a `repository-policy` test, because that
+package owns the derivation. It checks the seed's recorded
+`(module, span name, URI path)` tuples against the live `web/src` inventory. The
+Python extractor's own seed checks run against the seed and an inventory
+recorded with it.
 
 ## Consequences
 

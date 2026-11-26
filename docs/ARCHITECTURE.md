@@ -2542,8 +2542,8 @@ before the Playwright exit is asserted. The e2e verdicts and
 `dev trace-analysis` read these artifacts offline through one Python trace core,
 `tools/dev/dev/traces.py`: the OTLP span parser, the gzip capture reader and the
 boot decomposition outcome
-([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md);
-see the tooling section).
+([tool-language verdicts](adr/0261-tool-language-by-maintainability.md); see the
+tooling section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
 lifted Playwright JSON report defines the executed project population. The
@@ -4735,7 +4735,7 @@ server-function inventory is now a native source contract, which
 regeneration and producer-artifact verification are `dev` Python
 (`tools/dev/dev/e2e_evidence.py`, `tools/dev/dev/server_fn_coverage.py`) that
 reads that listing without re-validating it
-([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+([tool-language verdicts](adr/0261-tool-language-by-maintainability.md)).
 Devtool keeps its in-sandbox commands.
 
 The explicit local workflows are:
@@ -5369,8 +5369,8 @@ the live `web/src` inventory against the `(module, span name, URI path)` tuples
 observed in a real captured run
 (`the_derived_endpoint_matches_the_uri_a_real_run_requested` in
 `tools/repository-policy/src/source_inventory.rs`, which owns the derivation;
-[e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
-Endpoint correctness is therefore asserted only where real traffic exists.
+[ADR-0120](adr/0120-no-endpoint-drift-check.md)). Endpoint correctness is
+therefore asserted only where real traffic exists.
 
 ### Component thinness and cross-language literals
 
@@ -5394,7 +5394,7 @@ has quietly stopped locating is the one thing this gate must never report as
 green. The table also pairs Python sites with Rust: the capture layout's
 `instance-`, `diag.log` and `otel-traces.jsonl` are spelled once in
 `tools/dev/dev/traces.py` and paired with `host/src/capture.rs`
-([e2e verdicts and trace analysis are `dev` Python](adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+([ADR-0109](adr/0109-cross-language-literal-agreement.md)).
 
 ## Development tooling
 
@@ -5430,8 +5430,10 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 
 `tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
 
-- `e2e-evidence` and `trace-analysis` (on one shared trace core) move into `dev`
-  as Python. `wasm-audit` already has (#2101): `dev wasm-audit` and the wasm
+- `e2e-evidence` and `trace-analysis` have moved into `dev` as Python (#2100):
+  the e2e verdicts and `dev trace-analysis` are `tools/dev/dev/e2e_evidence.py`,
+  `server_fn_coverage.py` and `trace_analysis.py` on one trace core,
+  `traces.py`. `wasm-audit` already has (#2101): `dev wasm-audit` and the wasm
   budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown.
 - The cache-safety probe is retired rather than ported: CI honours
   `nonSubstitutable` and `dev` checks each coverage and e2e verdict ran on the
@@ -5458,11 +5460,10 @@ Until the remaining moves land, the placements below describe the current tree:
   `dev` renders the human view from it (`tools/dev/dev/report.py`).
 - **`tools/host-proof`** (retiring; see the pending moves above) — focused host
   proof (ADR-0246): `source-diagnostics`. It prints exactly one JSON report on
-  stdout (steps,
-  outcomes, durations, details, verdict) and sends child output to stderr; its
-  exit status is the verdict. `dev` renders the human step view; there is no
-  sidecar, `--json` flag or completion sentinel. None joins the calling `dev`
-  run's trace.
+  stdout (steps, outcomes, durations, details, verdict) and sends child output
+  to stderr; its exit status is the verdict. `dev` renders the human step view;
+  there is no sidecar, `--json` flag or completion sentinel. It does not join
+  the calling `dev` run's trace.
 - **`dev test-local`** sequences CSR admission (host-tool's `admit-inputs`), the
   `.#csrBundle` build, the image worker build (whose server build script
   validates the bundle) and `pg-run cargo nextest` itself, holding the
@@ -5482,13 +5483,12 @@ Until the remaining moves land, the placements below describe the current tree:
   executables: `coverage-sandbox` (`tools/coverage`: `emit` produces coverage
   artifacts into `$out` for exfiltration, `validate-status` gates them, `wasm`
   drives the browser WebAssembly coverage lifecycle, and `diagnostic-build`
-  records the diagnostic CSR build's artifacts, reading wasm with `wasmparser`,
-  the parser `host-proof` uses); `doctests` (`tools/doctests`: `emit` runs and
-  reconciles the root workspace's doctests); `perf-producer`
-  (`tools/perf-producer`: storage measurement and browser fragment validation in
-  the performance producer VMs); and `system-artifacts`
-  (`tools/system-artifacts`: stages the closed system styling inventory for
-  every CSR bundle).
+  records the diagnostic CSR build's artifacts, reading wasm with `wasmparser`);
+  `doctests` (`tools/doctests`: `emit` runs and reconciles the root workspace's
+  doctests); `perf-producer` (`tools/perf-producer`: storage measurement and
+  browser fragment validation in the performance producer VMs); and
+  `system-artifacts` (`tools/system-artifacts`: stages the closed system styling
+  inventory for every CSR bundle).
 - **`tools/coverage`** — by default a pure-logic library shared by both sides,
   with no I/O policy of its own
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)), plus the

@@ -9,6 +9,7 @@
   retired (#2102)
 - Amended: 2026-11-25 — `host-proof` no longer ships `source-diagnostics`
   (#2103)
+- Amended: 2026-11-25 — nor `e2e-evidence` and `trace-analysis` (#2100)
 
 ## Context
 
@@ -47,6 +48,10 @@ packages:
   `e2e-local` builds `host-proof`. _Amended by #2103:_ as of 2026-11-25,
   `source-diagnostics` had been retired with the cache-safety probe
   ([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
+  _Amended by #2100:_ nor are `e2e-evidence` and `trace-analysis`, which are now
+  `dev`'s own Python. Server-function coverage builds `repository-policy`
+  instead, for its `source-contracts server-fn-inventory` listing, so CI's e2e
+  reconcile no longer builds `host-proof`.
 - `host-tool` (_amended by #2102_): admit-inputs, the shared library's one
   executable, whose small closure keeps admission cheap to build
 - `coverage-check` (the `coverage` crate with its `host` feature)
@@ -65,7 +70,9 @@ The flake source is the Git working tree. An edited tool therefore always runs
 as edited. A file Git does not track is not in the source:
 
 - `repository-policy` keeps its compiled refusal while an admitted input is
-  untracked, per ADR-0225.
+  untracked, per ADR-0225. _Amended by #2100:_ its read-only
+  `server-fn-inventory` listing skips that admission, so a local coverage
+  regeneration is never refused over an unrelated untracked file.
 - The other host tools do not refuse. A missing module fails their build, and an
   untracked data file is absent from it, as for every Nix check of the working
   tree. This narrows ADR-0225's untracked-input refusal to repository-policy.

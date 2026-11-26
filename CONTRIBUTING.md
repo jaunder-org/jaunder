@@ -929,7 +929,7 @@ concern-owned executables in the `tools` workspace — `repository-policy`
 `test-local` and `e2e-local` use) and `coverage` (`coverage-check`, nondefault
 `host` feature). `dev` runs each from its Nix package output. The e2e verdicts
 and `dev trace-analysis` are `dev` Python, not host tools
-([e2e verdicts and trace analysis are `dev` Python](docs/adr/drafts/e2e-verdicts-trace-analysis-python.md)).
+([tool-language verdicts](docs/adr/0261-tool-language-by-maintainability.md)).
 Host tools run only on the host, never inside derivations. Runtime paths belong
 to the active checkout, not the tool's store build directory. The executables
 that run inside derivations are likewise owned by the crates whose logic they

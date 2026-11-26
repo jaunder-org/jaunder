@@ -6,6 +6,7 @@
 - Amended: 2026-11-25 — `wasm-audit` moved into `dev` as Python (#2101)
 - Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
   retired (#2102)
+- Amended: 2026-11-25 — e2e verdicts and trace analysis moved to `dev` (#2100)
 
 ## Context
 
@@ -97,15 +98,25 @@ Python, and twiggy does the wasm name and size reading. _Amended by #2103:_ as
 of 2026-11-25, `source-diagnostics` had been retired
 ([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §Residual tooling owners after xtask retirement.
-Existing test-support owns canonical seed-e2e. PG's scoped ephemeral
-closure/custody moves into coverage's nondefault ephemeral-postgres library
-module, shared by its producer and host-proof pg-run. No coverage-to-host-proof
-dependency, product-host source/ feature expansion, second PG implementation or
-new ProcessKit dependency is added. Qualification's separate system-artifacts
-target is a Nix-executed producer, not host qualification execution. No package
-becomes a catch-all dispatcher. Source/disposition evidence remains ignored;
-maintained docs explain interfaces and invariants, not a permanent command
-catalog.
+_Amended by #2100:_ nor are the e2e verdicts (`e2e-evidence`) and the trace
+diagnostics (`trace-analysis`). They are `dev`'s own Python
+(`tools/dev/dev/e2e_evidence.py` and `trace_analysis.py`) on one trace core
+(`traces.py`), per the
+[tool-language decision](0261-tool-language-by-maintainability.md).
+`dev trace-analysis analyze | boot-phases | run` keeps its flags, sections,
+columns and number formats; `tabulate` lays out its tables. `run` builds every
+enabled per-lane check (`checks.e2e-<identity>`) for both backends, or with
+`--single-worker` the workers=1 packages, whose captures keep the
+`<backend>-<browser>-unsplit` identity, and analyzes each capture with its own
+Playwright report. Existing test-support owns canonical seed-e2e. PG's scoped
+ephemeral closure/custody moves into coverage's nondefault ephemeral-postgres
+library module, shared by its producer and host-proof pg-run. No
+coverage-to-host-proof dependency, product-host source/ feature expansion,
+second PG implementation or new ProcessKit dependency is added. Qualification's
+separate system-artifacts target is a Nix-executed producer, not host
+qualification execution. No package becomes a catch-all dispatcher.
+Source/disposition evidence remains ignored; maintained docs explain interfaces
+and invariants, not a permanent command catalog.
 
 Disposition manual commands individually. Preserve known operator/safety
 capabilities, measurement windows and failure/diagnostic interpretation;
