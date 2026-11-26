@@ -4680,11 +4680,15 @@ setup-ci, which `dev trace summary` shows as a `before dev` row
 ([dev trace step accounting](adr/0254-dev-trace-step-accounting.md)). A
 `substituted` static verdict is expected: static verdicts are sandboxed and
 input-addressed, so a stamp fetched for an identical derivation counts. Coverage
-and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper guards
-local builds. In CI the setup-ci Cachix `pushFilter` keeps them out of the
-cache, because install-nix-action's `always-allow-substitutes = true` overrides
-the wrapper there
-([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
+and e2e verdicts are never substituted. Their `nonSubstitutable` wrapper holds
+locally and in CI, where setup-ci turns off install-nix-action's
+`always-allow-substitutes = true`. The Rust coverage producer and gate and each
+e2e lane producer then fail, naming the verdict, unless `nix path-info` reports
+the output `ultimate`, built by this machine's store. The Cachix `pushFilter`
+also keeps every `jaunder-coverage*` and `jaunder-e2e*` output out of the cache
+([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md),
+superseding
+[substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
 `JAUNDER_TRACE_DIR`; the root is the `dev` process that finds the latter unset.
 Every `dev` process appends start and end span records to its own file in
@@ -4827,8 +4831,8 @@ the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
 Static verdicts in these lanes may be substituted from Cachix for an identical
 derivation; the coverage and e2e verdicts never are
-([substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)). A
-result-only `Validate (no e2e)` job requires all four lanes, preserving the
+([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md)).
+A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `dev validate-no-e2e` composes the same
 required surfaces in success-path order, plus host Clippy
 ([split non-e2e validation lanes](adr/0192-split-ci-non-e2e-validation-lanes.md);
@@ -5415,11 +5419,13 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 
 `tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
 
-- `e2e-evidence`, `trace-analysis` (on one shared trace core) and the
-  cache-safety probe move into `dev` as Python. The probe then runs in
-  `ci-validate-host`. `wasm-audit` already has (#2101): `dev wasm-audit` and the
-  wasm budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the
-  breakdown.
+- `e2e-evidence` and `trace-analysis` (on one shared trace core) move into `dev`
+  as Python. `wasm-audit` already has (#2101): `dev wasm-audit` and the wasm
+  budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown.
+- The cache-safety probe is retired rather than ported: CI honours
+  `nonSubstitutable` and `dev` checks each coverage and e2e verdict ran on the
+  runner
+  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md)).
 - The repository contract tests become pytest.
 
 Until the remaining moves land, the placements below describe the current tree:
@@ -5782,7 +5788,7 @@ checker registry, runner, supervisor or replacement omnibus:
   its workload), and the `admit-inputs` executable that `test-local` and
   `e2e-local` admit through.
 - `tools/host-proof` — artifact-only e2e verdicts (`e2e-evidence`) and host
-  diagnostics (`trace-analysis`, `source-diagnostics`).
+  diagnostics (`trace-analysis`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

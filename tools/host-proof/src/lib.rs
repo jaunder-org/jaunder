@@ -2,7 +2,6 @@
 //! diagnostics. Each verdict executable prints one JSON report on stdout. The
 //! `e2e-local` lifecycle is `dev e2e-local` in `tools/dev` (#2066).
 
-pub mod cache_safety;
 pub use host_tool::report;
 pub mod e2e;
 pub mod e2e_evidence;

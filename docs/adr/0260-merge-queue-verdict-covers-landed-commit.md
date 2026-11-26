@@ -31,7 +31,10 @@ verdict for that commit when it lands on `main`.
 
 This keeps ADR-0077's "never trust a cached green check". The queue run executes
 coverage and e2e on the combined state and takes no test result from Cachix.
-Nothing here relaxes the `pushFilter` rule in ADR-0252.
+Nothing here relaxes the `pushFilter` rule in ADR-0252. _Amended by #2103:_ CI
+now enforces that rule by honouring `nonSubstitutable` and checking that each
+verdict was built on the runner
+([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
 
 For a push to `main`, CI's first job, `Merge-queue verdict`, looks for such a
 run of the pushed SHA:

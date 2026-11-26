@@ -28,7 +28,9 @@ helper, with no replacement. This narrowly supersedes only ADR-0227's
 requirement to keep that manual command and its implementation available. Its
 removal of automatic probe execution from CI, and the on-demand
 `coverage-check probe-source` filter probe, remain as ADR-0227 decided.
-`source-diagnostics cache-safety-probe` is unaffected.
+`source-diagnostics cache-safety-probe` is unaffected. _Amended by #2103:_ that
+probe has since been retired too
+([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
 
 ## Consequences
 

@@ -230,14 +230,12 @@ _forwarding(
     forwarding.coverage_check,
     "Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.",
 )
-for _binary, _summary in {
-    "source-diagnostics": "Eval-only Nix guard: cache-safety-probe.",
-    "trace-analysis": "Manual OTel trace diagnostics: analyze <files> | "
+_forwarding(
+    "trace-analysis",
+    functools.partial(forwarding.host_proof_report, "trace-analysis"),
+    "Manual OTel trace diagnostics: analyze <files> | "
     "run [--single-worker] | boot-phases <files>.",
-}.items():
-    _forwarding(
-        _binary, functools.partial(forwarding.host_proof_report, _binary), _summary
-    )
+)
 
 
 @cli.group("wasm-audit")

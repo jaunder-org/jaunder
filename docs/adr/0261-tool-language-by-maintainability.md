@@ -174,7 +174,12 @@ no Nix build.
   Python and runs in `ci-validate-host`.** Its work is `nix eval`, JSON and
   regex. It is [ADR-0252](0252-substitutable-static-verdicts.md)'s guard that
   final verdicts stay out of Cachix. No gate ran it before, so it guarded
-  nothing.
+  nothing. _Amended by #2103:_ as of 2026-11-25, the probe had been retired
+  rather than ported: CI honoured `nonSubstitutable` and `dev` checked that each
+  coverage and e2e verdict was built on the runner, and `checkout_admission.rs`
+  retired with it
+  ([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+  current state: ARCHITECTURE.md §The verify ladder & git-enforced gate.
 - **Tests in `tools/host-proof/tests` follow their subject.**
   - Tests that run a host-proof executable move with that executable's
     follow-up:

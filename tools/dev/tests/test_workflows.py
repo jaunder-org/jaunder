@@ -64,15 +64,9 @@ FORWARDED: list[tuple[list[str], Commands]] = [
             ["coverage-check", "probe-source", "--help"],
         ],
     ),
-    *(
-        (
-            [binary, "--flag", SHELL_SYNTAX],
-            [*build("host-proof"), [binary, "--flag", SHELL_SYNTAX]],
-        )
-        for binary in [
-            "source-diagnostics",
-            "trace-analysis",
-        ]
+    (
+        ["trace-analysis", "--flag", SHELL_SYNTAX],
+        [*build("host-proof"), ["trace-analysis", "--flag", SHELL_SYNTAX]],
     ),
     (
         ["adr-format"],
@@ -382,7 +376,6 @@ def test_report_tools_fail_closed_without_a_report(
 @pytest.mark.parametrize(
     "command",
     [
-        "source-diagnostics",
         "trace-analysis",
         "coverage-check",
     ],

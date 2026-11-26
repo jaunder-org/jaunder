@@ -503,7 +503,6 @@ let
     member = "tools/host-proof";
     bins = [
       "e2e-evidence"
-      "source-diagnostics"
       "trace-analysis"
     ];
   };

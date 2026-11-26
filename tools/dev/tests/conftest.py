@@ -200,7 +200,6 @@ TOOL_PACKAGES = {
     ),
     "host-proof": (
         "e2e-evidence",
-        "source-diagnostics",
         "trace-analysis",
     ),
     "coverage-check": ("coverage-check",),
@@ -312,8 +311,7 @@ case "$name $*" in
   'nix path-info --derivation '*)
     for installable; do :; done
     printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
-  'admit-inputs '*|'e2e-evidence '*|'source-diagnostics '*|\
-  'trace-analysis '*|'coverage-check '*)
+  'admit-inputs '*|'e2e-evidence '*|'trace-analysis '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """.replace(
