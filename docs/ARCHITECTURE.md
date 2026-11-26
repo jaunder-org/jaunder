@@ -4712,12 +4712,12 @@ rather than cloned. Git and checkout admission (caller checkout selection,
 untracked-input admission and `core.hooksPath` repair) live in the shared
 `tools/host-tool` library beside the host-tool report contract, behind one
 `prepare(owner, source_admits)` entry; repository-policy's executables pass
-their compiled source predicate to it. Its one executable, `admit-inputs`,
-exposes untracked-input admission to `dev test-local` and `dev e2e-local`. No
-in-derivation producer links host-tool, so `toolsSrc` excludes its sources. The
-informational repository census and the Org timezone extractor are retired. The
-narrow scoped-Leptosfmt adapter is the formatter exception, not a general
-process runner.
+their compiled source predicate to it. host-tool's one executable,
+`admit-inputs`, exposes untracked-input admission to `dev test-local` and
+`dev e2e-local`. No in-derivation producer links host-tool, so `toolsSrc`
+excludes its sources. The informational repository census and the Org timezone
+extractor are retired. The narrow scoped-Leptosfmt adapter is the formatter
+exception, not a general process runner.
 
 Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).

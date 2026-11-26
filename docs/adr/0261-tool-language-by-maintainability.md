@@ -4,6 +4,8 @@
 - Date: 2026-11-23
 - Issue: [#1977](https://github.com/jaunder-org/jaunder/issues/1977)
 - Amended: 2026-11-25 — verdicts for `tools/host-proof` (#1974)
+- Amended: 2026-11-25 — `admit-inputs` joins `host-tool`, not
+  `repository-policy` (#2102)
 
 ## Context
 
@@ -164,7 +166,10 @@ no Nix build.
   only user.
 - **`admit-inputs` joins `repository-policy`.** It is a 27-line command over
   `repository_policy::checkout`, which that package keeps for its own source
-  admission.
+  admission. _Amended by #2102:_ that admission library moved to
+  `tools/host-tool` (`docs/adr/drafts/narrow-repository-policy.md`), so
+  `admit-inputs` joined host-tool instead, as its one executable
+  (`packages.host-tool`).
 - **`source-diagnostics` (the cache-safety probe) moves into `tools/dev` as
   Python and runs in `ci-validate-host`.** Its work is `nix eval`, JSON and
   regex. It is [ADR-0252](0252-substitutable-static-verdicts.md)'s guard that

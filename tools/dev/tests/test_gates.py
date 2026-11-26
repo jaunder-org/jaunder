@@ -97,7 +97,7 @@ def build(package: str) -> Commands:
 
 # Built once per process, before the first of its binaries runs.
 POLICY_BUILD = build("repository-policy")
-HOST_PROOF_BUILD = build("host-proof")
+HOST_TOOL_BUILD = build("host-tool")
 COVERAGE_CHECK_BUILD = build("coverage-check")
 
 # The shared docs request leaves flake.lock as committed.
@@ -233,7 +233,7 @@ STATIC = [
 CLEAN = commands("git status --porcelain --untracked-files=all")
 CSR_BUNDLE = nix_build(".#csrBundle", "--out-link .xtask/gcroots/csr-bundle")
 TEST_LOCAL = [
-    *build("host-tool"),
+    *HOST_TOOL_BUILD,
     *commands("admit-inputs .#csrBundle.sourceAdmits"),
     *CSR_BUNDLE,
     *commands(
