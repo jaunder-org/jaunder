@@ -8,6 +8,7 @@ only the filtered `checks.dev-python` source may skip it.
 """
 
 import json
+import re
 import shutil
 import subprocess
 import tempfile
@@ -16,7 +17,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout, lift_lanes, nests, require
+from conftest import Checkout, lift_lanes, nests, require, write_lane_capture
+from opentelemetry.trace import INVALID_SPAN
+
+from dev import trace, traces
+from dev.e2e import _capture_spans, capture_tree
+from dev.evidence import EvidenceError
 
 BASH = shutil.which("bash") or "/bin/sh"
 NIX = shutil.which("nix")
@@ -648,6 +654,149 @@ def test_a_capture_that_cannot_be_placed_shows_no_spans(
     names = {event["name"] for event in e2e.checkout.events()}
     assert not names & {"e2e.test.lifecycle", "e2e.test", "request"}
     assert e2e.checkout.merged()["e2e-producer"]["args"]["jaunder.status"] == "failed"
+
+
+# The same captures in-process, without Nix: what `checks.dev-python` runs.
+GATE_START_NS = 1_795_000_000_000_000_000
+IN_GATE = trace.Phase("gate-execution", GATE_START_NS, GATE_START_NS + 50_000_000, True)
+
+
+def stamped(capture: str) -> str:
+    """`capture` with each "@NOW+<ms>@" that many milliseconds into the gate."""
+    return re.sub(
+        r"@NOW\+([0-9]+)@",
+        lambda found: str(GATE_START_NS + int(found[1]) * 1_000_000),
+        capture,
+    )
+
+
+def parsed(capture: str) -> list[traces.Span]:
+    return traces.parse_spans(stamped(capture), traces.Filters(), "capture")
+
+
+def flattened(tree: list[trace.Imported]) -> dict[str, trace.Imported]:
+    found: dict[str, trace.Imported] = {}
+    for span in tree:
+        found[span.name] = span
+        found.update(flattened(list(span.children)))
+    return found
+
+
+def test_a_capture_tree_is_everything_below_the_injected_parent() -> None:
+    tree = capture_tree(parsed(TEST_TREE))
+    assert [span.name for span in tree] == [
+        "e2e.test.lifecycle",
+        "e2e.test.lifecycle",
+        "unattributed",
+    ]
+    spans = flattened(tree)
+    assert set(spans) == {
+        "e2e.test.lifecycle",
+        "e2e.test",
+        "request",
+        "storage.posts.get",
+        "unattributed",
+    }
+    request = spans["request"]
+    assert [child.name for child in request.children] == ["storage.posts.get"]
+    assert (request.start_ns, request.end_ns) == (
+        GATE_START_NS + 10_000_000,
+        GATE_START_NS + 20_000_000,
+    )
+    assert request.attributes["otel.status_code"] == "ERROR"
+    assert request.attributes["status"] == 500
+    assert "otel.status_code" not in spans["e2e.test"].attributes
+
+
+@pytest.mark.parametrize(
+    ("spans", "error"),
+    [
+        (
+            [
+                otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 10),
+                otlp("e2e.test.lifecycle", "l2", "other", 12, 20),
+            ],
+            "no single injected parent",
+        ),
+        ([otlp("e2e.test.lifecycle", "l1", "", 5, 10)], "no single injected parent"),
+        (
+            [
+                otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 10),
+                otlp("injected", INJECTED, "", 1, 20),
+            ],
+            "no single injected parent",
+        ),
+        ([otlp("storage.write_scope", "b1", "", 1, 2)], "no single injected parent"),
+        (
+            [
+                otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 10),
+                otlp("e2e.test", "t1", "l1", 6, 9),
+                otlp("e2e.test", "t1", "l1", 6, 9),
+            ],
+            "repeats in its tree",
+        ),
+        (
+            [
+                otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 10),
+                {**otlp("e2e.test", "t1", "l1", 6, 9), "endTimeUnixNano": None},
+            ],
+            "has no start or end time",
+        ),
+    ],
+    ids=[
+        "two-parents",
+        "no-parent",
+        "parent-captured",
+        "no-tests",
+        "repeat",
+        "untimed",
+    ],
+)
+def test_a_malformed_capture_tree_is_an_error(
+    spans: list[dict[str, Any]], error: str
+) -> None:
+    with pytest.raises(EvidenceError, match=error):
+        capture_tree(parsed(otlp_capture(*spans)))
+
+
+@pytest.mark.parametrize(
+    ("capture", "written", "warning"),
+    [
+        (None, False, ""),
+        ("not json\n", False, "no capture spans: failed to parse"),
+        (
+            otlp_capture(otlp("e2e.test.lifecycle", "l1", INJECTED, 5, 500)),
+            False,
+            "no capture spans: 1 of 1 top-level spans fall outside gate-execution",
+        ),
+        (TEST_TREE, True, ""),
+    ],
+    ids=["missing", "malformed", "skewed", "placed"],
+)
+def test_a_capture_is_placed_under_its_gate_whole_or_not_at_all(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    capture: str | None,
+    written: bool,
+    warning: str,
+) -> None:
+    path = tmp_path / f"capture-{LANE}.tar.gz"
+    if capture is not None:
+        write_lane_capture(path, stamped(capture))
+    recorded: list[tuple[object, list[trace.Imported]]] = []
+
+    def record(parent: object, spans: list[trace.Imported]) -> list[object]:
+        recorded.append((parent, list(spans)))
+        return []
+
+    monkeypatch.setattr(trace, "record_spans", record)
+    _capture_spans(path, IN_GATE, INVALID_SPAN)
+    assert [parent for parent, _ in recorded] == ([INVALID_SPAN] if written else [])
+    if written:
+        assert len(recorded[0][1]) == 3
+    stderr = capsys.readouterr().err
+    assert (warning in stderr) if warning else stderr == ""
 
 
 def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:
