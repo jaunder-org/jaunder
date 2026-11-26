@@ -54,8 +54,8 @@ Proof to execute:
   `site`, and still lists `jaunder`, `csrBundle` and `csrWasm`.
 - The platform-contract evaluation (the `platform` step of `dev validate-no-e2e`
   and `dev ci-validate-host`) passes when run directly.
-- After this spec is retired, `rg '\.#site|packages\.site'` finds only
-  ADR-0142's amendment record and the historical ADR mentions above.
+- After this spec is retired, `rg '\.#site|packages\.site'` finds only ADR-0142
+  (its amended text) and the historical ADR mentions above.
 - The hook-backed `dev precommit`/`dev prepush` gates and CI pass.
 
 Deliverables to commit: the Nix and doc changes above.

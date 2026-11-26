@@ -27,7 +27,9 @@ PostgreSQL passwords.
 `packages.site` is a near-miss. It once looked like a deployment artifact, but
 the server binary now embeds the CSR bundle and public assets. The `site` output
 survives because `cargo xtask audit-wasm` builds it to inspect the wasm bundle
-for size, not because a production service should serve it from disk.
+for size, not because a production service should serve it from disk. _Amended
+by #2120:_ the flake no longer exports `packages.site`; this paragraph records
+why it once existed.
 
 ## Decision
 
