@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout, lift_lanes, require
+from conftest import Checkout, lift_lanes, nests, require
 
 BASH = shutil.which("bash") or "/bin/sh"
 NIX = shutil.which("nix")
@@ -593,6 +593,8 @@ def test_a_lanes_test_tree_is_shown_under_its_gate_execution_phase(
     assert tree["unattributed"]["args"]["otel.status_code"] == "OK"
     assert "otel.status_code" not in tree["e2e.test"]["args"]
     assert {event["args"]["jaunder.status"] for event in tree.values()} == {""}
+    # The overlapping tests share no track they would partly overlap on.
+    assert nests(e2e.checkout.events())
     step = e2e.checkout.merged()["e2e-producer"]
     assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
 

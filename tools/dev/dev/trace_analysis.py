@@ -18,6 +18,7 @@ from dev.evidence import CATALOG, EvidenceError, pair_lanes, read_catalog, repor
 from dev.report import ms
 from dev.traces import (
     CURRENT_TIMING_SCHEMA,
+    LIFECYCLE_SPAN,
     MIN_BOOT_PHASES,
     PAGE_SPAN,
     TEST_SPAN,
@@ -38,9 +39,6 @@ from dev.traces import (
     to_url_path,
 )
 
-# The `e2e.test.lifecycle` envelope (#794): its children are the named phases,
-# and the union of those is what "covered" means.
-LIFECYCLE_SPAN_NAME = "e2e.test.lifecycle"
 BACKENDS = ("sqlite", "postgres")
 BROWSERS = ("chromium", "firefox")
 SYSTEM = "x86_64-linux"
@@ -258,7 +256,7 @@ def _span_coverage(spans: list[Span], reported: ReportedDurations) -> list[list[
             children.setdefault(span.parent_span_id, []).append(span)
     rows = []
     for envelope in spans:
-        if envelope.name != LIFECYCLE_SPAN_NAME:
+        if envelope.name != LIFECYCLE_SPAN:
             continue
         key = AttemptKey(
             get_attr(envelope.raw, "e2e.test"),
@@ -303,11 +301,8 @@ def _coverage_note(
             "no --playwright-report supplied; per-test coverage needs Playwright's"
             " own durations as the denominator"
         )
-    if not any(span.name == LIFECYCLE_SPAN_NAME for span in spans):
-        return (
-            f"no `{LIFECYCLE_SPAN_NAME}` spans in the capture"
-            " (pre-#794 traces have none)"
-        )
+    if not any(span.name == LIFECYCLE_SPAN for span in spans):
+        return f"no `{LIFECYCLE_SPAN}` spans in the capture (pre-#794 traces have none)"
     return (
         f"no lifecycle span matched a report entry ({len(reported)} attempt(s)"
         " in the report)"

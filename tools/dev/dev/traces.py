@@ -35,6 +35,11 @@ TRACE_MEMBER = f"{CAPTURE_ROOT}/{TRACE_FILE}"
 # The e2e harness's spans: one per test, and one per test-owned page.
 TEST_SPAN = "e2e.test"
 PAGE_SPAN = "e2e.page"
+# The `e2e.test.lifecycle` envelope (#794): each test's root, whose children are
+# its named phases.
+LIFECYCLE_SPAN = "e2e.test.lifecycle"
+# Where an imported span keeps its OTLP status (`status_code`).
+OTEL_STATUS_CODE = "otel.status_code"
 
 # A timestamp written as text is read within the 128-bit range; one written as
 # a JSON number must fit int64.

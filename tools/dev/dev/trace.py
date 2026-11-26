@@ -172,8 +172,9 @@ class Phase:
 
 @dataclass(frozen=True)
 class Imported:
-    """A finished span, with its subtree, that a step's child recorded where it
-    could not trace, as an e2e lane's OTLP capture: placed in the run afterwards."""
+    """A finished span, with its subtree, that a step's child timed where it
+    could not trace (a producer's phase, a span of its OTLP capture): placed in
+    the run afterwards, on the child's own clock."""
 
     name: str
     start_ns: int

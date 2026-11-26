@@ -15,19 +15,15 @@ from opentelemetry.trace import Span
 
 from dev import e2e_evidence, server_fn_coverage, steps, trace, traces
 from dev.commands import SOURCE_CONTRACT
+from dev.e2e_evidence import GATE_PHASE
 from dev.evidence import CATALOG, EvidenceError
 from dev.server_fn_coverage import Coverage
+from dev.traces import LIFECYCLE_SPAN, OTEL_STATUS_CODE
 
 # Where `scripts/e2e-workflow` keeps each producer's build record and artifacts.
 DIAGNOSTICS = ".xtask/diagnostics"
 # Server-function flow coverage is derived from this pair's reconciled lanes.
 COVERAGE_PAIR = ("sqlite", "chromium")
-# The VM phase that runs Playwright, under which the lane's test tree is shown.
-GATE_PHASE = "gate-execution"
-# The e2e harness's root span for each test.
-LIFECYCLE_SPAN = "e2e.test.lifecycle"
-# Where a capture span keeps its OTLP status: `jaunder.status` is a step's.
-OTEL_STATUS_CODE = "otel.status_code"
 
 
 def run_all(jobs: str) -> None:
@@ -124,13 +120,15 @@ def _capture_spans(capture: Path, gate: trace.Phase, span: Span) -> None:
     except (EvidenceError, RecursionError) as error:
         print(f"dev: {capture}: no capture spans: {error}", file=sys.stderr, flush=True)
         return
-    outside = sum(
-        not gate.start_ns <= top.start_ns <= top.end_ns <= gate.end_ns for top in tree
-    )
+    outside = [
+        top
+        for top in tree
+        if not gate.start_ns <= top.start_ns <= top.end_ns <= gate.end_ns
+    ]
     if outside:
         print(
-            f"dev: {capture}: no capture spans: {outside} of {len(tree)} top-level"
-            f" spans fall outside {GATE_PHASE}",
+            f"dev: {capture}: no capture spans: {len(outside)} of {len(tree)}"
+            f" top-level spans fall outside {GATE_PHASE}",
             file=sys.stderr,
             flush=True,
         )

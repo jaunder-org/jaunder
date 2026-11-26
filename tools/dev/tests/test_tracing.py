@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout, cells
+from conftest import Checkout, cells, nests
 
 from dev import chrome, runner
 from dev.summary import BEFORE_DEV
@@ -156,18 +156,6 @@ def test_merge_gives_overlapping_siblings_separate_tracks(tmp_path: Path) -> Non
         if event["ph"] == "M"
     ]
     assert names == ["root", "b"]
-
-
-def nests(events: list[dict[str, Any]]) -> bool:
-    """Whether every pair of slices sharing a track is nested or disjoint."""
-    for track in {event["tid"] for event in events}:
-        on = [event for event in events if event["tid"] == track]
-        for a in on:
-            for b in on:
-                a_end, b_end = a["ts"] + a["dur"], b["ts"] + b["dur"]
-                if a["ts"] < b["ts"] < a_end < b_end:
-                    return False
-    return True
 
 
 def test_merge_reuses_a_track_once_its_slices_have_ended(tmp_path: Path) -> None:

@@ -107,6 +107,19 @@ def lift_lanes(root: Path, browser: str = "firefox") -> list[LaneEvidence]:
     return lanes
 
 
+def nests(events: list[dict[str, Any]]) -> bool:
+    """Whether every pair of merged slices sharing a Perfetto track is nested
+    or disjoint, as the track layout promises."""
+    for track in {event["tid"] for event in events}:
+        on = [event for event in events if event["tid"] == track]
+        for a in on:
+            for b in on:
+                a_end, b_end = a["ts"] + a["dur"], b["ts"] + b["dur"]
+                if a["ts"] < b["ts"] < a_end < b_end:
+                    return False
+    return True
+
+
 def require(present: bool, prerequisite: str) -> None:
     """Skips inside `checks.dev-python` without `prerequisite`; fails elsewhere.
 

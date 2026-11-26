@@ -20,8 +20,9 @@ One measured CI lane (`sqlite-chromium-2-of-3`, run 45888881602) held 23.5k
 capture spans:
 
 - 14.8k descended from the parent span the VM driver injects into Playwright;
-- the rest were background work no test owns, such as feed pollers, write scopes
-  and server startup.
+- the rest were background work no test owns, such as the scheduled feed-event
+  claims (`storage.feed_events.claim_pending_batch`), go-live scans, write
+  scopes and server startup.
 
 Every test span fell inside `gate-execution`, although the capture is on the
 guest's clock and the phase on the host's. The merge's track layout never reused
@@ -32,7 +33,8 @@ a track, so the test tree alone needed 1,020 Perfetto tracks.
 A `dev` step may also write a producer's lifted OTLP capture as after-the-fact
 spans. This widens ADR-0263's amendment of ADR-0254 from self-timed phases to a
 foreign span tree. The spans still go through the same tracer, record writer,
-golden record format and merge, and nothing is exported over OTLP.
+golden record format and merge. `dev` exports nothing over OTLP: it only copies
+spans that the VM's collector already captured.
 
 - **What is written.** For an `e2e-producer` step, the lane's whole test tree
   goes under the `gate-execution` span this run wrote. The tree is every capture
@@ -66,13 +68,16 @@ golden record format and merge, and nothing is exported over OTLP.
   margin. A skew inside it shifts the lane's spans by the skew, and a larger one
   drops the lane. Nothing corrects the clock.
 - Each lane adds work after its VM run: reading the capture and writing about
-  15k spans. One local lane (`sqlite-chromium-1-of-3`, 14,244 spans) measured:
-  - at most 5.4 s between its last phase and the end of its step;
-  - about 3 s more of merge;
-  - a 9.7 MB `trace.json`;
-  - 11 tracks.
+  15k spans. Replaying one local lane's lifted evidence
+  (`sqlite-chromium-1-of-3`, 14,244 spans) took:
+  - 4.6 s to read the capture and write its spans;
+  - 0.5 s to merge;
+  - a 9.7 MB `trace.json` on 12 tracks.
 
-  A full local `dev e2e` puts every lane in one run.
+  In CI each lane is its own job and trace. A full local `dev e2e` puts all 16
+  lanes in one run, which is an estimated 230k capture spans and about 155 MB of
+  `trace.json`. Each producer pays its own write time concurrently, while the
+  root merges every lane serially, an estimated 10 s.
 
 - Another producer's capture would need only its own selection rule, under the
   phase that ran it.

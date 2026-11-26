@@ -415,9 +415,10 @@ Each `dev` process in the run writes start and end span records under
 Trace Event JSON file, `.xtask/run/<run_id>.trace.json`, and marks a span with
 no end record or no parent as `incomplete`. A child process that does not join
 is opaque time inside the step that started it. These spans are process timing,
-written only to files and never exported over OTLP. The one exception is an e2e
-lane's capture spans (below). They are request attribution, copied in from the
-lane's OTLP capture after the run.
+written only to files and never exported over OTLP. The exception to "process
+timing" is an e2e lane's capture spans (below). The VM's collector captured them
+over OTLP, and `dev` copies them into the run's files afterwards; it exports
+nothing itself.
 
 An `e2e-producer` step's children are its VM run's measured phases (#2030):
 `vm-startup-readiness`, `gate-execution`, `result-lift` and `post-gate-checks`.

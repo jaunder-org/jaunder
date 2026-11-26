@@ -11,7 +11,6 @@ from conftest import FIXTURES, Checkout, write_lane_capture
 from dev import report
 from dev.evidence import EvidenceError
 from dev.trace_analysis import (
-    LIFECYCLE_SPAN_NAME,
     Analysis,
     AttemptKey,
     ReportedDurations,
@@ -21,7 +20,7 @@ from dev.trace_analysis import (
     lanes,
     render,
 )
-from dev.traces import Filters, MalformedJsonAttr, Span, parse_spans
+from dev.traces import LIFECYCLE_SPAN, Filters, MalformedJsonAttr, Span, parse_spans
 
 SAMPLE = FIXTURES / "trace-analysis" / "otel-traces-sample.jsonl"
 NONE = ReportedDurations()
@@ -285,7 +284,7 @@ def lifecycle_tree(retry: str = "0") -> list[Span]:
     identity = (text("e2e.test", "logs in"), attr("e2e.retry", {"intValue": retry}))
     return spans_of(
         [
-            timed(LIFECYCLE_SPAN_NAME, "aa", "", 1_000, 1_500, *identity),
+            timed(LIFECYCLE_SPAN, "aa", "", 1_000, 1_500, *identity),
             timed("e2e.context_mint", "bb", "aa", 1_000, 1_200),
             timed("e2e.test", "cc", "aa", 1_150, 1_300),
             # A child without timestamps covers nothing.
