@@ -100,12 +100,12 @@ verdict `dev` rendered from it; current state: ARCHITECTURE.md §Residual toolin
 owners after xtask retirement.
 
 _Amended by #2129:_ as of 2026-11-26, the report had no `report` field. Its only
-producer had been host-proof's `trace-analysis`, which now prints its tables
-directly as `dev` Python, so a diagnostic that renders a table prints it itself
-rather than carrying it in the report. This supersedes the `report` string in
-the field list and the `report` text in the rendering paragraph above, and the
-`report` Consequences bullet below; current state: ARCHITECTURE.md §Residual
-tooling owners after xtask retirement.
+producer had been host-proof's `trace-analysis`; its replacement,
+`dev trace-analysis`, prints its tables directly, so a diagnostic that renders a
+table prints it itself rather than carrying it in the report. This supersedes
+the `report` string in the field list and the `report` text in the rendering
+paragraph above, and the `report` Consequences bullet below; current state:
+ARCHITECTURE.md §Residual tooling owners after xtask retirement.
 
 ## Consequences
 
