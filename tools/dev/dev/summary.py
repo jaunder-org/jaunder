@@ -11,7 +11,7 @@ from pathlib import Path
 
 import click
 
-from dev import runner, spans
+from dev import report, runner, spans
 from dev.spans import RunSpan, Status
 
 # The slowest spans shown; unsuccessful spans are shown beyond it.
@@ -151,37 +151,20 @@ _COLUMNS = (
     _Column("Status", False, lambda row: row.status),
     _Column("Cache", False, lambda row: row.cache),
     _Column("Fetched", True, lambda row: _mebibytes(row.fetched_bytes)),
-    # Last, so a long span name needs no padding.
+    # Last, so the columns a reader compares line up beside each other.
     _Column("Span", False, lambda row: row.name),
 )
 
 
 def render(summary: Summary, markdown: bool) -> str:
-    grid = [
-        [column.heading for column in _COLUMNS],
-        *([column.cell(row) for column in _COLUMNS] for row in summary.rows),
+    lines = [
+        report.table(
+            [column.heading for column in _COLUMNS],
+            [[column.cell(row) for column in _COLUMNS] for row in summary.rows],
+            ["right" if column.numeric else "left" for column in _COLUMNS],
+            markdown,
+        )
     ]
-    if markdown:
-        rule = ["---:" if column.numeric else "---" for column in _COLUMNS]
-        lines = [
-            "| " + " | ".join(cell.replace("|", "\\|") for cell in line) + " |"
-            for line in [grid[0], rule, *grid[1:]]
-        ]
-    else:
-        *padded, _span = _COLUMNS
-        widths = [max(len(cell) for cell in cells) for cells in zip(*grid)]
-        lines = [
-            "  ".join(
-                [
-                    *(
-                        cell.rjust(width) if column.numeric else cell.ljust(width)
-                        for column, cell, width in zip(padded, line, widths)
-                    ),
-                    line[-1],
-                ]
-            )
-            for line in grid
-        ]
     if summary.runner is not None:
         # A blank line keeps Markdown from reading the heading into the table.
         lines = [summary.runner, *([""] if markdown else []), *lines]

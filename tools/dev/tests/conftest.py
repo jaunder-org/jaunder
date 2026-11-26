@@ -121,6 +121,16 @@ def require(present: bool, prerequisite: str) -> None:
     pytest.fail(f"missing prerequisite: {prerequisite}")
 
 
+def cells(result: subprocess.CompletedProcess[bytes]) -> list[list[str]]:
+    """A box-drawn table's heading and rows on `result`'s stdout, each as its
+    stripped cells."""
+    return [
+        [cell.strip() for cell in line.split("│")[1:-1]]
+        for line in result.stdout.decode().splitlines()
+        if line.startswith("│")
+    ]
+
+
 def load_workflow(name: str) -> Any:
     """A repository GitHub workflow, parsed (see `require`). PyYAML is YAML
     1.1, so the bare `on` key loads as `True`."""

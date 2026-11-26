@@ -40,14 +40,28 @@ def render(document: bytes) -> str | None:
         return None
 
 
-def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+def table(
+    headers: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    align: Sequence[str] | None = None,
+    markdown: bool = False,
+) -> str:
     """`rows` under `headers` as a box-drawn table, without a final newline.
 
     Cells arrive already formatted: number parsing is off, so `1.000` stays
-    `1.000` rather than becoming `1`.
+    `1.000` rather than becoming `1`. `align` gives each column `"left"` or
+    `"right"`; every column is left-aligned without it. `markdown` draws a
+    GitHub pipe table instead, whose rule carries the alignment; tabulate does
+    not escape a `|` in a cell, so it is escaped here.
     """
+    if markdown:
+        rows = [[cell.replace("|", "\\|") for cell in row] for row in rows]
     return tabulate(
-        rows, headers=headers, tablefmt="simple_outline", disable_numparse=True
+        rows,
+        headers=headers,
+        tablefmt="pipe" if markdown else "simple_outline",
+        colalign=align,
+        disable_numparse=True,
     )
 
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from dev import steps
+from dev.report import table
 
 # The Vite manifest key of wasm-bindgen's wasm. Spelled in Rust too
 # (`host::vite_manifest`); ADR-0109's literal table keeps the two equal.
@@ -155,11 +156,13 @@ def report(link: str) -> None:
         lines = [
             "WASM bundle audit",
             f"bundle output: {root}",
-            "artifact          raw        gzip       brotli",
-            *(
-                f"{a.path:<16}  {format_bytes(a.raw):>9}  {format_bytes(a.gzip):>9}"
-                f"  {format_bytes(a.brotli):>9}"
-                for a in artifacts
+            table(
+                ["artifact", "raw", "gzip", "brotli"],
+                [
+                    [a.path, *map(format_bytes, (a.raw, a.gzip, a.brotli))]
+                    for a in artifacts
+                ],
+                ["left", "right", "right", "right"],
             ),
         ]
         print("\n".join(lines))
@@ -302,6 +305,10 @@ def csr_wasm() -> str:
     return steps.nix_build("csr-wasm", ".#csrWasm") + "/lib/csr.wasm"
 
 
+# A breakdown table's alignment: the name, then its bytes and share.
+_SHARES = ("left", "right", "right")
+
+
 def breakdown(wasm: str) -> None:
     """Prints `wasm`'s bytes by section, as shares of the file, then by crate,
     as shares of twiggy's function total."""
@@ -327,20 +334,26 @@ def breakdown(wasm: str) -> None:
                 "(see `dev wasm-audit report` for that)"
             ),
             "",
-            "section               bytes     share of file",
-            *(
-                f"{name:<18}  {format_bytes(size):>9}  {_percent(size, len(data)):>12}"
-                for name, size in spans
+            table(
+                ["section", "bytes", "share of file"],
+                [
+                    [name, format_bytes(size), _percent(size, len(data))]
+                    for name, size in spans
+                ],
+                _SHARES,
             ),
             "",
             (
                 "crate attribution, share of the functions "
                 f"(code + function sections, {format_bytes(functions)})"
             ),
-            "crate                 bytes     share of functions",
-            *(
-                f"{name:<18}  {format_bytes(size):>9}  {_percent(size, functions):>12}"
-                for name, size in crates
+            table(
+                ["crate", "bytes", "share of functions"],
+                [
+                    [name, format_bytes(size), _percent(size, functions)]
+                    for name, size in crates
+                ],
+                _SHARES,
             ),
         ]
         print("\n".join(lines))

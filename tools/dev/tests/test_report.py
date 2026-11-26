@@ -82,6 +82,35 @@ def test_output_that_is_not_a_report_cannot_be_rendered(output: bytes) -> None:
     assert report.render(output) is None
 
 
+def test_a_table_keeps_its_cells_and_aligns_columns_as_asked() -> None:
+    rows = [["1.000", "a"], ["10.000", "b"]]
+    assert report.table(["ms", "name"], rows) == (
+        "┌────────┬────────┐\n"
+        "│ ms     │ name   │\n"
+        "├────────┼────────┤\n"
+        "│ 1.000  │ a      │\n"
+        "│ 10.000 │ b      │\n"
+        "└────────┴────────┘"
+    )
+    assert report.table(["ms", "name"], rows, ["right", "left"]) == (
+        "┌────────┬────────┐\n"
+        "│     ms │ name   │\n"
+        "├────────┼────────┤\n"
+        "│  1.000 │ a      │\n"
+        "│ 10.000 │ b      │\n"
+        "└────────┴────────┘"
+    )
+
+
+def test_a_markdown_table_carries_its_alignment_and_escapes_pipes() -> None:
+    rows = [["1.000", "sh -c 'a | b'"]]
+    assert report.table(["ms", "name"], rows, ["right", "left"], markdown=True) == (
+        "|    ms | name           |\n"
+        "|------:|:---------------|\n"
+        "| 1.000 | sh -c 'a \\| b' |"
+    )
+
+
 def test_a_failed_tool_keeps_its_own_status_without_a_report(
     workflow: Workflow,
 ) -> None:
