@@ -9,6 +9,7 @@
   retired (#2102)
 - Amended: 2026-11-25 — nor are `e2e-evidence` and `trace-analysis` (#2100)
 - Amended: 2026-11-25 — no host-proof JSON-report tool remains (#2105)
+- Amended: 2026-11-26 — the `report` field is removed (#2129)
 
 ## Context
 
@@ -97,6 +98,14 @@ contract still lived in `tools/host-tool`, and `coverage-check`
 (`tools/coverage`, nondefault `host` feature) was the one host tool whose
 verdict `dev` rendered from it; current state: ARCHITECTURE.md §Residual tooling
 owners after xtask retirement.
+
+_Amended by #2129:_ as of 2026-11-26, the report had no `report` field. Its only
+producer had been host-proof's `trace-analysis`, which now prints its tables
+directly as `dev` Python, so a diagnostic that renders a table prints it itself
+rather than carrying it in the report. This supersedes the `report` string in
+the field list and the `report` text in the rendering paragraph above, and the
+`report` Consequences bullet below; current state: ARCHITECTURE.md §Residual
+tooling owners after xtask retirement.
 
 ## Consequences
 

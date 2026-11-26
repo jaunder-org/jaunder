@@ -939,20 +939,20 @@ a derivation takes only the one it runs.
 
 Each host tool prints exactly one JSON report on stdout (`host_tool::report`:
 `command`, `ok`, `duration_ms`,
-`steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
-optional rendered `report` text and optional structured `evidence`). The shared
-argument parser points fd 1 at stderr and reserves the real stdout for that
-report, so child output goes to stderr; the exit status is the verdict. `dev`
-renders the human view from that report (`tools/dev/dev/report.py`); output that
-is not a report fails the step. There is no `--json` flag,
-`.xtask/last-result.json` sidecar or completion sentinel. Elisp artifact lifting
-remains alongside its consumer algorithm (`coverage-check elisp-consume`);
-doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`). The E2E
-workflow now owns authoritative output selection and trace/snapshot
-verification; the temporary `server-fn-flow` bridge is retired, while the
-independent static `server-fn-coverage` leaf remains. Verification's ordinary
-clean-tree admission is direct `dev`/Git; raw/index docs admission, post-request
-checks and precommit reconciliation are `dev`'s distinct index-custody phases.
+`steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override` and
+optional structured `evidence`). The shared argument parser points fd 1 at
+stderr and reserves the real stdout for that report, so child output goes to
+stderr; the exit status is the verdict. `dev` renders the human view from that
+report (`tools/dev/dev/report.py`); output that is not a report fails the step.
+There is no `--json` flag, `.xtask/last-result.json` sidecar or completion
+sentinel. Elisp artifact lifting remains alongside its consumer algorithm
+(`coverage-check elisp-consume`); doctests run only in Nix (`checks.doctests`,
+`checks.tools-doctests`). The E2E workflow now owns authoritative output
+selection and trace/snapshot verification; the temporary `server-fn-flow` bridge
+is retired, while the independent static `server-fn-coverage` leaf remains.
+Verification's ordinary clean-tree admission is direct `dev`/Git; raw/index docs
+admission, post-request checks and precommit reconciliation are `dev`'s distinct
+index-custody phases.
 
 New, nonignored tooling inputs must be included in the Git-backed flake snapshot
 (`git add` or `git add -N`) before normal invocation. The Nix source declaration

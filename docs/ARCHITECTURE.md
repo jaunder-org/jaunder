@@ -5451,20 +5451,19 @@ The placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
-  (`repository-docs`, `source-contracts`, and the shared `host_tool::report`
-  contract), `tools/host-tool` (`admit-inputs`), `tools/coverage` with its
-  nondefault `host` feature
+  (`repository-docs`, `source-contracts`), `tools/host-tool` (`admit-inputs` and
+  the shared `host_tool::report` contract), `tools/coverage` with its nondefault
+  `host` feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`).
   `dev` owns gate composition. These commands invoke `nix build` and
   consume/analyze exfiltrated build artifacts (coverage gate, CRAP gate,
   reports). `coverage-check`, the one host tool that renders a verdict, prints
   exactly one JSON report on stdout (`host_tool::report`: `command`, `ok`,
   `duration_ms`, `steps[{name, ok, skipped, duration_ms, detail}]`, optional
-  `exit_override`, optional rendered `report` text and optional structured
-  `evidence`). The shared argument parser points fd 1 at stderr and reserves the
-  real stdout for that report, so child output goes to stderr; the exit status
-  is the verdict. `dev` renders the human view from it
-  (`tools/dev/dev/report.py`).
+  `exit_override` and optional structured `evidence`). The shared argument
+  parser points fd 1 at stderr and reserves the real stdout for that report, so
+  child output goes to stderr; the exit status is the verdict. `dev` renders the
+  human view from it (`tools/dev/dev/report.py`).
 - **`dev test-local`** sequences CSR admission (host-tool's `admit-inputs`), the
   `.#csrBundle` build, the image worker build (whose server build script
   validates the bundle) and `pg-run cargo nextest` itself, holding the

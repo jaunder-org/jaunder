@@ -23,13 +23,15 @@ the one remaining host tool whose report `dev` renders, never sets it.
   `test_a_report_renders_its_table_then_one_line_per_step` to
   `test_a_report_renders_one_line_per_step`. The step-line cases stay.
 - ADR-0247: amendments to this ADR only add text, as #2066, #2100, #2101, #2103
-  and #2105 did. Add a header line `- Amended: 2026-11-26 — the \`report\` field
-  is removed (#2129)`. Then add an `_Amended by #2129:_ as of 2026-11-26, …;
-  current state: ARCHITECTURE.md §Residual tooling owners after xtask
-  retirement.`paragraph after the #2105 amendment. It says the`report`field no longer exists and that a diagnostic prints its own tables instead of carrying them in the report. That supersedes the original mentions of the field at the field list, the`scripts/step-report.jq`
-  sentence and the last Consequences bullet, and those mentions stay unchanged.
-  There is no new draft ADR, because removing a field the ADR offered makes no
-  new decision.
+  and #2105 did. Add a header line "- Amended: 2026-11-26 — the `report` field
+  is removed (#2129)". Then, after the #2105 amendment, add a paragraph in the
+  #2105 form: "_Amended by #2129:_ as of 2026-11-26, …; current state:
+  ARCHITECTURE.md §Residual tooling owners after xtask retirement." It says the
+  `report` field no longer exists and that a diagnostic prints its own tables
+  instead of carrying them in the report. That supersedes the original mentions
+  of the field at the field list, the `scripts/step-report.jq` sentence and the
+  last Consequences bullet, and those mentions stay unchanged. There is no new
+  draft ADR, because removing a field the ADR offered makes no new decision.
 - `docs/ARCHITECTURE.md` (§Residual tooling owners) and `CONTRIBUTING.md`: drop
   "optional rendered `report` text" from the field lists. In the same
   ARCHITECTURE.md bullet, fix the stale owner: the `host_tool::report` contract
