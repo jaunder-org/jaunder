@@ -1535,7 +1535,6 @@ dependencies = [
  "tar",
  "tempfile",
  "url",
- "yaml_serde",
 ]
 
 [[package]]

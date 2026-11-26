@@ -3190,9 +3190,6 @@ mkWasmCoverageMeasurementProducer =
     else
     sqlxSqlitePatchSource path
     || type == "directory"
-    || path == "${toString ../.}/.github/workflows/ci.yml"
-    # host-proof's performance workflow contract test embeds this owner.
-    || path == "${toString ../.}/.github/workflows/performance.yml"
     || (
       !(pkgs.lib.hasSuffix ".md" path)
       && (
@@ -3225,8 +3222,6 @@ mkWasmCoverageMeasurementProducer =
     filter =
       assert clippySourceFilter "${toString ../.}/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/tools/Cargo.lock" "regular";
-      assert clippySourceFilter "${toString ../.}/.github/workflows/ci.yml" "regular";
-      assert clippySourceFilter "${toString ../.}/.github/workflows/performance.yml" "regular";
       assert clippySourceFilter "${toString ../.}/server/build.rs" "regular";
       assert clippySourceFilter "${toString ../.}/ux-sandbox/Cargo.toml" "regular";
       assert clippySourceFilter "${toString ../.}/ux-sandbox/src/main.rs" "regular";
