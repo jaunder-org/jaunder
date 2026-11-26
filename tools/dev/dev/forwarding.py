@@ -7,7 +7,7 @@ tools own every decision: nothing here infers approval or ownership.
 from collections.abc import Callable, Sequence
 
 from dev import report, steps
-from dev.commands import COVERAGE_CHECK, host_proof
+from dev.commands import COVERAGE_CHECK
 
 
 def sandbox(args: Sequence[str]) -> None:
@@ -32,11 +32,6 @@ def _report(args: Sequence[str]) -> Callable[[bytes], str | None] | None:
 
 def coverage_check(args: Sequence[str]) -> None:
     steps.run("coverage-check", [*steps.tool(COVERAGE_CHECK), *args], _report(args))
-
-
-def host_proof_report(binary: str, args: Sequence[str]) -> None:
-    """A host-proof diagnostic whose one JSON report is shown rendered."""
-    steps.run(binary, [*steps.tool(host_proof(binary)), *args], _report(args))
 
 
 def pr_land(number: str, expected_head: str, mode: str) -> None:

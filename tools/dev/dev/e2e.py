@@ -1,7 +1,8 @@
 """The E2E workflow: isolated producers, then artifact-only reconciliation.
 
 CI runs the same producer and reconciliation as the host, so a lane's verdict
-does not depend on where it ran.
+does not depend on where it ran. The verdicts themselves run here, in-process
+(`e2e_evidence`, `server_fn_coverage`); none builds or runs a VM.
 """
 
 import json
@@ -11,10 +12,11 @@ from pathlib import Path
 
 from opentelemetry.trace import Span
 
-from dev import report, steps, trace
-from dev.commands import E2E_EVIDENCE
+from dev import e2e_evidence, server_fn_coverage, steps, trace
+from dev.commands import SOURCE_CONTRACT
+from dev.evidence import CATALOG, EvidenceError
+from dev.server_fn_coverage import Coverage
 
-CATALOG = "end2end/e2e-lanes.json"
 # Where `scripts/e2e-workflow` keeps each producer's build record and artifacts.
 DIAGNOSTICS = ".xtask/diagnostics"
 # Server-function flow coverage is derived from this pair's reconciled lanes.
@@ -85,7 +87,7 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
 
 
 def producer(lane: str) -> None:
-    """One lane's producer, then its verification, whose report is rendered.
+    """One lane's producer, then its verification, whose result is shown.
 
     The script builds the lane's check and lifts its artifacts, and the step
     records where that output came from and the VM phases its run measured;
@@ -100,37 +102,60 @@ def producer(lane: str) -> None:
         finished=_phase_spans(check, lane),
         verdict=True,
     )
-    output = _selected_output(check)
-    steps.run(
+    output = Path(_selected_output(check))
+    steps.verdict(
         "e2e-evidence",
-        [
-            *steps.tool(E2E_EVIDENCE),
-            "verify",
-            "--lane",
-            lane,
-            "--catalog",
-            CATALOG,
-            "--artifacts",
-            output,
-        ],
-        report.render,
+        lambda: e2e_evidence.verify_lane(lane, Path(CATALOG), output),
     )
 
 
-def _coverage(action: str, artifacts: str) -> None:
-    steps.run(
-        f"server-fn-coverage-{action}",
-        [
-            *steps.tool(E2E_EVIDENCE),
-            "server-fn-coverage",
-            action,
-            "--catalog",
-            CATALOG,
-            "--diagnostics-root",
-            artifacts,
-        ],
-        report.render,
-    )
+def _inventory() -> list[server_fn_coverage.ServerFn]:
+    """This checkout's server fns, from its own `source-contracts`, run from
+    the checkout root. A listing that cannot be had refuses the coverage
+    verdict; only a termination request still ends the gate."""
+    try:
+        listing = steps.output(
+            "server-fn-inventory", [*steps.tool(SOURCE_CONTRACT), "server-fn-inventory"]
+        )
+    except steps.StepFailed as failure:
+        if failure.signalled:
+            raise
+        raise EvidenceError(
+            f"listing the server-fn inventory failed with status {failure.code}"
+        ) from failure
+    return server_fn_coverage.parse_inventory(listing)
+
+
+def _coverage(
+    name: str,
+    lanes: Callable[[], list[e2e_evidence.LaneEvidence]],
+    judge: Callable[[Coverage, Path], str],
+) -> None:
+    """Server-function flow coverage over the coverage pair's reconciled
+    `lanes`, which `judge` holds against the committed snapshot.
+
+    The lanes are reconciled before any capture is read, so no capture of an
+    unreconciled lane ever is.
+    """
+
+    def decide() -> str:
+        captures = [lane.capture for lane in lanes()]
+        coverage = server_fn_coverage.coverage_from_captures(captures, _inventory())
+        return judge(coverage, Path(server_fn_coverage.SNAPSHOT_PATH))
+
+    steps.verdict(name, decide)
+
+
+def _reconciled_coverage_lanes() -> list[e2e_evidence.LaneEvidence]:
+    """The freshly produced coverage pair's lanes, reconciled."""
+    try:
+        return e2e_evidence.reconciled_lanes(
+            *COVERAGE_PAIR, Path(CATALOG), Path(DIAGNOSTICS)
+        )[1]
+    except EvidenceError as error:
+        raise EvidenceError(
+            f"the SQLite/Chromium lanes must reconcile before flow coverage: {error}"
+        ) from error
 
 
 def regenerate_coverage() -> None:
@@ -139,27 +164,28 @@ def regenerate_coverage() -> None:
         "e2e-coverage-producers",
         ["bash", "scripts/e2e-workflow", "pair", *COVERAGE_PAIR],
     )
-    _coverage("regenerate", DIAGNOSTICS)
+    _coverage(
+        "server-fn-coverage-regenerate",
+        _reconciled_coverage_lanes,
+        server_fn_coverage.regenerate,
+    )
 
 
 def reconcile(backend: str, browser: str, artifacts: str) -> None:
-    """Artifact-only reconciliation by this checkout's Nix-built verifier.
+    """Artifact-only reconciliation of one pair's lifted lanes.
 
-    The coverage pair's verdict also includes server-function flow coverage.
+    The coverage pair's verdict also includes server-function flow coverage,
+    over the lanes this reconciliation verified.
     """
-    steps.run(
-        "e2e-reconcile",
-        [
-            *steps.tool(E2E_EVIDENCE),
-            "reconcile",
-            backend,
-            browser,
-            "--catalog",
-            CATALOG,
-            "--diagnostics-root",
-            artifacts,
-        ],
-        report.render,
-    )
+    lanes: list[e2e_evidence.LaneEvidence] = []
+
+    def decide() -> str:
+        verdict, reconciled = e2e_evidence.reconciled_lanes(
+            backend, browser, Path(CATALOG), Path(artifacts)
+        )
+        lanes.extend(reconciled)
+        return verdict
+
+    steps.verdict("e2e-reconcile", decide)
     if (backend, browser) == COVERAGE_PAIR:
-        _coverage("verify", artifacts)
+        _coverage("server-fn-coverage-verify", lambda: lanes, server_fn_coverage.verify)

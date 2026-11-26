@@ -903,9 +903,9 @@ export const autoPerfSpanFixture = [
     const exportStartMs = Date.now();
 
     // Identity attributes every span in the tree carries. `e2e.project` is not
-    // decoration: `traces analyze --project <name>` drops any `e2e.`-prefixed
-    // span whose `e2e.project` differs, so an unstamped span reads as "wrong
-    // project" and the whole tree vanishes under that filter.
+    // decoration: `dev trace-analysis analyze --project <name>` drops any
+    // `e2e.`-prefixed span whose `e2e.project` differs, so an unstamped span
+    // reads as "wrong project" and the whole tree vanishes under that filter.
     const identity = () =>
       [
         otlpAttribute("e2e.file", testInfo.file),

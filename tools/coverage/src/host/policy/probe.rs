@@ -78,7 +78,7 @@ const PROBE_ARMS: [ProbeArm; 5] = [
         required: true,
     },
     ProbeArm {
-        path: "tools/host-proof/src/lib.rs",
+        path: "tools/host-tool/src/lib.rs",
         marker: "// coverage source-drift probe; never committed.",
         required: false,
     },

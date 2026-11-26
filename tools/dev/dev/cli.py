@@ -1,7 +1,6 @@
 """The `dev` command line: one subcommand per workflow."""
 
 import dataclasses
-import functools
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -22,6 +21,7 @@ from dev import (
     static,
     steps,
     summary,
+    trace_analysis,
     upgrade,
     wasm_audit,
 )
@@ -229,12 +229,6 @@ _forwarding(
     "coverage-check",
     forwarding.coverage_check,
     "Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.",
-)
-_forwarding(
-    "trace-analysis",
-    functools.partial(forwarding.host_proof_report, "trace-analysis"),
-    "Manual OTel trace diagnostics: analyze <files> | "
-    "run [--single-worker] | boot-phases <files>.",
 )
 
 
@@ -580,3 +574,95 @@ def trace_summary(path: Path | None, markdown: bool) -> None:
     except OSError as error:
         raise click.ClickException(f"cannot summarise {path}: {error}") from error
     click.echo(summary.render(summarized, markdown), nl=False)
+
+
+@cli.group("trace-analysis")
+def trace_analysis_group() -> None:
+    """Manual OTel trace diagnostics over the e2e lanes' exported traces."""
+
+
+top_option = click.option(
+    "--top",
+    type=click.IntRange(min=1),
+    default=25,
+    show_default=True,
+    help="Rows per ranked table. The boot-coverage, per-project and "
+    "long-task-by-project tables always print every row.",
+)
+trace_option = click.option("--trace", help="Restrict analysis to one trace id.")
+files_argument = click.argument(
+    "files", nargs=-1, required=True, type=click.Path(path_type=Path)
+)
+
+
+@trace_analysis_group.command("analyze")
+@top_option
+@trace_option
+@click.option(
+    "--project",
+    help="Restrict analysis to one e2e project (filters only `e2e.`-named spans).",
+)
+@click.option(
+    "--playwright-report",
+    "playwright_reports",
+    multiple=True,
+    type=click.Path(path_type=Path),
+    help="A Playwright JSON report, repeatable: the per-test span-coverage "
+    "denominator. Without one that section is skipped with a note.",
+)
+@files_argument
+def trace_analysis_analyze(
+    top: int,
+    trace: str | None,
+    project: str | None,
+    playwright_reports: tuple[Path, ...],
+    files: tuple[Path, ...],
+) -> None:
+    """Tables over FILES, `otel-traces.jsonl` exports: span coverage, boot
+    coverage, slowest spans, per-test and per-project hotspots and trace totals.
+
+    \b
+    dev trace-analysis analyze sqlite-otel-traces.jsonl postgres-otel-traces.jsonl
+    dev trace-analysis analyze --top 40 --project firefox a.jsonl b.jsonl
+    dev trace-analysis analyze --playwright-report report.json traces.jsonl
+    """
+    _gate(
+        lambda: trace_analysis.analyze_command(
+            top, trace, project, playwright_reports, files
+        )
+    )
+
+
+@trace_analysis_group.command("run")
+@top_option
+@trace_option
+@click.option(
+    "--single-worker",
+    is_flag=True,
+    help="Build the single-worker packages instead of the lane checks, for "
+    "per-navigation cost free of worker contention.",
+)
+@click.option(
+    "--browser",
+    type=click.Choice(trace_analysis.BROWSERS),
+    help="Restrict to one browser (default both); both backends are always built.",
+)
+def trace_analysis_run(
+    top: int, trace: str | None, single_worker: bool, browser: str | None
+) -> None:
+    """Build every enabled e2e lane check (or the single-worker packages) for
+    both backends, then analyze their captures."""
+    _gate(lambda: trace_analysis.run_command(top, trace, single_worker, browser))
+
+
+@trace_analysis_group.command("boot-phases")
+@files_argument
+def trace_analysis_boot_phases(files: tuple[Path, ...]) -> None:
+    """Median boot-phase decomposition of FILES per (trace file, project,
+    cacheWarmth, experiment arm) (#818).
+
+    Every segment is document-relative and the segments close on
+    `mount_done.startTime`; the Node-side `commitToMountMs` and the skew between
+    the two frames are reported, never decomposed.
+    """
+    _gate(lambda: trace_analysis.boot_phases_command(files))

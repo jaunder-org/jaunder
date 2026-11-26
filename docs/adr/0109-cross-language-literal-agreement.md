@@ -3,6 +3,7 @@
 - Status: accepted
 - Date: 2026-08-10
 - Issue: [#767](https://github.com/jaunder-org/jaunder/issues/767)
+- Amended: 2026-11-25 — Python sites and the e2e capture layout (#2100)
 
 ## Context
 
@@ -100,6 +101,13 @@ looked everywhere. This is an inherent property of a declared-pair design: there
 is no structural property of the tree that distinguishes "a literal duplicated
 across languages on purpose" from "two files that happen to contain the same
 string."
+
+_Amended by #2100._ A site may also be `dev`'s Python; it is located and
+extracted exactly like a TypeScript one. The e2e capture layout that `host`
+writes and `tools/dev/dev/traces.py` reads back is three pairs: the instance
+directory prefix (`INSTANCE_PREFIX`), `diag.log` and `otel-traces.jsonl`. The
+Rust side of the two file names is the arm of `host::capture`'s `filename`
+match, such as `Stream::Diag => `, since no constant names them.
 
 **The counterpart comments stay, and name the gate.** The comment on each site
 is now the pointer a reader follows to learn what enforces the agreement; it is

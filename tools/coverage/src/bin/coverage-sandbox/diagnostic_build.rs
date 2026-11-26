@@ -410,8 +410,8 @@ fn command_version(program: &str, args: &[&str]) -> Result<String> {
         .with_context(|| format!("{program} identity command wrote non-UTF-8 stdout"))
 }
 
-/// One wasm artifact's coverage-relevant metadata, read with `wasmparser` (the
-/// parser `host-proof` uses), never a hand-rolled section walker.
+/// One wasm artifact's coverage-relevant metadata, read with `wasmparser`, never
+/// a hand-rolled section walker.
 fn wasm_boundary(artifact: &'static str, wasm: &[u8]) -> Result<WasmBoundary> {
     let mut coverage_sections = [false; 2];
     let mut wasm_bindgen_metadata = false;

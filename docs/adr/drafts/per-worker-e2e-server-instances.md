@@ -131,8 +131,9 @@ hashing.
 **Capture layout.** Each instance writes its server streams (`diag.log`,
 `mail.jsonl`, `websub.jsonl`) under `capture/instance-<i>/`. The collector's
 streams (`otel-traces.jsonl`, `otel-logs.jsonl`) stay at the capture root. The
-instance subdirectory name is defined once, by
-`host::capture::instance_directory` and its inverse `instance_index`. Readers of
+instance subdirectory name is defined once in Rust, by
+`host::capture::instance_directory` and its inverse `instance_index`; `dev`'s
+Python capture reader spells its prefix too, pinned under ADR-0109. Readers of
 server streams, such as server-function coverage and the trace runner, read
 every instance directory.
 

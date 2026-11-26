@@ -1,11 +1,15 @@
-"""The human view of a step report: a host-proof tool's JSON, or `dev`'s own.
+"""The human view of a step report: a host tool's JSON, or `dev`'s own.
 
 A diagnostic's rendered `report` (trace tables) comes first, verbatim, then one
-line per step. The producing executable's exit status remains the verdict.
+line per step. The producing executable's exit status remains the verdict. The
+cell helpers format the trace diagnostics' tables.
 """
 
 import json
+from collections.abc import Sequence
 from typing import Any
+
+from tabulate import tabulate
 
 
 def render_report(report: Any) -> str:
@@ -34,3 +38,19 @@ def render(document: bytes) -> str | None:
         return render_report(json.loads(document))
     except ValueError, LookupError, TypeError, AttributeError:
         return None
+
+
+def table(headers: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """`rows` under `headers` as a box-drawn table, without a final newline.
+
+    Cells arrive already formatted: number parsing is off, so `1.000` stays
+    `1.000` rather than becoming `1`.
+    """
+    return tabulate(
+        rows, headers=headers, tablefmt="simple_outline", disable_numparse=True
+    )
+
+
+def ms(value: float | None) -> str:
+    """A millisecond value as a report cell: three decimals, `-` when unset."""
+    return "-" if value is None else f"{value:.3f}"

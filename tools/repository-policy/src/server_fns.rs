@@ -17,9 +17,9 @@ use std::path::Path;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServerFn {
     /// The fn ident as written — what a derived span name carries (see
-    /// `server_fn_coverage::extract`). **Not** the coverage key on its own: since
-    /// #684 dropped the vertical noun from these idents, fifteen fns share six
-    /// idents across verticals ([`ServerFn::qualified`]).
+    /// `tools/dev/dev/server_fn_coverage.py`). **Not** the coverage key on its
+    /// own: since #684 dropped the vertical noun from these idents, fifteen fns
+    /// share six idents across verticals ([`ServerFn::qualified`]).
     pub ident: String,
     /// The endpoint the fn serves, leading slash stripped: the `<vertical>/<ident>`
     /// that `#[macros::server]` derives (#714).

@@ -1,16 +1,21 @@
 """A throwaway Git checkout with fake tools on PATH, driven through the real CLI."""
 
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pytest
 import yaml
+
+from dev.e2e_evidence import LaneEvidence, lane_evidence
+from dev.traces import TRACE_MEMBER, instance_diag_member
 
 PACKAGE = Path(__file__).resolve().parents[1]
 # The repository this package lives in; absent when the tests run from the
@@ -24,6 +29,82 @@ import os, pathlib, signal, subprocess, sys, time
 with open("order", "a") as order:
     order.write(" ".join([pathlib.Path(sys.argv[0]).name, *sys.argv[1:]]) + "\\n")
 """
+
+
+# The fixtures of the e2e verdicts and trace core, ported with them from Rust.
+FIXTURES = Path(__file__).resolve().parent / "fixtures"
+
+
+def write_capture(
+    path: Path, members: list[tuple[str, bytes]], directories: tuple[str, ...] = ()
+) -> None:
+    """A `capture-*.tar.gz` holding `members` in order, as regular files, and
+    `directories` as directory entries."""
+    with tarfile.open(path, "w:gz") as archive:
+        for name in directories:
+            entry = tarfile.TarInfo(name)
+            entry.type = tarfile.DIRTYPE
+            archive.addfile(entry)
+        for name, content in members:
+            entry = tarfile.TarInfo(name)
+            entry.size = len(content)
+            archive.addfile(entry, io.BytesIO(content))
+
+
+def write_lane_capture(path: Path, trace: str, diag_log: bytes | None = b"") -> None:
+    """A VM-shaped capture: the trace beside one server instance's `diag.log`,
+    which every real capture carries (#2029, #2076); None omits the log."""
+    members = [(TRACE_MEMBER, trace.encode())]
+    if diag_log is not None:
+        members.append((instance_diag_member(0), diag_log))
+    write_capture(path, members)
+
+
+def lift_lanes(root: Path, browser: str = "firefox") -> list[LaneEvidence]:
+    """The SQLite `browser` pair's passing lane evidence, lifted as producers
+    lift it: `root/e2e-<lane>/<lane-qualified files>`.
+
+    Firefox's five lanes are the recorded fixtures; any other browser's three
+    lanes are the first three relabelled, with the census narrowed to them.
+    """
+    count = 5 if browser == "firefox" else 3
+
+    def fixture(directory: str, name: str) -> str:
+        text = (FIXTURES / directory / name).read_text()
+        return (
+            text.replace("firefox", browser)
+            .replace("-of-5", f"-of-{count}")
+            .replace('"shard_count": 5', f'"shard_count": {count}')
+        )
+
+    census = json.loads(fixture("e2e-ownership", "expected-census.json"))
+    selected = {
+        test["test_id"]
+        for index in range(1, count + 1)
+        for test in json.loads(
+            fixture("e2e-ownership", f"shard-{index}-manifest.json")
+        )["tests"]
+    }
+    census["tests"] = [test for test in census["tests"] if test["test_id"] in selected]
+    lanes = []
+    for index in range(1, count + 1):
+        identity = f"sqlite-{browser}-{index}-of-{count}"
+        lane = lane_evidence(identity, root / f"e2e-{identity}")
+        lane.census.parent.mkdir(parents=True)
+        lane.census.write_text(json.dumps(census))
+        lane.report.write_text(fixture("e2e-ownership", f"shard-{index}-report.json"))
+        lane.lane_manifest.write_text(
+            fixture("e2e-ownership", f"shard-{index}-manifest.json")
+        )
+        lane.duration_manifest.write_text(
+            fixture("e2e-evidence", f"shard-{index}-duration.json")
+        )
+        write_lane_capture(
+            lane.capture, fixture("e2e-evidence", f"shard-{index}-trace.jsonl")
+        )
+        lane.phase.write_text(fixture("e2e-evidence", f"shard-{index}-phase.json"))
+        lanes.append(lane)
+    return lanes
 
 
 def require(present: bool, prerequisite: str) -> None:
@@ -198,10 +279,6 @@ TOOL_PACKAGES = {
         "repository-docs",
         "scoped-leptosfmt",
     ),
-    "host-proof": (
-        "e2e-evidence",
-        "trace-analysis",
-    ),
     "coverage-check": ("coverage-check",),
     "system-artifacts": ("system-artifacts",),
 }
@@ -311,7 +388,7 @@ case "$name $*" in
   'nix path-info --derivation '*)
     for installable; do :; done
     printf '/nix/store/fake-%s.drv\n' "${installable##*[#/]}" ;;
-  'admit-inputs '*|'e2e-evidence '*|'trace-analysis '*|'coverage-check '*)
+  'admit-inputs '*|'coverage-check '*)
     printf '{"steps":[]}\n' ;;
 esac
 """.replace(

@@ -15,7 +15,7 @@ anyhow = "1.0.104"
 clap = { version = "4.6.6", features = ["derive"] }
 quick-xml = "0.42.0"
 sha2 = "0.11.0"
-# Diagnostic-build's wasm metadata reads; host-proof parses wasm with the same crate.
+# Diagnostic-build's wasm metadata reads.
 wasmparser = "0.258.0"
 tempfile = { version = "3.27.0", optional = true }
 # Host-run evidence consumers (`coverage-check`); the sandbox producer omits them.

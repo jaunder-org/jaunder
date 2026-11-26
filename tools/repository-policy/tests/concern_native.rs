@@ -221,6 +221,34 @@ fn static_inventory_does_not_require_runtime_capture_and_rejects_missing_snapsho
     fs::remove_file(root.join("docs/coverage/server-fns.json")).unwrap();
     verdict(run(root, true, "server-fn-coverage"), 1, "reading");
 }
+/// The listing is read-only, so it runs outside any checkout admission: here
+/// there is no Git repository at all, and the source is not tracked.
+#[test]
+fn server_fn_inventory_lists_web_src_without_checkout_admission() {
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
+    write(
+        root,
+        "web/src/posts/api.rs",
+        "#[macros::server]\npub async fn create() {}\n",
+    );
+    let output = run(root, true, "server-fn-inventory");
+    verdict(output.clone(), 0, "posts::create");
+    let listing: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        listing,
+        serde_json::json!([{
+            "qualified": "posts::create",
+            "module": "posts::api",
+            "ident": "create",
+            "endpoint": "posts/create",
+        }])
+    );
+    assert!(!root.join(".git").exists());
+
+    fs::remove_dir_all(root.join("web")).unwrap();
+    verdict(run(root, true, "server-fn-inventory"), 2, "web/src");
+}
 #[test]
 fn telemetry_ownership_keeps_tracked_census_and_read_failure_distinct() {
     let temp = checkout();

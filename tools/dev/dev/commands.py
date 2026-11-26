@@ -22,13 +22,8 @@ def repository_policy(binary: str) -> Tool:
     return Tool("repository-policy", binary)
 
 
-def host_proof(binary: str) -> Tool:
-    return Tool("host-proof", binary)
-
-
 ADMIT_INPUTS = Tool("host-tool", "admit-inputs")
 SOURCE_CONTRACT = repository_policy("source-contracts")
 SCOPED_LEPTOSFMT = repository_policy("scoped-leptosfmt")
-E2E_EVIDENCE = host_proof("e2e-evidence")
 COVERAGE_CHECK = Tool("coverage-check", "coverage-check")
 SYSTEM_ARTIFACTS = Tool("system-artifacts", "system-artifacts")

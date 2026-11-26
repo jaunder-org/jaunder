@@ -1,0 +1,687 @@
+[
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.add_subscriber",
+    "uri_path": "/api/audiences/add_subscriber"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.create",
+    "uri_path": "/api/audiences/create"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.delete",
+    "uri_path": "/api/audiences/delete"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.list_members",
+    "uri_path": "/api/audiences/list_members"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.list_mine",
+    "uri_path": "/api/audiences/list_mine"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.list_my_subscribers",
+    "uri_path": "/api/audiences/list_my_subscribers"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.remove_subscriber",
+    "uri_path": "/api/audiences/remove_subscriber"
+  },
+  {
+    "module": "web::audiences::api",
+    "span": "web.audiences.rename",
+    "uri_path": "/api/audiences/rename"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.get_session",
+    "uri_path": "/api/auth/get_session"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.login",
+    "uri_path": "/api/auth/login"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.login.authenticate_user",
+    "uri_path": "/api/auth/login"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.login.create_session",
+    "uri_path": "/api/auth/login"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.login.prepare_authentication",
+    "uri_path": "/api/auth/login"
+  },
+  {
+    "module": "web::auth::api",
+    "span": "web.auth.logout",
+    "uri_path": "/api/auth/logout"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/audiences/list_mine"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/audiences/list_my_subscribers"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/backup/get_settings"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/invites/list"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/media/get_uploads_enabled"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/media/get_usage"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/media/upload"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/posts/create"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/posts/list_drafts"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/profile/get"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/profile/get_default_post_format"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/profile/set_default_post_format"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/sessions/list"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/site/get_identity"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/smtp/get_settings"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/subscriptions/is_subscribed"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/themes/create"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/themes/get_selection"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/themes/list"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/themes/preview_editor"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/themes/select"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/timeline/list_home_timeline"
+  },
+  {
+    "module": "web::auth::server",
+    "span": "web.auth.require_auth",
+    "uri_path": "/api/websub/get_websub_settings"
+  },
+  {
+    "module": "web::backup::api",
+    "span": "web.backup.back_up_now",
+    "uri_path": "/api/backup/back_up_now"
+  },
+  {
+    "module": "web::backup::api",
+    "span": "web.backup.get_settings",
+    "uri_path": "/api/backup/get_settings"
+  },
+  {
+    "module": "web::backup::api",
+    "span": "web.backup.is_warning_visible",
+    "uri_path": "/api/backup/is_warning_visible"
+  },
+  {
+    "module": "web::backup::api",
+    "span": "web.backup.update_settings",
+    "uri_path": "/api/backup/update_settings"
+  },
+  {
+    "module": "web::email::api",
+    "span": "web.email.request_verification",
+    "uri_path": "/api/email/request_verification"
+  },
+  {
+    "module": "web::email::api",
+    "span": "web.email.verify",
+    "uri_path": "/api/email/verify"
+  },
+  {
+    "module": "web::invites::api",
+    "span": "web.invites.create",
+    "uri_path": "/api/invites/create"
+  },
+  {
+    "module": "web::invites::api",
+    "span": "web.invites.list",
+    "uri_path": "/api/invites/list"
+  },
+  {
+    "module": "web::media::api",
+    "span": "web.media.delete",
+    "uri_path": "/api/media/delete"
+  },
+  {
+    "module": "web::media::api",
+    "span": "web.media.get_uploads_enabled",
+    "uri_path": "/api/media/get_uploads_enabled"
+  },
+  {
+    "module": "web::media::api",
+    "span": "web.media.get_usage",
+    "uri_path": "/api/media/get_usage"
+  },
+  {
+    "module": "web::media::api",
+    "span": "web.media.list_mine",
+    "uri_path": "/api/media/list_mine"
+  },
+  {
+    "module": "web::media::api",
+    "span": "web.media.upload",
+    "uri_path": "/api/media/upload"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.availability",
+    "uri_path": "/api/passkeys/availability"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.delete",
+    "uri_path": "/api/passkeys/delete"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.finish_authentication",
+    "uri_path": "/api/passkeys/finish_authentication"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.finish_registration",
+    "uri_path": "/api/passkeys/finish_registration"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.list",
+    "uri_path": "/api/passkeys/list"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.start_authentication",
+    "uri_path": "/api/passkeys/start_authentication"
+  },
+  {
+    "module": "web::passkeys::api",
+    "span": "web.passkeys.start_registration",
+    "uri_path": "/api/passkeys/start_registration"
+  },
+  {
+    "module": "web::password_reset::api",
+    "span": "web.password_reset.confirm",
+    "uri_path": "/api/password_reset/confirm"
+  },
+  {
+    "module": "web::password_reset::api",
+    "span": "web.password_reset.request",
+    "uri_path": "/api/password_reset/request"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.create",
+    "uri_path": "/api/posts/create"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.delete",
+    "uri_path": "/api/posts/delete"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.execute_management_operation",
+    "uri_path": "/api/posts/execute_management_operation"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get",
+    "uri_path": "/api/posts/get"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get_audience_selection",
+    "uri_path": "/api/posts/get_audience_selection"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get_default_audience_selection",
+    "uri_path": "/api/posts/get_default_audience_selection"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get_post_history",
+    "uri_path": "/api/posts/get_post_history"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get_preview",
+    "uri_path": "/api/posts/get_preview"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.get_revision_history_detail",
+    "uri_path": "/api/posts/get_revision_history_detail"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.list_drafts",
+    "uri_path": "/api/posts/list_drafts"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.list_history",
+    "uri_path": "/api/posts/list_history"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.list_managed_posts",
+    "uri_path": "/api/posts/list_managed_posts"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.list_scheduled",
+    "uri_path": "/api/posts/list_scheduled"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.publish",
+    "uri_path": "/api/posts/publish"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.resolve_management_selection",
+    "uri_path": "/api/posts/resolve_management_selection"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.unpublish",
+    "uri_path": "/api/posts/unpublish"
+  },
+  {
+    "module": "web::posts::api",
+    "span": "web.posts.update",
+    "uri_path": "/api/posts/update"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.get",
+    "uri_path": "/api/profile/get"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.get_content_license",
+    "uri_path": "/api/profile/get_content_license"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.get_default_audience",
+    "uri_path": "/api/profile/get_default_audience"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.get_default_post_format",
+    "uri_path": "/api/profile/get_default_post_format"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.set_content_license",
+    "uri_path": "/api/profile/set_content_license"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.set_default_audience",
+    "uri_path": "/api/profile/set_default_audience"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.set_default_post_format",
+    "uri_path": "/api/profile/set_default_post_format"
+  },
+  {
+    "module": "web::profile::api",
+    "span": "web.profile.update",
+    "uri_path": "/api/profile/update"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.get_policy",
+    "uri_path": "/api/registration/get_policy"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.register",
+    "uri_path": "/api/registration/register"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.register.create_session",
+    "uri_path": "/api/registration/register"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.register.create_user",
+    "uri_path": "/api/registration/register"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.register.create_user_with_invite",
+    "uri_path": "/api/registration/register"
+  },
+  {
+    "module": "web::registration::api",
+    "span": "web.registration.register.get_registration_policy",
+    "uri_path": "/api/registration/register"
+  },
+  {
+    "module": "web::sessions::api",
+    "span": "web.sessions.create_app_password",
+    "uri_path": "/api/sessions/create_app_password"
+  },
+  {
+    "module": "web::sessions::api",
+    "span": "web.sessions.list",
+    "uri_path": "/api/sessions/list"
+  },
+  {
+    "module": "web::sessions::api",
+    "span": "web.sessions.revoke",
+    "uri_path": "/api/sessions/revoke"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.get_default_audience",
+    "uri_path": "/api/site/get_default_audience"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.get_identity",
+    "uri_path": "/api/site/get_identity"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.get_media_uploads_enabled",
+    "uri_path": "/api/site/get_media_uploads_enabled"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.is_base_url_warning_visible",
+    "uri_path": "/api/site/is_base_url_warning_visible"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.update_default_audience",
+    "uri_path": "/api/site/update_default_audience"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.update_identity",
+    "uri_path": "/api/site/update_identity"
+  },
+  {
+    "module": "web::site::api",
+    "span": "web.site.update_media_uploads_enabled",
+    "uri_path": "/api/site/update_media_uploads_enabled"
+  },
+  {
+    "module": "web::smtp::api",
+    "span": "web.smtp.get_settings",
+    "uri_path": "/api/smtp/get_settings"
+  },
+  {
+    "module": "web::smtp::api",
+    "span": "web.smtp.update_settings",
+    "uri_path": "/api/smtp/update_settings"
+  },
+  {
+    "module": "web::subscriptions::api",
+    "span": "web.subscriptions.is_subscribed",
+    "uri_path": "/api/subscriptions/is_subscribed"
+  },
+  {
+    "module": "web::subscriptions::api",
+    "span": "web.subscriptions.subscribe",
+    "uri_path": "/api/subscriptions/subscribe"
+  },
+  {
+    "module": "web::subscriptions::api",
+    "span": "web.subscriptions.unsubscribe",
+    "uri_path": "/api/subscriptions/unsubscribe"
+  },
+  {
+    "module": "web::tags::api",
+    "span": "web.tags.list",
+    "uri_path": "/api/tags/list"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.copy_theme",
+    "uri_path": "/api/themes/copy_theme"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.create",
+    "uri_path": "/api/themes/create"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.export",
+    "uri_path": "/api/themes/export"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.get_draft",
+    "uri_path": "/api/themes/get_draft"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.get_presentation",
+    "uri_path": "/api/themes/get_presentation"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.get_selection",
+    "uri_path": "/api/themes/get_selection"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.import_css",
+    "uri_path": "/api/themes/import_css"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.import_package",
+    "uri_path": "/api/themes/import_package"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.import_zip",
+    "uri_path": "/api/themes/import_zip"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.list",
+    "uri_path": "/api/themes/list"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.preview",
+    "uri_path": "/api/themes/preview"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.preview_editor",
+    "uri_path": "/api/themes/preview_editor"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.preview_installed",
+    "uri_path": "/api/themes/preview_installed"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.publish",
+    "uri_path": "/api/themes/publish"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.remove",
+    "uri_path": "/api/themes/remove"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.rename",
+    "uri_path": "/api/themes/rename"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.replace_binding",
+    "uri_path": "/api/themes/replace_binding"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.replace_css",
+    "uri_path": "/api/themes/replace_css"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.replace_pool",
+    "uri_path": "/api/themes/replace_pool"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.save_editor",
+    "uri_path": "/api/themes/save_editor"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.select",
+    "uri_path": "/api/themes/select"
+  },
+  {
+    "module": "web::themes::api",
+    "span": "web.themes.shuffle",
+    "uri_path": "/api/themes/shuffle"
+  },
+  {
+    "module": "web::timeline::api",
+    "span": "web.timeline.list_by_tag",
+    "uri_path": "/api/timeline/list_by_tag"
+  },
+  {
+    "module": "web::timeline::api",
+    "span": "web.timeline.list_by_user",
+    "uri_path": "/api/timeline/list_by_user"
+  },
+  {
+    "module": "web::timeline::api",
+    "span": "web.timeline.list_by_user_and_tag",
+    "uri_path": "/api/timeline/list_by_user_and_tag"
+  },
+  {
+    "module": "web::timeline::api",
+    "span": "web.timeline.list_home_timeline",
+    "uri_path": "/api/timeline/list_home_timeline"
+  },
+  {
+    "module": "web::timeline::api",
+    "span": "web.timeline.list_local_timeline",
+    "uri_path": "/api/timeline/list_local_timeline"
+  },
+  {
+    "module": "web::websub::api",
+    "span": "web.websub.get_websub_settings",
+    "uri_path": "/api/websub/get_websub_settings"
+  },
+  {
+    "module": "web::websub::api",
+    "span": "web.websub.list_dead_letters",
+    "uri_path": "/api/websub/list_dead_letters"
+  },
+  {
+    "module": "web::websub::api",
+    "span": "web.websub.redrive_dead_letters",
+    "uri_path": "/api/websub/redrive_dead_letters"
+  },
+  {
+    "module": "web::websub::api",
+    "span": "web.websub.update_websub_hub",
+    "uri_path": "/api/websub/update_websub_hub"
+  }
+]

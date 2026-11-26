@@ -24,7 +24,7 @@ from http.client import HTTPException
 from pathlib import Path
 from typing import Any
 
-from dev import checkout, report, steps, supervision, trace
+from dev import checkout, report, steps, supervision, trace, traces
 from dev.commands import ADMIT_INPUTS
 from dev.spans import STATUS, Status
 from dev.supervision import Child, Signals
@@ -559,7 +559,7 @@ class _BrowserRun:
         Every instance whose server started joins teardown, ready or not.
         """
         run = self.run
-        prefix = f"instance-{index}"
+        prefix = traces.instance_directory(index)
         started = time.time_ns()
         capture = self.source / prefix
         log = capture / "server-stderr.log"
@@ -697,7 +697,7 @@ class _BrowserRun:
                 "not be stopped"
             )
             if capture is not None:
-                directory = capture / f"instance-{index}"
+                directory = capture / traces.instance_directory(index)
                 code, _ = supervision.run(
                     [
                         str(self.run.test_support),

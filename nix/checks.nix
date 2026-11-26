@@ -90,8 +90,8 @@ let
     assert !(wasmTestTargetSource "tools/system-artifacts/Cargo.toml");
     assert !(wasmTestTargetSource "tools/doctests/Cargo.toml");
     assert !(wasmTestTargetSource "tools/diagnostic-coverage-runtime/Cargo.toml");
-    assert !(siteTargetSource "tools/host-proof/src/lib.rs");
-    assert !(wasmTestTargetSource "tools/host-proof/src/lib.rs");
+    assert !(siteTargetSource "tools/host-tool/src/lib.rs");
+    assert !(wasmTestTargetSource "tools/host-tool/src/lib.rs");
     true;
 
   # Coverage source remains bounded to Cargo-recognized package inputs plus the
@@ -135,7 +135,6 @@ let
     assert (cargoMemberSource coverageMembers (cargoSourcePath "ux-sandbox/tests/public_command.rs") "regular");
     assert !(builtins.elem "tools/system-artifacts" coverageMembers);
     assert !(builtins.elem "tools/coverage" coverageMembers);
-    assert !(builtins.elem "tools/host-proof" coverageMembers);
     assert !(builtins.elem "tools/doctests" coverageMembers);
     assert !(builtins.elem "tools/diagnostic-coverage-runtime" coverageMembers);
     pkgs.lib.cleanSourceWith {

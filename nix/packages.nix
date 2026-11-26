@@ -457,7 +457,7 @@ let
     assert productSourceFilter "${toString (craneLib.path ../.)}/tools/performance/src/lib.rs" "regular";
     assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/traced-run/src/main.rs" "regular");
     assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/system-artifacts/src/main.rs" "regular");
-    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/host-proof/Cargo.toml" "regular");
+    assert !(productSourceFilter "${toString (craneLib.path ../.)}/tools/host-tool/Cargo.toml" "regular");
     pkgs.lib.cleanSourceWith {
       src = craneLib.path ../.;
       filter = productSourceFilter;
@@ -498,14 +498,6 @@ let
   };
   # The tools `dev` runs on the host, from cached outputs instead of compiling
   # the tools workspace. Names stay clear of setup-ci's Cachix pushFilter.
-  hostProofBin = mkHostTool {
-    pname = "host-proof";
-    member = "tools/host-proof";
-    bins = [
-      "e2e-evidence"
-      "trace-analysis"
-    ];
-  };
   # The shared host-tool library ships only checkout admission's command, so
   # `test-local` and `e2e-local` admit without building any larger tool.
   hostToolBin = mkHostTool {
@@ -804,6 +796,8 @@ let
     ps.pyyaml
     # `dev e2e-local` stops each child's descendants, as well as its group.
     ps.psutil
+    # `dev trace-analysis` lays out its report tables.
+    ps.tabulate
   ];
   devPython = pkgs.python3.withPackages devPythonDeps;
   devPythonCheck = pkgs.python3.withPackages (
@@ -814,6 +808,7 @@ let
       ps.mypy
       ps.types-psutil
       ps.types-pyyaml
+      ps.types-tabulate
       ps.pytest
       # Tests that read GitHub workflows find their steps by YAML structure.
       ps.pyyaml
@@ -838,7 +833,10 @@ let
     root = ../tools/dev;
     fileset = pkgs.lib.fileset.unions [
       devPackageFiles
-      (pkgs.lib.fileset.fileFilter (file: file.hasExt "py" || file.hasExt "jsonl") ../tools/dev/tests)
+      # Tests and their JSON and JSONL fixtures (the e2e evidence and traces).
+      (pkgs.lib.fileset.fileFilter (
+        file: file.hasExt "py" || file.hasExt "json" || file.hasExt "jsonl"
+      ) ../tools/dev/tests)
     ];
   };
   # Sandbox callers run this build of `dev`; `checks.dev-python` runs its tests.
@@ -890,7 +888,6 @@ let
     || (
       pkgs.lib.hasPrefix "tools/" relative
       && !(pkgs.lib.hasPrefix "tools/repository-policy/" relative && relative != "tools/repository-policy/Cargo.toml")
-      && !(pkgs.lib.hasPrefix "tools/host-proof/" relative && relative != "tools/host-proof/Cargo.toml")
       # Host-run Git/checkout admission and reports; no in-derivation producer links it.
       && !(pkgs.lib.hasPrefix "tools/host-tool/" relative && relative != "tools/host-tool/Cargo.toml")
       && !(pkgs.lib.hasPrefix "tools/coverage/src/host/" relative)
@@ -956,7 +953,6 @@ let
         "test-support"
         "web"
         "tools/repository-policy"
-        "tools/host-proof"
         "tools/host-tool"
       ];
   # `checks.tools-doctests` documents every tools member, so the members toolsSrc
@@ -966,7 +962,6 @@ let
     let
       hostRunMembers = [
         "tools/repository-policy"
-        "tools/host-proof"
         "tools/host-tool"
       ];
     in
@@ -1586,7 +1581,6 @@ in
         ;
     };
     repository-policy = repositoryPolicyBin;
-    host-proof = hostProofBin;
     host-tool = hostToolBin;
     coverage-check = coverageCheckBin;
     adr-promoter = adrPromoter;

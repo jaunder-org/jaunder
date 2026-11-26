@@ -75,7 +75,7 @@ the host coverage denominator
 
 One sibling tree is outside the root workspace as its own cargo workspace:
 `tools/` (members `coverage`, `diagnostic-coverage-runtime`, `doctests`,
-`host-proof`, `host-tool`, `perf-producer`, `performance`, `repository-policy`,
+`host-tool`, `perf-producer`, `performance`, `repository-policy`,
 `system-artifacts`, and `traced-run`). The host-side dev/CI commands live in its
 concern packages rather than a separate driver workspace, and each executable
 that runs inside a Nix derivation lives in the crate that owns its logic
@@ -2538,8 +2538,12 @@ In the E2E VMs an otel-collector writes `otel-traces.jsonl` into the capture dir
 out `playwright-report-<lane>.json` (Playwright's `results.json`) and the
 service and system journals alongside the capture tarball, per
 [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md): artifacts are copied
-before the Playwright exit is asserted. `dev trace-analysis analyze` consumes
-the trace files offline (see the tooling section).
+before the Playwright exit is asserted. The e2e verdicts and
+`dev trace-analysis` read these artifacts offline through one Python trace core,
+`tools/dev/dev/traces.py`: the OTLP span parser, the gzip capture reader and the
+boot decomposition outcome
+([tool-language verdicts](adr/0261-tool-language-by-maintainability.md); see the
+tooling section).
 
 For host-side gates that reconcile Playwright execution with trace evidence, the
 lifted Playwright JSON report defines the executed project population. The
@@ -2569,10 +2573,9 @@ diagnostics, never added to that decomposition. The **Node frame** —
 `mountedMs`, and `commitToMountMs`. `commitToMountMs` is still reported as the
 bridge to suite wall-clock but is never decomposed; the difference
 `commitToMountMs - bootTotalMs` is reported separately as **frame skew** and
-charged to the harness (`frame_skew_ms` in
-`tools/host-proof/src/traces/boot_phases.rs`). The two frames differ by
-cross-process, plausibly engine-asymmetric lag, so mixing them would charge
-harness IPC to the app's boot phases.
+charged to the harness (`frame_skew_ms` in `tools/dev/dev/boot_phases.py`). The
+two frames differ by cross-process, plausibly engine-asymmetric lag, so mixing
+them would charge harness IPC to the app's boot phases.
 
 ### Logs
 
@@ -4629,7 +4632,7 @@ and the `just sandbox` front door of the
 [standalone UX sandbox lifecycle decision](adr/0244-standalone-ux-sandbox-lifecycle.md);
 the workflows those decisions defined keep their names, arguments and steps as
 `dev` subcommands. Direct tools and concern-owned host executables in the
-`tools` workspace (`repository-policy`, `host-proof`, `coverage-check`) perform
+`tools` workspace (`repository-policy`, `host-tool`, `coverage-check`) perform
 the work. This is not a blanket Rust-necessity or permanent-ownership claim. The
 Rust gate catalogs, phases, execution-policy switches and old cargo workflow
 aliases are removed, not forwarded. A step is a Python function call that runs
@@ -4727,9 +4730,13 @@ Elisp artifact lifting (`coverage-check elisp-consume`) is a concern-owned host
 command; doctests run only in Nix (`checks.doctests`, `checks.tools-doctests`).
 The E2E workflow owns authoritative output selection and trace/snapshot
 verification; its temporary `server-fn-flow` bridge is retired. Static
-server-function inventory is now a native source contract; runtime extraction,
-regeneration and producer-artifact verification are host-proof's `e2e-evidence`
-commands. Devtool keeps its in-sandbox commands.
+server-function inventory is now a native source contract, which
+`source-contracts server-fn-inventory` also lists as JSON; runtime extraction,
+regeneration and producer-artifact verification are `dev` Python
+(`tools/dev/dev/e2e_evidence.py`, `tools/dev/dev/server_fn_coverage.py`) that
+reads that listing without re-validating it
+([tool-language verdicts](adr/0261-tool-language-by-maintainability.md)).
+Devtool keeps its in-sandbox commands.
 
 The explicit local workflows are:
 
@@ -5343,11 +5350,10 @@ naming a spec that never touches the fn would stay green forever. The gate has
 two lanes: a static `source-contracts -- server-fn-coverage` lane
 (repository-policy) in `dev check`/`dev validate-no-e2e` that reads the sole
 committed `docs/coverage/server-fns.json` snapshot plus the source-derived
-inventory, and an e2e lane (host-proof
-`e2e-evidence server-fn-coverage verify|regenerate`,
-`tools/host-proof/src/steps/server_fn_coverage_check.rs`) that recomputes that
-snapshot from the lifted SQLite/Chromium lane artifacts and runtime catalog,
-after reconciling that pair
+inventory, and an e2e lane (the coverage pair's `dev e2e-reconcile` and
+`dev e2e-regenerate-coverage`, `tools/dev/dev/server_fn_coverage.py`) that
+recomputes that snapshot from the lifted SQLite/Chromium lane artifacts and
+runtime catalog, after reconciling that pair
 ([split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md)). Static
 inventory checking remains independent of E2E production; regeneration is
 explicit.
@@ -5358,11 +5364,13 @@ deliberate ([ADR-0120](adr/0120-no-endpoint-drift-check.md)). The retired
 against the derived `/<vertical>/<ident>`; #714 removed the literal, so the
 inventory now computes the endpoint with the very expression such a check would
 compare it to — a value against itself, which passes for the wrong reason. What
-verifies the computed endpoint instead is `server-fn-coverage`'s seed
-cross-check, which matches it against URIs observed in a real captured run
+verifies the computed endpoint instead is the seed cross-check, which matches
+the live `web/src` inventory against the `(module, span name, URI path)` tuples
+observed in a real captured run
 (`the_derived_endpoint_matches_the_uri_a_real_run_requested` in
-`tools/host-proof/src/steps/server_fn_coverage_check.rs`). Endpoint correctness
-is therefore asserted only where real traffic exists.
+`tools/repository-policy/src/source_inventory.rs`, which owns the derivation;
+[ADR-0120](adr/0120-no-endpoint-drift-check.md)). Endpoint correctness is
+therefore asserted only where real traffic exists.
 
 ### Component thinness and cross-language literals
 
@@ -5383,7 +5391,10 @@ value-anchor would let prose change the verdict), and the opening quote. The
 anchor locates; only exact string inequality fails. Zero anchor matches, more
 than one, or an unreadable file are all hard failures, because a locator that
 has quietly stopped locating is the one thing this gate must never report as
-green.
+green. The table also pairs Python sites with Rust: the capture layout's
+`instance-`, `diag.log` and `otel-traces.jsonl` are spelled once in
+`tools/dev/dev/traces.py` and paired with `host/src/capture.rs`
+([ADR-0109](adr/0109-cross-language-literal-agreement.md)).
 
 ## Development tooling
 
@@ -5417,42 +5428,43 @@ moved into `dev` (#2066), the performance workflow's host work is now Python in
 `qualification` has been retired for the
 [upgrade test](adr/0265-upgrade-test.md).
 
-`tools/host-proof` is being retired through its own follow-ups (#2100–#2105):
+The former `tools/host-proof` crate is retired, its executables moved or retired
+one follow-up at a time (#2100–#2105):
 
-- `e2e-evidence` and `trace-analysis` (on one shared trace core) move into `dev`
-  as Python. `wasm-audit` already has (#2101): `dev wasm-audit` and the wasm
-  budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown.
+- The e2e verdicts and `dev trace-analysis` are `dev`'s Python (#2100):
+  `tools/dev/dev/e2e_evidence.py`, `server_fn_coverage.py` and
+  `trace_analysis.py` on one trace core, `traces.py`. `dev wasm-audit` and the
+  wasm budget are `tools/dev/dev/wasm_audit.py`, with `twiggy` for the breakdown
+  (#2101).
+- `admit-inputs` is `tools/host-tool`'s one executable, and `csr-prerequisite`
+  is retired (#2102).
 - The cache-safety probe is retired rather than ported: CI honours
   `nonSubstitutable` and `dev` checks each coverage and e2e verdict ran on the
   runner
-  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md)).
-- The repository contract tests become pytest.
+  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md))
+  (#2103).
+- The repository contract tests are pytest (#2104).
+- With no executable or test left, the crate and its `packages.host-proof`
+  output are deleted (#2105).
 
-Until the remaining moves land, the placements below describe the current tree:
+The placements below describe the current tree:
 
 - **Host concern packages** — the host-side dev/CI commands, each owned by the
   concern it serves rather than one driver: `tools/repository-policy`
   (`repository-docs`, `source-contracts`, and the shared `host_tool::report`
-  contract), `tools/host-proof` (below), `tools/coverage` with its nondefault
-  `host` feature
+  contract), `tools/host-tool` (`admit-inputs`), `tools/coverage` with its
+  nondefault `host` feature
   (`coverage-check policy | elisp-consume | mutants-verify | probe-source | wasm-probe | wasm-measure`).
   `dev` owns gate composition. These commands invoke `nix build` and
   consume/analyze exfiltrated build artifacts (coverage gate, CRAP gate,
-  reports). Every host tool prints exactly one JSON report on stdout
-  (`host_tool::report`: `command`, `ok`, `duration_ms`,
-  `steps[{name, ok, skipped, duration_ms, detail}]`, optional `exit_override`,
-  optional rendered `report` text and optional structured `evidence`). The
-  shared argument parser points fd 1 at stderr and reserves the real stdout for
-  that report, so child output goes to stderr; the exit status is the verdict.
-  `dev` renders the human view from it (`tools/dev/dev/report.py`).
-- **`tools/host-proof`** (retiring; see the pending moves above) — focused host
-  proof (ADR-0246): the direct `trace-analysis` executable behind the matching
-  `dev` command; trace analysis carries its rendered tables in the report's
-  `report` field. Each prints exactly one JSON report on stdout (steps,
-  outcomes, durations, details, verdict) and sends child output to stderr; its
-  exit status is the verdict. `dev` renders the human step view; there is no
-  sidecar, `--json` flag or completion sentinel. None joins the calling `dev`
-  run's trace.
+  reports). `coverage-check`, the one host tool that renders a verdict, prints
+  exactly one JSON report on stdout (`host_tool::report`: `command`, `ok`,
+  `duration_ms`, `steps[{name, ok, skipped, duration_ms, detail}]`, optional
+  `exit_override`, optional rendered `report` text and optional structured
+  `evidence`). The shared argument parser points fd 1 at stderr and reserves the
+  real stdout for that report, so child output goes to stderr; the exit status
+  is the verdict. `dev` renders the human view from it
+  (`tools/dev/dev/report.py`).
 - **`dev test-local`** sequences CSR admission (host-tool's `admit-inputs`), the
   `.#csrBundle` build, the image worker build (whose server build script
   validates the bundle) and `pg-run cargo nextest` itself, holding the
@@ -5472,13 +5484,12 @@ Until the remaining moves land, the placements below describe the current tree:
   executables: `coverage-sandbox` (`tools/coverage`: `emit` produces coverage
   artifacts into `$out` for exfiltration, `validate-status` gates them, `wasm`
   drives the browser WebAssembly coverage lifecycle, and `diagnostic-build`
-  records the diagnostic CSR build's artifacts, reading wasm with `wasmparser`,
-  the parser `host-proof` uses); `doctests` (`tools/doctests`: `emit` runs and
-  reconciles the root workspace's doctests); `perf-producer`
-  (`tools/perf-producer`: storage measurement and browser fragment validation in
-  the performance producer VMs); and `system-artifacts`
-  (`tools/system-artifacts`: stages the closed system styling inventory for
-  every CSR bundle).
+  records the diagnostic CSR build's artifacts, reading wasm with `wasmparser`);
+  `doctests` (`tools/doctests`: `emit` runs and reconciles the root workspace's
+  doctests); `perf-producer` (`tools/perf-producer`: storage measurement and
+  browser fragment validation in the performance producer VMs); and
+  `system-artifacts` (`tools/system-artifacts`: stages the closed system styling
+  inventory for every CSR bundle).
 - **`tools/coverage`** — by default a pure-logic library shared by both sides,
   with no I/O policy of its own
   ([ADR-0028](adr/0028-devtool-vs-xtask-boundary.md)), plus the
@@ -5560,17 +5571,16 @@ would otherwise default to resolver 1
 **Independent host-tool packaging.** The
 [Nix-cached tooling decision](adr/0225-nix-cached-host-tooling.md) distinguishes
 building a host executable from executing its orchestrator inside a derivation.
-`packages.host-proof`, `packages.host-tool`, `packages.coverage-check` and
-`packages.system-artifacts` are built by one shared host-tool builder
-(`nix/host-tool.nix`) from each package's own Cargo path closure, on a
-dependencies-only build that only the lockfile, member manifests, toolchain and
-features change (`nix/tools-workspace-package.nix`, which
-`packages.repository-policy` shares); application coverage/E2E dependencies and
-explicit host-unit-test authorities remain separate. `dev` runs every Rust host
-tool from these outputs and `packages.repository-policy`, locally and in CI, so
-CI substitutes unchanged tools from Cachix instead of compiling them. setup-ci
-caches no compiled tool output; jobs that run host Cargo opt in to a cache of
-its downloads only
+`packages.host-tool`, `packages.coverage-check` and `packages.system-artifacts`
+are built by one shared host-tool builder (`nix/host-tool.nix`) from each
+package's own Cargo path closure, on a dependencies-only build that only the
+lockfile, member manifests, toolchain and features change
+(`nix/tools-workspace-package.nix`, which `packages.repository-policy` shares);
+application coverage/E2E dependencies and explicit host-unit-test authorities
+remain separate. `dev` runs every Rust host tool from these outputs and
+`packages.repository-policy`, locally and in CI, so CI substitutes unchanged
+tools from Cachix instead of compiling them. setup-ci caches no compiled tool
+output; jobs that run host Cargo opt in to a cache of its downloads only
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)).
 
 **Workspace layering.** The root workspace's shared crates are target-scoped
@@ -5787,8 +5797,6 @@ checker registry, runner, supervisor or replacement omnibus:
   and best-effort `core.hooksPath` preparation (every host tool calls it before
   its workload), and the `admit-inputs` executable that `test-local` and
   `e2e-local` admit through.
-- `tools/host-proof` — artifact-only e2e verdicts (`e2e-evidence`) and host
-  diagnostics (`trace-analysis`).
 - `tools/coverage` (nondefault `host` feature) — `coverage-check` policy,
   benchmark, source probe, Emacs Lisp, WASM coverage and mutation evidence.
 - `scripts/pg-run.py` (Nix package `pg-run`) — throwaway PostgreSQL.

@@ -1,9 +1,9 @@
 # Determinism fixtures (#745, #757)
 
 Real trace-derived coverage from **three distinct executions of the same e2e
-derivation on the same tree**. `snapshot.rs`'s
-`runs_that_disagree_on_titles_render_one_snapshot` keeps the single-artifact
-contract checkable in milliseconds instead of on trust.
+derivation on the same tree**. `test_server_fn_coverage.py`'s
+`test_runs_that_disagree_on_titles_render_one_snapshot` keeps the
+single-artifact contract checkable in milliseconds instead of on trust.
 
 ## What they show
 
@@ -24,9 +24,8 @@ requests really are that test's — but it is not reproducible.
 
 **The pre-#745 combined shape** —
 `{"covered": {key: [titles]}, "orphans": {...}}` — which the current snapshot
-parser does not accept. That is deliberate: the test brings its own
-`CombinedRun` deserialize struct and projects these historical captures through
-today's `Coverage::into_snapshot` boundary.
+parser does not accept. That is deliberate: the test reads that shape itself and
+projects these historical captures through today's snapshot rendering.
 
 ## Provenance
 

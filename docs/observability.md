@@ -557,7 +557,7 @@ sum(e2e.test.navigation_count) + sum(e2e.page.navigation_count)
 reports. Sections that say `e2e.test` alone remain default-page-only.
 
 **Every `e2e.`-prefixed span must carry an `e2e.project` attribute.**
-`traces analyze --project <name>` drops any `e2e.`-named span whose
+`dev trace-analysis analyze --project <name>` drops any `e2e.`-named span whose
 `e2e.project` differs from the filter, so an unstamped span reads as "belongs to
 another project" and vanishes from filtered analysis.
 
@@ -696,10 +696,10 @@ producers settle. It consumes the independent unsharded census plus every
 lane-qualified report, manifest, phase sidecar, and capture; it rejects missing
 or duplicate source identities, swapped shard evidence, failed phases, partial
 traces, and incomplete retry/duration populations. The reconciliation artifact
-is only its verdict log (`.xtask/reconcile.log`, the human view of
-`e2e-evidence reconcile`'s JSON report): producer artifacts already retain the
-full diagnostics, so operators should inspect the named failed lane rather than
-a duplicated aggregate bundle.
+is only its verdict log (`.xtask/reconcile.log`, the rendered steps of
+`dev e2e-reconcile`): producer artifacts already retain the full diagnostics, so
+operators should inspect the named failed lane rather than a duplicated
+aggregate bundle.
 
 This is a per-combo headroom detector, not a timeout-sizing policy or aggregate
 duration history. Whole-test budgets remain ambient except where a budget is
@@ -821,15 +821,20 @@ empty one.
 **The seed capture is committed, reduced and re-runnable.** The allowlist claims
 each of its entries names a fn the real suite does not drive, so the capture
 that claim came from is checked in as
-`tools/host-proof/src/server_fn_coverage/testdata/otel-traces-seed.jsonl` — the
-extractor's unit tests run against it, rather than against hand-authored spans
-only. A 25 MB capture cannot be committed, so `testdata/reduce-otel-capture.mjs`
-cuts it to ~610 KiB and is committed beside it: without the reduction in the
-repo, "the reduction preserved the hit set" is unfalsifiable, and an entry's
-absence from the hit set would be indistinguishable from the reduction having
-dropped it. The script's header states exactly what it keeps and why. It keys on
-each span's own `name`, `uri`, and `code.namespace` and never re-derives the
-`#[server]` inventory — an earlier version did, misread `upload_media`'s
+`tools/dev/tests/fixtures/server-fn-coverage/otel-traces-seed.jsonl` — the
+extractor's tests run against it, with the inventory recorded alongside it
+(`seed-inventory.json`), rather than against hand-authored spans only.
+`repository-policy`'s endpoint cross-check reads the seed's observed
+`(module, span name, URI path)` tuples
+(`tools/repository-policy/src/testdata/server-fn-seed-endpoints.json`). Both are
+recorded from this seed, so refreshing it means re-recording them. A 25 MB
+capture cannot be committed, so `reduce-otel-capture.mjs` cuts it to ~610 KiB
+and is committed beside it: without the reduction in the repo, "the reduction
+preserved the hit set" is unfalsifiable, and an entry's absence from the hit set
+would be indistinguishable from the reduction having dropped it. The script's
+header states exactly what it keeps and why. It keys on each span's own `name`,
+`uri`, and `code.namespace` and never re-derives the `#[server]` inventory — an
+earlier version did, misread `upload_media`'s
 `#[server(input = MultipartFormData, endpoint = "/upload_media")]`, and silently
 dropped it while every test still passed.
 
@@ -901,29 +906,37 @@ hook). See `docs/adr/` for the app-driven scoped-capture decision.
 
 ## Analysis
 
-Use `dev trace-analysis analyze` on one or more artifact files, for example:
+`dev trace-analysis` is `dev` Python over the shared trace core
+(`tools/dev/dev/trace_analysis.py`, `tools/dev/dev/traces.py`). Each command
+prints its tables, then one `dev` step line; there is no JSON report. It exits 0
+on success, 1 for a malformed JSON trace attribute, and 2 for a refusal (an
+unreadable file, a conflicting Playwright duration, a missing capture). `run`'s
+failed Nix build ends with Nix's status.
+
+Use `dev trace-analysis analyze` on one or more `otel-traces.jsonl` files, for
+example:
 
 ```bash
 # Local e2e-local capture; use the exact path printed by the command.
 dev trace-analysis analyze \
   .xtask/e2e-local/<run-id>/chromium/capture/otel-traces.jsonl
 
-# VM captures are extracted from capture-<lane>.tar.gz; traces run does this.
+# VM captures are extracted from capture-<lane>.tar.gz; `run` does this.
 dev trace-analysis analyze \
-  sqlite-otel-traces.jsonl \
-  postgres-otel-traces.jsonl
+  --playwright-report playwright-report-sqlite-chromium-1-of-3.json \
+  sqlite-otel-traces.jsonl
 ```
 
-The analyzer reports:
+`--top N` (at least 1, default 25) sets the rows of each ranked table,
+`--trace TRACE_ID` keeps one trace, and `--project NAME` keeps one e2e project's
+`e2e.`-named spans. `--playwright-report FILE`, repeatable, supplies the
+per-test span-coverage denominator; without one that section is skipped with a
+note. Reports from different backends share test, project and retry keys, so a
+conflicting duration between them is a refusal: analyze one combination at a
+time, or use `run`, which pairs each report with its own trace.
 
-- slowest spans overall
-- slowest `e2e.test` spans
-- top e2e action hotspots
-- top navigation phase hotspots and slow targets from both `e2e.test` and
-  `e2e.page` navigation JSON (including `navigation.commit_to_mount`, the commit
-  → CSR mount-ready phase)
-- per-project/browser e2e duration breakdown
-- per-trace duration totals
+The analyzer reports, in this order (empty tables are left out):
+
 - per-test span coverage: Playwright-reported duration vs the time covered by
   the lifecycle span tree, and the uncovered remainder
 - **boot-decomposition coverage**, per `(source, project)`: `e2e.test` plus
@@ -932,6 +945,24 @@ The analyzer reports:
   trace **file** as well as the project because `projectName` is the browser and
   names no backend — keying on project alone would pool sqlite's navigations
   with postgres's. Certify this before drawing conclusions from a corpus (#818).
+- slowest spans overall
+- slowest `e2e.test` spans
+- top e2e action hotspots
+- top navigation phase hotspots and slow targets from both `e2e.test` and
+  `e2e.page` navigation JSON (including `navigation.commit_to_mount`, the commit
+  → CSR mount-ready phase)
+- long-task hotspots, and long-task totals by project
+- resource initiator hotspots and slow resource assets
+- per-project/browser e2e duration breakdown
+- per-trace duration totals
+
+`dev trace-analysis boot-phases FILE...` reports what `analyze` does not: the
+median boot-phase decomposition per (trace file, project, cache warmth,
+experiment arm). Each population prints its status line, the document-frame
+segment table (median, share of boot total, sample count), and the Node-side
+`commitToMountMs` with the frame skew between the two, which is reported and
+never decomposed (see "Measurement frames are not mixed" in
+`docs/ARCHITECTURE.md`).
 
 ### `site.serve` — what the server actually served (#818)
 
@@ -1006,20 +1037,25 @@ The CSR client emits `performance.mark`s at its boot boundaries via
   measured is not the binary being shipped, which quietly invalidates every
   number they produce.
 
-**Measure from `traces run`, never from `dev validate`.** `validate` builds the
-`e2e-checks` aggregate, so nix realizes the four combo derivations
-**concurrently** — four VMs at two workers each on one host. `traces run` builds
-them one at a time (`traces/run.rs`'s nested loop). Measured 2026-08-05 on the
-same tree: sqlite-chromium reported **436 s** under `validate` against **191 s**
-serial, and all four `validate` combos started within 8 seconds of each other. A
-suite duration read out of a `validate` log is a contention artefact, inflated
-enough (~2.5×) to look like a catastrophic regression.
+**Measure from `dev trace-analysis run`, never from `dev validate`.** `validate`
+builds the `e2e-checks` aggregate, so nix realizes the combo derivations
+**concurrently** — several VMs at two workers each on one host.
+`dev trace-analysis run` builds them one at a time, one `nix build` step per
+lane. Measured 2026-08-05 on the same tree: sqlite-chromium reported **436 s**
+under `validate` against **191 s** serial, and all four `validate` combos
+started within 8 seconds of each other. A suite duration read out of a
+`validate` log is a contention artefact, inflated enough (~2.5×) to look like a
+catastrophic regression.
 
 Host quiescence matters for the same reason: sample `/proc/loadavg` before and
 after each run and discard any taken while other work — including other agent
 sessions — was on the box.
 
-To build both e2e VM checks and immediately analyze the produced traces, use:
+To build the e2e lanes and immediately analyze their traces, use the command
+below. It builds every enabled catalog lane check (`checks.e2e-<identity>`) for
+both backends and the selected browsers, reads each `capture-<identity>.tar.gz`,
+pairs it with `playwright-report-<identity>.json` when present, and labels each
+trace by its identity:
 
 ```bash
 dev trace-analysis run --top 25
@@ -1037,11 +1073,12 @@ Optional filters:
 
 - `--top N` controls how many rows each section prints.
 - `--trace TRACE_ID` restricts analysis to one trace id.
-- `--single-worker` runs the per-browser single-worker packages
-  (`e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`) instead of the gate
-  checks. These were the `-cold` family before #792, when "cold" meant "no
-  warmup"; the gate is cold now too, so the worker count is the only difference
-  left.
+- `--single-worker` builds the per-browser single-worker packages
+  (`e2e-{sqlite,postgres}-{chromium,firefox}-single-worker`) instead of the lane
+  checks; their captures keep the unsplit identity
+  `<backend>-<browser>-unsplit`. These were the `-cold` family before #792, when
+  "cold" meant "no warmup"; the gate is cold now too, so the worker count is the
+  only difference left.
 - `--browser chromium|firefox` restricts the run to one browser (default: both).
   Use this (not `--project`) to focus one browser, e.g. when debugging Firefox
   timeout pressure: `dev trace-analysis run --browser firefox`.

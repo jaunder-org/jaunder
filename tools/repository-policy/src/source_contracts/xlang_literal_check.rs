@@ -4,9 +4,10 @@
 //!
 //! A few literals in this repo cannot be declared once, because no import spans
 //! the boundary they cross — the CSR mount marker crosses into an
-//! `inline_js` string as an opaque JS literal, and the boot-mark prefix is read
-//! by the Playwright harness in Node. #251 (D6) decided those duplications are
-//! necessary; nothing checked them.
+//! `inline_js` string as an opaque JS literal, the boot-mark prefix is read
+//! by the Playwright harness in Node, and the e2e capture layout `host` writes is
+//! read back by `dev`'s Python capture reader (#2100). #251 (D6) decided the
+//! TypeScript duplications are necessary; nothing checked them.
 //!
 //! Drift in that class is silent at build time and maximally expensive at test
 //! time: nothing fails to compile, static checks never run e2e, and the
@@ -17,7 +18,8 @@
 //! **How a site is located.** Each [`Site`] carries a literal `anchor` naming the
 //! syntax that introduces the literal — `MOUNTED_ATTR = ` for a declaration, or
 //! `setAttribute(` for the CSR site, which has no Rust constant to name because
-//! the literal only exists inside the JS string — and the quote that opens the
+//! the literal only exists inside the JS string, or a `match` arm such as
+//! `Stream::Diag => ` — and the quote that opens the
 //! literal directly after it. The anchor **locates a site; it never decides a
 //! violation.** The violation is exact string inequality between two extracted
 //! literals, so an out-of-date anchor cannot pass silently: zero occurrences or
@@ -173,6 +175,45 @@ const PAIRS: &[Pair] = &[
             quote: '"',
         },
     },
+    Pair {
+        key: "capture-instance-prefix",
+        a: Site {
+            file: "host/src/capture.rs",
+            anchor: "INSTANCE_PREFIX: &str = ",
+            quote: '"',
+        },
+        b: Site {
+            file: "tools/dev/dev/traces.py",
+            anchor: "INSTANCE_PREFIX = ",
+            quote: '"',
+        },
+    },
+    Pair {
+        key: "capture-diag-log",
+        a: Site {
+            file: "host/src/capture.rs",
+            anchor: "Stream::Diag => ",
+            quote: '"',
+        },
+        b: Site {
+            file: "tools/dev/dev/traces.py",
+            anchor: "DIAG_LOG = ",
+            quote: '"',
+        },
+    },
+    Pair {
+        key: "capture-trace-file",
+        a: Site {
+            file: "host/src/capture.rs",
+            anchor: "Stream::Otel => ",
+            quote: '"',
+        },
+        b: Site {
+            file: "tools/dev/dev/traces.py",
+            anchor: "TRACE_FILE = ",
+            quote: '"',
+        },
+    },
 ];
 
 /// Every disagreement, unreadable file, and unlocatable site across [`PAIRS`],
@@ -317,17 +358,24 @@ mod tests {
 
     /// One agreeing literal per site, indexed the way `PAIRS` is walked: pair 0
     /// side a, pair 0 side b, pair 1 side a, and so on.
-    const AGREEING: [&str; 6] = [
+    const AGREEING: [&str; 12] = [
         "data-mounted",
         "data-mounted",
         "jaunder.",
         "jaunder.",
         "csr_bg.wasm",
         "csr_bg.wasm",
+        "instance-",
+        "instance-",
+        "diag.log",
+        "diag.log",
+        "otel-traces.jsonl",
+        "otel-traces.jsonl",
     ];
 
     /// Build a fixture root holding every file `PAIRS` names, each site's
     /// literal taken from [`AGREEING`] except where `overrides` replaces it.
+    /// Sites that share a file are written into it together, one line each.
     fn fixture_root(overrides: &[(usize, &str)]) -> tempfile::TempDir {
         let mut values = AGREEING;
         for &(index, value) in overrides {
@@ -335,19 +383,21 @@ mod tests {
         }
         let dir = tempfile::tempdir().expect("tempdir");
         let mut values = values.into_iter();
+        let mut files: std::collections::BTreeMap<&str, String> = Default::default();
         for pair in PAIRS {
             for site in [&pair.a, &pair.b] {
                 let value = values.next().expect("one value per site");
-                let path = dir.path().join(site.file);
-                std::fs::create_dir_all(path.parent().expect("site files are nested"))
-                    .expect("mkdir");
                 let q = site.quote;
-                std::fs::write(
-                    &path,
-                    format!("prefix {}{q}{value}{q} suffix\n", site.anchor),
-                )
-                .expect("write");
+                files
+                    .entry(site.file)
+                    .or_default()
+                    .push_str(&format!("prefix {}{q}{value}{q} suffix\n", site.anchor));
             }
+        }
+        for (file, source) in files {
+            let path = dir.path().join(file);
+            std::fs::create_dir_all(path.parent().expect("site files are nested")).expect("mkdir");
+            std::fs::write(&path, source).expect("write");
         }
         dir
     }
@@ -401,6 +451,18 @@ mod tests {
         assert!(detail.contains("host/src/vite_manifest.rs"), "{detail}");
         assert!(detail.contains("tools/dev/dev/wasm_audit.py"), "{detail}");
         assert!(detail.contains("\"csr.wasm\""), "{detail}");
+    }
+
+    /// A capture filename `dev` reads that drifts from what `host` writes names
+    /// both files, though each shares its file with other sites.
+    #[test]
+    fn a_python_capture_layout_drift_names_the_key_and_both_files() {
+        let dir = fixture_root(&[(9, "diagnostics.log")]);
+        let detail = problems(dir.path()).expect("a problem");
+        assert!(detail.contains("capture-diag-log"), "{detail}");
+        assert!(detail.contains("host/src/capture.rs"), "{detail}");
+        assert!(detail.contains("tools/dev/dev/traces.py"), "{detail}");
+        assert!(detail.contains("diagnostics.log"), "{detail}");
     }
 
     /// A missing site file is a hard failure, never a skip or a pass. Making

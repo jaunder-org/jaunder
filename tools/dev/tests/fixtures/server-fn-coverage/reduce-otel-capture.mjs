@@ -2,13 +2,13 @@
 // Reduce a full e2e OTLP capture to the committed server-fn-coverage fixture
 // `otel-traces-seed.jsonl`, which sits next to this script (#681).
 //
-//     tools/host-proof/src/server_fn_coverage/testdata/reduce-otel-capture.mjs \
+//     tools/dev/tests/fixtures/server-fn-coverage/reduce-otel-capture.mjs \
 //       <otel-traces.jsonl> <out.jsonl>
 //
 // It lives beside the fixture it generates rather than under `scripts/`: the
-// host-only `tools/host-proof` sources are outside the application and e2e
-// source closures, so editing it cannot bust the e2e derivations' input hashes
-// (spec AC16).
+// host-only `tools/dev` sources are outside the application and e2e source
+// closures, so editing it cannot bust the e2e derivations' input hashes (spec
+// AC16).
 //
 // The fixture is the evidence behind `docs/coverage/server-fns.json` and the
 // allowlist, so spec AC11 — "every allowlist entry names a fn absent from the
@@ -29,8 +29,8 @@
 //        - `code.module.name` starts with `web::`, or legacy `code.namespace`
 //          does when the current attribute is absent — the superset of the
 //          span-name signal, which only ever accepts a span whose module is a
-//          `web` crate module (`extract.rs` strips that crate prefix before
-//          comparing).
+//          `web` crate module (`server_fn_coverage.py` strips that crate
+//          prefix before comparing).
 //      Supersets on purpose: see THE TRAP below.
 //   3. The transitive `parentSpanId` ancestors of everything kept by (2). A hit
 //      is attributed through its chain, not directly — a `#[server]` fn's
