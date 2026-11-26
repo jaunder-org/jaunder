@@ -30,7 +30,7 @@ removal of automatic probe execution from CI, and the on-demand
 `coverage-check probe-source` filter probe, remain as ADR-0227 decided.
 `source-diagnostics cache-safety-probe` is unaffected. _Amended by #2103:_ as of
 2026-11-25, that probe had been retired too
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §The verify ladder & git-enforced gate.
 
 ## Consequences

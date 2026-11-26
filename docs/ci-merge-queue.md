@@ -223,7 +223,7 @@ compared with `merge_group.base_sha` by the precommit's own rule, runs only
 The queue entry's verdict still covers the landed commit, so its `push` run
 skips as above. Merge-queue runs are never cancelled; only a superseded
 `pull_request` run is
-([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
+([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)).
 
 ## ADR promoter queue boundary
 

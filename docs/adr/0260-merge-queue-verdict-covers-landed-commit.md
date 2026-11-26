@@ -34,7 +34,7 @@ coverage and e2e on the combined state and takes no test result from Cachix.
 Nothing here relaxes the `pushFilter` rule in ADR-0252. _Amended by #2103:_ as
 of 2026-11-25, CI enforced that rule by honouring `nonSubstitutable` and
 checking that each verdict was built on the runner
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §The verify ladder & git-enforced gate.
 
 For a push to `main`, CI's first job, `Merge-queue verdict`, looks for such a

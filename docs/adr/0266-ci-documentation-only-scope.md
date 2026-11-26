@@ -1,6 +1,6 @@
-# ADR-DRAFT: CI runs only the documentation checks for a Markdown-only change
+# ADR-0266: CI runs only the documentation checks for a Markdown-only change
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-25
 - Issue: [#1971](https://github.com/jaunder-org/jaunder/issues/1971)
 
@@ -15,7 +15,7 @@ product checks filter `.md` out of their sources. A new commit on a pull request
 also left the superseded run going to completion.
 
 The precommit already had a Markdown-only test for its narrow route
-([ADR-0029](../0029-git-enforced-verify-gate.md)). It also sent any delete or
+([ADR-0029](0029-git-enforced-verify-gate.md)). It also sent any delete or
 rename broad, which no check in the narrow route needed.
 
 ## Decision
@@ -67,7 +67,7 @@ rename broad, which no check in the narrow route needed.
   slim image's Python (3.12 as of this decision).
 - A Markdown file that a product lane starts to read must change the rule, not
   be added silently. The source probes that used to dirty `README.md`
-  ([ADR-0116](../0116-coverage-probe-dirty-tree-workaround.md)) now dirty their
+  ([ADR-0116](0116-coverage-probe-dirty-tree-workaround.md)) now dirty their
   worktree with a new intent-to-add Markdown file of their own, so no tracked
   Markdown is load-bearing for them.
 - Amends ADR-0029's narrow-class definition (Markdown deletes and renames are

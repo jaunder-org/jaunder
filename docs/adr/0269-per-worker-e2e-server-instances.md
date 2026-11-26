@@ -1,6 +1,6 @@
-# ADR-DRAFT: Every Playwright worker owns its own E2E server instance
+# ADR-0269: Every Playwright worker owns its own E2E server instance
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-24
 - Issue: [#2076](https://github.com/jaunder-org/jaunder/issues/2076)
 
@@ -13,19 +13,19 @@ Registration Policy, the Site Default Audience, the Media Upload Capability and
 the Site Theme. A test that changed one of them could break a test running at
 the same moment on the other worker.
 
-[ADR-0039](../0039-e2e-parallelism-via-per-test-identity-fixtures.md) point 3
+[ADR-0039](0039-e2e-parallelism-via-per-test-identity-fixtures.md) point 3
 handled this by quarantine. By #2076 the quarantined specs were a site-settings
 group (`admin-site`, `backup`, `smtp`, the Theme specs, `media` and others that
 changed or restored site configuration) plus `invite`. They ran in serial
 Playwright projects ordered by project `dependencies`.
-[ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
-[ADR-0253](../0253-split-chromium-e2e-lanes.md) then gave each backend/browser
-pair a serial-special lane: visual, global-configuration and invite projects in
+[ADR-0203](0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
+[ADR-0253](0253-split-chromium-e2e-lanes.md) then gave each backend/browser pair
+a serial-special lane: visual, global-configuration and invite projects in
 dependency order, beside two ordinary shards. That lane ran at concurrency 1 and
 became the E2E long pole. #2065 measured PostgreSQL/Firefox serial-special at a
 14.0-minute median and moved the Theme specs into a fourth, serial-theme lane
 per pair, sizing the ordinary shards by measured duration rather than test count
-([ADR-0262](../0262-serial-theme-e2e-lane-and-weighted-shards.md)).
+([ADR-0262](0262-serial-theme-e2e-lane-and-weighted-shards.md)).
 
 The quarantine also leaked. Restoring a setting after a test fixed only what the
 _next_ test saw, never a test running at the same moment. Tests outside the
@@ -141,24 +141,24 @@ This decision narrowly supersedes and amends five earlier decisions. The rest of
 each stays current.
 
 - It supersedes
-  [ADR-0039](../0039-e2e-parallelism-via-per-test-identity-fixtures.md) point 3
-  and its quarantine rule. No spec is quarantined. The per-test identity
-  fixtures (points 1 and 2) and `workers=2` remain.
+  [ADR-0039](0039-e2e-parallelism-via-per-test-identity-fixtures.md) point 3 and
+  its quarantine rule. No spec is quarantined. The per-test identity fixtures
+  (points 1 and 2) and `workers=2` remain.
 - It supersedes the serial-special parts of
-  [ADR-0203](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
-  [ADR-0253](../0253-split-chromium-e2e-lanes.md): two ordinary shards plus one
+  [ADR-0203](0203-distribute-ci-validation-and-firefox-e2e-lanes.md) and
+  [ADR-0253](0253-split-chromium-e2e-lanes.md): two ordinary shards plus one
   serial-special lane, ordered visual, global-configuration and invite projects,
   and their project dependencies. Their catalog-derived lanes, independent
   census, `always()` reconciliation, shared cap and trace seeds remain.
 - It supersedes the serial Theme role and lane of
-  [ADR-0262](../0262-serial-theme-e2e-lane-and-weighted-shards.md): the Theme
-  specs are tests like any other under the state rule. Its duration-weighted
-  shards remain and size every lane.
-- It amends [ADR-0032](../0032-e2e-zero-panic-gate.md): the gate reads every
+  [ADR-0262](0262-serial-theme-e2e-lane-and-weighted-shards.md): the Theme specs
+  are tests like any other under the state rule. Its duration-weighted shards
+  remain and size every lane.
+- It amends [ADR-0032](0032-e2e-zero-panic-gate.md): the gate reads every
   instance unit's journal, not one `jaunder.service` journal.
-- It amends [ADR-0057](../0057-e2e-capture-dir-contract.md): one capture
-  directory per lane still holds every stream, but server streams move into
-  per-instance subdirectories.
+- It amends [ADR-0057](0057-e2e-capture-dir-contract.md): one capture directory
+  per lane still holds every stream, but server streams move into per-instance
+  subdirectories.
 
 ### Alternatives rejected
 

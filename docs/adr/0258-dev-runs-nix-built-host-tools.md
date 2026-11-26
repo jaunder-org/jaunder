@@ -48,7 +48,7 @@ packages:
   `host-tool` and `csr-prerequisite` is retired, so neither `test-local` nor
   `e2e-local` builds `host-proof`. _Amended by #2103:_ as of 2026-11-25,
   `source-diagnostics` had been retired with the cache-safety probe
-  ([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
+  ([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md)).
   _Amended by #2100:_ nor are `e2e-evidence` and `trace-analysis`, which are now
   `dev`'s own Python. Server-function coverage builds `repository-policy`
   instead, for its `source-contracts server-fn-inventory` listing, so CI's e2e

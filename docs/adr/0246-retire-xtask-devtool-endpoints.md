@@ -57,7 +57,7 @@ Choose these concern homes for the three residual clusters:
   Checkout/source admission and best-effort relative hook setup share one
   library owner and explicit prepare callsites; pure/artifact consumers do not
   acquire Git-config mutation. _Amended by #2102._ That library owner, now
-  `tools/host-tool` (`docs/adr/drafts/narrow-repository-policy.md`), also ships
+  `tools/host-tool` (`docs/adr/0268-narrow-repository-policy.md`), also ships
   `admit-inputs <source-admits>`, the one command over its untracked-input
   admission that `dev test-local` and `dev e2e-local` run before building a
   selected output. A thin command belongs with the logic it wraps, not in
@@ -103,7 +103,7 @@ _Amended by #2101:_ the bundle-size diagnostic and the raw wasm budget
 (`wasm-audit`) are no longer a host-proof interface. They are `dev`'s own
 Python, and twiggy does the wasm name and size reading. _Amended by #2103:_ as
 of 2026-11-25, `source-diagnostics` had been retired
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §Residual tooling owners after xtask retirement.
 _Amended by #2100:_ nor are the e2e verdicts (`e2e-evidence`) and the trace
 diagnostics (`trace-analysis`). They are `dev`'s own Python

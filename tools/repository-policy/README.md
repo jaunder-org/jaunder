@@ -9,7 +9,7 @@ verdict.
 
 Git and checkout admission come from the shared `tools/host-tool` library; this
 package's executables pass it their compiled source predicate
-(`docs/adr/drafts/narrow-repository-policy.md`).
+(`docs/adr/0268-narrow-repository-policy.md`).
 
 Git/index custody (the precommit snapshot, staging reconciliation and the shared
 `static-docs` admission and post-check) belongs to `dev` itself

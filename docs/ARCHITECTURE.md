@@ -85,7 +85,7 @@ fragment-validation library that the sandbox producers write with; the Nix
 performance producers run the separate `perf-producer` crate, which links the
 library with typed product storage. The host side of the workflow is Python in
 `dev`, which reads the producers' already-validated output
-([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+([performance host reads validated data](adr/0270-perf-data-python-reads-validated-data.md)).
 The diagnostic coverage runtime is a target-only auxiliary member that is also
 copied into the diagnostic Nix source closure; its manifest therefore keeps
 direct package metadata so that the copied crate remains independently
@@ -125,7 +125,7 @@ again. It checks only what no single producer can: the producer's status, that
 its fragment fills the backend/browser slot Nix selected, and that every
 fragment describes the same dataset. It then atomically publishes each nonce
 result and the stable upload copy
-([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+([performance host reads validated data](adr/0270-perf-data-python-reads-validated-data.md)).
 Positive optional `u64` exploration counts use native `dev` parameters. The Nix
 selector rejects a plan that does not have posts divisible by authors, revisions
 at least posts, and (with any override) more than 50 owner-history rows per
@@ -163,7 +163,7 @@ ADR-0141 workspace ownership and auxiliary host tests remain unchanged. Its
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)); the serial
 producer sequence is unchanged. The host Rust performance command is retired:
 `dev` owns host assembly, comparison and import in Python
-([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+([performance host reads validated data](adr/0270-perf-data-python-reads-validated-data.md)).
 
 **Package-metadata ownership is deliberately partial.** The root
 `[workspace.package]` owns the version, edition, and license inherited by its
@@ -2854,7 +2854,7 @@ de-duplicates by panic location with the scoped record winning. Each E2E server
 instance writes those three files under its own `instance-<i>/` subdirectory
 (`host::capture::instance_directory`), while the shared collector writes
 `otel-traces.jsonl` and `otel-logs.jsonl` at the capture root
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
+([per-worker E2E server instances](adr/0269-per-worker-e2e-server-instances.md)).
 Per lane the E2E harness tars the whole directory out as `capture-<lane>.tar.gz`
 into the [ADR-0037](adr/0037-e2e-failure-diagnostics-capture.md) artifact set.
 
@@ -4204,7 +4204,7 @@ workers=2 and workers=4 remain package-only measurement controls
 [split Chromium E2E lanes](adr/0253-split-chromium-e2e-lanes.md),
 [weighted shards](adr/0262-serial-theme-e2e-lane-and-weighted-shards.md); their
 serial lanes for visual, global-state and Theme projects are retired by the
-[per-worker E2E server instances decision](adr/drafts/per-worker-e2e-server-instances.md)).
+[per-worker E2E server instances decision](adr/0269-per-worker-e2e-server-instances.md)).
 Each lane's one- or two-hex-digit `traceSeed` expands to a distinct trace id.
 
 CI runs sixteen lane-qualified producers with `fail-fast: false`, all under the
@@ -4220,8 +4220,8 @@ awaited and their recoverable evidence remains an aggregate input. The stable
 result-only `e2e gate` requires every producer, the `Merge-queue verdict` job
 that projects the catalog, and all four reconciliations; for a
 documentation-only change it requires that job and the E2E jobs skipped
-([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
-Local `dev validate` inherits the non-E2E Elisp verdict, then calls the same
+([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)). Local
+`dev validate` inherits the non-E2E Elisp verdict, then calls the same
 synchronous `dev e2e` workflow; it does not rerun live ERT
 ([distributed e2e](adr/0034-ci-e2e-matrix-distribution.md)).
 
@@ -4273,7 +4273,7 @@ filename carries browser identity but not backend, so SQLite and PostgreSQL
 compare the same expected image. WebKit runs no visual test and has no baseline.
 
 Every Playwright worker owns its own Jaunder server instance and database
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)).
+([per-worker E2E server instances](adr/0269-per-worker-e2e-server-instances.md)).
 The harness starts one instance per worker, each with its own port, database,
 storage root and capture subdirectory, and describes them in
 `JAUNDER_E2E_INSTANCES`: a JSON array of
@@ -4520,7 +4520,7 @@ Both e2e surfaces invoke `test-support verify-no-panics`, whose Rust
 implementation owns the default-empty allowlist, raw-byte union scan,
 location-based de-duplication, and scoped-record preference. The gate covers
 every server instance
-([per-worker E2E server instances](adr/drafts/per-worker-e2e-server-instances.md)):
+([per-worker E2E server instances](adr/0269-per-worker-e2e-server-instances.md)):
 each VM testScript passes each `jaunder-<i>` unit's materialized journal
 (`jaunder-journal-instance-<i>-<lane>.log`) with that instance's capture
 subdirectory, and the host loop passes each instance's drained stderr capture.
@@ -4689,7 +4689,7 @@ locally and in CI, where setup-ci turns off install-nix-action's
 e2e lane producer then fail, naming the verdict, unless `nix path-info` reports
 the output `ultimate`, built by this machine's store. The Cachix `pushFilter`
 also keeps every `jaunder-coverage*` and `jaunder-e2e*` output out of the cache
-([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md),
+([CI honours non-substitutable verdicts](adr/0267-ci-honours-non-substitutable-verdicts.md),
 superseding
 [substitutable static verdicts](adr/0252-substitutable-static-verdicts.md)).
 Child processes join through `TRACEPARENT`/`TRACESTATE` plus
@@ -4709,7 +4709,7 @@ Product telemetry is unchanged.
 The auxiliary repository-policy package owns only the fixed documentation
 policies (`repository-docs`) and the fixed Rust/TypeScript source contracts
 (`source-contracts`)
-([narrowed repository-policy](adr/drafts/narrow-repository-policy.md)). The
+([narrowed repository-policy](adr/0268-narrow-repository-policy.md)). The
 single-process Git/index safety owner is `dev precommit`/`dev prepush` itself
 (`tools/dev/dev/index.py`), not this package. `dev` retains their independent
 verdicts and order; the binaries do not select a workflow or emit an omnibus
@@ -4754,7 +4754,7 @@ The explicit local workflows are:
   Markdown-only: every record adds, modifies or deletes a case-sensitive `.md`
   path that is a regular file on each side that exists. That rule is the one
   function CI's documentation-only scope also uses
-  ([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). A
+  ([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)). A
   Markdown delete, and so a Markdown rename, is narrow; any unstaged, untracked,
   type-changing, non-Markdown, malformed, unparseable, or otherwise unsupported
   evidence takes the broad route. Classification precedes host execution and
@@ -4838,7 +4838,7 @@ the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).
 Static verdicts in these lanes may be substituted from Cachix for an identical
 derivation; the coverage and e2e verdicts never are
-([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md)).
+([CI honours non-substitutable verdicts](adr/0267-ci-honours-non-substitutable-verdicts.md)).
 A result-only `Validate (no e2e)` job requires all four lanes, preserving the
 stable branch-protection context. Local `dev validate-no-e2e` composes the same
 required surfaces in success-path order, plus host Clippy
@@ -4846,7 +4846,7 @@ required surfaces in success-path order, plus host Clippy
 [distributed CI lane topology](adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md)).
 
 A Markdown-only pull request or merge-queue entry runs none of those lanes
-([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). The
+([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)). The
 `ubuntu-slim` `Merge-queue verdict` job decides it with the image's own
 `python3` and `git`, running `dev.scope` against the pull request's or queue
 entry's base with the precommit's Markdown-only rule (`dev.rawdiff`); both
@@ -5295,7 +5295,7 @@ CI's shallow checkout of a merge commit whose parents are grafted away. A dirty
 tree makes nix copy the working directory and read only HEAD. The probe dirties
 it with a new intent-to-add Markdown file of its own, so no tracked file is
 load-bearing for it
-([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)).
+([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)).
 Because that file is filter-excluded, the dirtying is constant and never
 perturbs the `drvPath` the probe measures — a filter that stopped excluding
 `.md` would fail the probe loudly.
@@ -5416,7 +5416,7 @@ come from product commands or files rather than linked product code. A reader in
 another language parses data its Rust writer has already validated, with no
 generated schema and no second validation; format drift fails loudly at the
 reader
-([performance host reads validated data](adr/drafts/perf-data-python-reads-validated-data.md)).
+([performance host reads validated data](adr/0270-perf-data-python-reads-validated-data.md)).
 Bash is limited to `scripts/` host scripts that run commands and check their
 results, with traps only for cleanup or failed-step reporting and concurrency
 only from standard tools; signal forwarding, supervising long-lived children, or
@@ -5441,7 +5441,7 @@ one follow-up at a time (#2100–#2105):
 - The cache-safety probe is retired rather than ported: CI honours
   `nonSubstitutable` and `dev` checks each coverage and e2e verdict ran on the
   runner
-  ([CI honours non-substitutable verdicts](adr/drafts/ci-honours-non-substitutable-verdicts.md))
+  ([CI honours non-substitutable verdicts](adr/0267-ci-honours-non-substitutable-verdicts.md))
   (#2103).
 - The repository contract tests are pytest (#2104).
 - With no executable or test left, the crate and its `packages.host-proof`
@@ -5673,7 +5673,7 @@ gone while the semantic-conflict guarantee is kept.
 required checks run in that context. That queue run is the coverage and e2e
 verdict for the commit it lands; a Markdown-only queue entry runs only the
 documentation checks, as its pull request did
-([documentation-only CI scope](adr/drafts/ci-documentation-only-scope.md)). The
+([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)). The
 `push` run for a queue-tested SHA runs only `Validation host`, which writes
 `main`'s kache store, and skips the other lanes. A push without a passing
 `merge_group` run, such as an admin bypass, validates in full

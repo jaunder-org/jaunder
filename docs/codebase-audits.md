@@ -62,7 +62,7 @@ ADRs (especially ADR-0019's deliberate dialect boundaries) before recording a
 finding.
 
 A dedicated census tool was retired because its unranked output was not useful
-for audits (`docs/adr/drafts/narrow-repository-policy.md`).
+for audits (`docs/adr/0268-narrow-repository-policy.md`).
 
 ## Ranking hotspots
 

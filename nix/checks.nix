@@ -52,7 +52,7 @@ let
   # Only coverage and e2e verdicts are barred from substitution. Static verdicts
   # are sandboxed and input-addressed, so a substituted stamp for an identical
   # derivation is acceptable; see
-  # docs/adr/drafts/ci-honours-non-substitutable-verdicts.md.
+  # docs/adr/0267-ci-honours-non-substitutable-verdicts.md.
   # These flags do not rerun outputs already valid in the local store. CI
   # honours them too: setup-ci turns off install-nix-action's
   # `always-allow-substitutes = true`, and `dev` fails a verdict step whose

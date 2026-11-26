@@ -51,7 +51,7 @@ JSON report, so none is written.
 
 _Amended by #2103:_ as of 2026-11-25, `source-diagnostics` had left this list
 and the host-proof list below, retired with the cache-safety probe
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+([CI honours non-substitutable verdicts](0267-ci-honours-non-substitutable-verdicts.md));
 current state: ARCHITECTURE.md §Residual tooling owners after xtask retirement.
 
 _Amended by #2100._ `e2e-evidence` and `trace-analysis` have left this list and
