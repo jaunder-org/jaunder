@@ -22,8 +22,11 @@ NIX = shutil.which("nix")
 FAKE_NIX = f"""#!{BASH}
 set -eu
 if [[ $1 == path-info ]]; then
-  # The selected output was registered long before this run: reused.
-  printf '{{"%s":{{"registrationTime":0,"ultimate":true}}}}\\n' "${{!#}}"
+  # The selected output was built here long before this run: reused, unless
+  # STORE says it was substituted or cannot be read.
+  [[ ${{STORE-}} != unreadable ]] || exit 1
+  ultimate=true; [[ ${{STORE-}} != substituted ]] || ultimate=false
+  printf '{{"%s":{{"registrationTime":0,"ultimate":%s}}}}\\n' "${{!#}}" "$ultimate"
   exit 0
 fi
 if [[ $* == *".#host-proof"* ]]; then
@@ -300,6 +303,20 @@ def test_the_verifier_reads_this_builds_selected_output_never_the_gc_root(
     assert result.returncode == 0, result
     assert f"--artifacts {selected}\n" in e2e.events()
     assert "decoy" not in e2e.events()
+
+
+@pytest.mark.parametrize("store", ["substituted", "unreadable"])
+def test_a_lane_not_built_here_fails_naming_it_and_is_not_verified(
+    e2e: E2E, store: str
+) -> None:
+    result = e2e.run(
+        "e2e-producer", LANE, output=capture_only(), status="0", STORE=store
+    )
+    assert result.returncode == 1, result
+    assert b"dev: e2e-producer: verdict not executed here" in result.stderr
+    spans = e2e.checkout.merged()
+    assert spans["e2e-producer"]["args"]["jaunder.status"] == "failed"
+    assert "host-proof-build" not in spans
 
 
 def test_a_failed_producer_records_no_cache_and_builds_no_verifier(e2e: E2E) -> None:

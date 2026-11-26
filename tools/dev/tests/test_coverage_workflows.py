@@ -50,6 +50,30 @@ def test_workflows_stop_at_each_failing_boundary(
     ]
 
 
+@pytest.mark.parametrize(("check", "build"), [("coverage", 1), ("coverage-gate", 3)])
+@pytest.mark.parametrize(
+    "substituted", [True, False], ids=["substituted", "unreadable"]
+)
+def test_a_rust_coverage_verdict_not_built_here_fails_naming_it(
+    workflow: Workflow, check: str, build: int, substituted: bool
+) -> None:
+    """Substituted or unreadable, the output does not show the verdict ran."""
+    result = workflow.dev(
+        "coverage",
+        FAKE_SUBSTITUTED=check if substituted else "",
+        FAKE_UNREADABLE="" if substituted else check,
+    )
+    assert result.returncode == 1, result
+    assert f"dev: {check}: verdict not executed here".encode() in result.stderr
+    lines = STEPS["coverage"][: build + 1]
+    assert workflow.commands() == [CLEAN, *(line.split(" ") for line in lines)]
+
+
+def test_static_doctests_pass_when_substituted(workflow: Workflow) -> None:
+    result = workflow.dev("doctests", FAKE_SUBSTITUTED="doctests doctests-gate")
+    assert result.returncode == 0, result
+
+
 @pytest.mark.parametrize("workflow_name", ["coverage", "doctests"])
 @pytest.mark.parametrize("staged", [False, True])
 def test_public_workflows_refuse_a_really_dirty_checkout(
@@ -190,11 +214,14 @@ def test_a_malformed_status_traces_no_stages(checkout: Checkout, status: str) ->
 def test_stages_this_build_did_not_time_are_not_traced(
     checkout: Checkout, earlier: bool
 ) -> None:
-    """A reused output's stages ran before this step, as an earlier run's did."""
+    """A reused output's stages ran before this step, as an earlier run's did.
+
+    An output this machine built in an earlier run still shows the verdict ran.
+    """
     checkout.nix_store()
     out = _coverage_output(checkout)
     if earlier:
         (out / "status.json").write_text(_status(STAGES).replace(T0, "1700000000000"))
-    result = checkout.dev("coverage", NIX_VALID="1")
+    result = checkout.dev("coverage", NIX_VALID="1", NIX_ULTIMATE="1")
     assert result.returncode == 0, result
     assert _stage_spans(checkout)[1] == []

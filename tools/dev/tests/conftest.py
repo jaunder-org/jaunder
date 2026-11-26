@@ -217,8 +217,11 @@ TOOL_PACKAGES = {
 # anywhere else with 23, answers checkout discovery from the real Git, and
 # reports a dirty tree while `dirty-status` exists.
 # An evaluation prints a fake derivation named after the installable's last
-# component. Nix cache queries fail, so Nix steps record no cache source; a
-# build's out-link points at a path named after the link in $FAKE_STORE, where
+# component, and a check's build prints `$FAKE_STORE/fake-<check>`. A store
+# query reports a path built here (`ultimate`) with no registration time, so Nix
+# steps record no cache source; FAKE_SUBSTITUTED and FAKE_UNREADABLE name the
+# checks whose outputs it reports substituted, or fails to read. A build's
+# out-link points at a path named after the link in $FAKE_STORE, where
 # `fake-csr-bundle` is a small valid CSR bundle (`write_bundle`). A tool
 # package's build prints $FAKE_TOOL_OUT, the one fake output of every tool
 # package (`Checkout.built`).
@@ -241,7 +244,13 @@ if [ "$name" = git ]; then
 fi
 case "$name $*" in
   'nix path-info --derivation '*) ;;
-  'nix path-info '*) exit 1 ;;
+  'nix path-info '*)
+    for path; do :; done
+    case " ${FAKE_UNREADABLE-} " in *" ${path##*/fake-} "*) exit 1 ;; esac
+    ultimate=true
+    case " ${FAKE_SUBSTITUTED-} " in *" ${path##*/fake-} "*) ultimate=false ;; esac
+    printf '{"%s":{"ultimate":%s}}\n' "$path" "$ultimate"
+    exit 0 ;;
 esac
 if [ "$name" = cargo ]; then
     printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${KACHE_CACHE_EXECUTABLES-unset}" > cache-env
@@ -286,6 +295,9 @@ if [ "$name $*" = "${FAIL_COMMAND-}" ]; then
     exit 17
 fi
 case "$name $*" in
+  'nix build '*'.#checks.'*)
+    for installable; do :; done
+    printf '%s/fake-%s\n' "$FAKE_STORE" "${installable##*.}" ;;
   'nix build '*' --no-link .#'*)
     for installable; do :; done
     case "$installable" in

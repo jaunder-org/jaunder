@@ -268,6 +268,7 @@ def _run(
     refusal: Refusal | None = None,
     realizes: Callable[[], str] | None = None,
     finished: Callable[[Span, int], None] | None = None,
+    verdict: bool = False,
 ) -> bytes:
     with _step(name, argv) as span:
         started_ns = time.time_ns()
@@ -290,12 +291,18 @@ def _run(
             if reason is not None:
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
+        realized = realizes() if realizes is not None and not code else None
+        if verdict and realized is not None:
+            reason = _not_executed_here(name, realized)
+            if reason is not None:
+                print(reason, file=sys.stderr, flush=True)
+                code = 1
         _record_outcome(span, code, signalled)
         if finished is not None:
             finished(span, started_ns)
-        if realizes is not None and not code:
+        if realized is not None and not code:
             with contextlib.suppress(_QueryFailed):
-                _record_cache(span, realizes(), start)
+                _record_cache(span, realized, start)
     if code:
         raise StepFailed(code, signalled)
     return output
@@ -308,6 +315,7 @@ def run(
     environment: Environment | None = None,
     realizes: Callable[[], str] | None = None,
     finished: Callable[[Span, int], None] | None = None,
+    verdict: bool = False,
 ) -> None:
     """Runs one step; raises StepFailed so the gate stops at the first failure.
 
@@ -319,7 +327,8 @@ def run(
     records its `jaunder.cache` as `nix_build` does. `finished`, whatever the
     step's outcome, is called once the outcome is recorded, with the still-open
     step span and the wall-clock nanosecond at which the step started, to add
-    what the child left behind.
+    what the child left behind. `verdict`, with `realizes`, fails a successful
+    step whose output this machine did not build, as for `nix_build`.
     """
     _run(
         name,
@@ -329,6 +338,7 @@ def run(
         render,
         realizes=realizes,
         finished=finished,
+        verdict=verdict,
     )
 
 
@@ -477,6 +487,25 @@ def _record_cache(span: Span, path: str, start: int) -> Cache | None:
     return cache
 
 
+def _not_executed_here(name: str, path: str) -> str | None:
+    """Why the verdict `name`'s output `path` does not show it ran here, or None.
+
+    ADR-0192 needs every tested commit to execute its Rust coverage and e2e
+    verdicts. Only an `ultimate` output was built by this machine's store, in
+    this run or an earlier one; a substituted, missing or unreadable one fails.
+    """
+    try:
+        entry = _store_entry(path)
+    except _QueryFailed:
+        entry = None
+    if entry is not None and entry.get("ultimate") is True:
+        return None
+    return (
+        f"dev: {name}: verdict not executed here: this machine's store did not"
+        f" build {path} (`nix path-info` does not report it ultimate)"
+    )
+
+
 def nix_build(
     name: str,
     installable: str,
@@ -485,6 +514,7 @@ def nix_build(
     refusal: Callable[[str], str | None] | None = None,
     finished: Callable[[Span, int], None] | None = None,
     link: str | None = None,
+    verdict: bool = False,
 ) -> str:
     """Builds one installable as the step `name`; returns its output path.
 
@@ -504,6 +534,9 @@ def nix_build(
 
     `finished` is as for `run`, for the `build` step: what the builder timed
     itself belongs under it.
+
+    A `verdict` must execute here: the step fails, naming it, unless the build
+    printed one output that this machine's store built (`ultimate`).
     """
     root = link or f"{GCROOTS}/{name}"
     if keep:
@@ -520,6 +553,11 @@ def nix_build(
             # After the evaluation, which registers what it writes.
             start = int(time.time())
             paths = text("build", argv, refusal=refusal, finished=finished)
+            if verdict:
+                reason = _not_executed_here(name, paths)
+                if reason is not None:
+                    print(reason, file=sys.stderr, flush=True)
+                    raise StepFailed(1, False)
             _record_outcome(span, 0, False)
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)
@@ -554,6 +592,14 @@ def nix_check(
     flags: Sequence[str] = NIX_FLAGS,
     keep: bool = True,
     finished: Callable[[Span, int], None] | None = None,
+    verdict: bool = False,
 ) -> None:
     """Builds one flake check as `nix_build` does, as the step `check`."""
-    nix_build(check, f".#checks.x86_64-linux.{check}", flags, keep, finished=finished)
+    nix_build(
+        check,
+        f".#checks.x86_64-linux.{check}",
+        flags,
+        keep,
+        finished=finished,
+        verdict=verdict,
+    )

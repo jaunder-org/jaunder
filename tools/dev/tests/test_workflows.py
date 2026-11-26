@@ -109,7 +109,15 @@ FORWARDED: list[tuple[list[str], Commands]] = [
 
 SELECTED = "/nix/store/0000-selected"
 VERIFIER_NIX = r"""#!/bin/sh
-case "$1 $2" in 'path-info --derivation') ;; eval*|path-info*) exit 1 ;; esac
+case "$1 $2" in
+  'path-info --derivation') ;;
+  path-info*)
+    # Built here, with no registration time: no cache source is recorded.
+    for path; do :; done
+    printf '{"%s":{"ultimate":true}}\n' "$path"
+    exit 0 ;;
+  eval*) exit 1 ;;
+esac
 printf '%s\037' nix "$@" >> "$FAKE_LOG"
 printf '\036' >> "$FAKE_LOG"
 case "$*" in
