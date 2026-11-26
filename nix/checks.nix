@@ -3005,9 +3005,6 @@ mkWasmCoverageMeasurementProducer =
         ''}
       '';
     };
-  # The Playwright package beneath each NixOS test result: test machinery, not
-  # test evidence. The upgrade check reads an earlier revision's copy.
-  e2eSupportPackages.e2e-support = e2ePackage;
   # The Rust coverage producer and its consumer are verdicts; the source probe
   # is preparation for `coverage-check probe-source` only.
   coverageChecks = rec {
@@ -3192,8 +3189,10 @@ in
     inherit mkE2eCheck mkPerformanceProducer selectPerformanceProducers mkUpgradeCheck;
   };
   packages = pkgs.lib.optionalAttrs pkgs.stdenv.hostPlatform.isLinux (
-    e2eSupportPackages
-    // {
+    {
+# The Playwright package beneath each NixOS test result: test machinery, not
+# test evidence. The upgrade check reads an earlier revision's copy.
+e2e-support = e2ePackage;
 # The e2e aggregate: a symlinkJoin of every browser/backend `e2e-*`
 # check, exposed as `checks.e2e`; `dev` uses the individual lane producers.
 # Adding a new browser/backend combo automatically joins it here. Its

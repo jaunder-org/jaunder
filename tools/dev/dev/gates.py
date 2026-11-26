@@ -278,9 +278,8 @@ def _producer_and_gate(
     `finished` is as for the producer's `build` step and `verdict` as for both
     builds (`steps.nix_build`).
     """
-    flags = steps.NIX_LOCK_FLAGS
-    steps.nix_check(check, flags, finished=finished, verdict=verdict)
-    steps.nix_check(f"{check}-gate", flags, keep=False, verdict=verdict)
+    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished, verdict=verdict)
+    steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False, verdict=verdict)
 
 
 def _non_negative_int(value: object) -> bool:

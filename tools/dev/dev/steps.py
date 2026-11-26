@@ -291,18 +291,19 @@ def _run(
             if reason is not None:
                 print(reason, file=sys.stderr, flush=True)
                 code = 1
-        realized = realizes() if realizes is not None and not code else None
-        if verdict and realized is not None:
-            reason = _not_executed_here(name, realized)
-            if reason is not None:
-                print(reason, file=sys.stderr, flush=True)
-                code = 1
+        if (
+            verdict
+            and realizes is not None
+            and not code
+            and _reported_not_executed_here(name, realizes())
+        ):
+            code = 1
         _record_outcome(span, code, signalled)
         if finished is not None:
             finished(span, started_ns)
-        if realized is not None and not code:
+        if realizes is not None and not code:
             with contextlib.suppress(_QueryFailed):
-                _record_cache(span, realized, start)
+                _record_cache(span, realizes(), start)
     if code:
         raise StepFailed(code, signalled)
     return output
@@ -487,23 +488,27 @@ def _record_cache(span: Span, path: str, start: int) -> Cache | None:
     return cache
 
 
-def _not_executed_here(name: str, path: str) -> str | None:
-    """Why the verdict `name`'s output `path` does not show it ran here, or None.
+def _reported_not_executed_here(name: str, path: str) -> bool:
+    """Whether the verdict `name`'s output `path` fails to show it ran here.
 
     ADR-0192 needs every tested commit to execute its Rust coverage and e2e
     verdicts. Only an `ultimate` output was built by this machine's store, in
-    this run or an earlier one; a substituted, missing or unreadable one fails.
+    this run or an earlier one; a substituted, missing or unreadable one is
+    reported on stderr, naming the verdict, and fails.
     """
     try:
         entry = _store_entry(path)
     except _QueryFailed:
         entry = None
     if entry is not None and entry.get("ultimate") is True:
-        return None
-    return (
+        return False
+    print(
         f"dev: {name}: verdict not executed here: this machine's store did not"
-        f" build {path} (`nix path-info` does not report it ultimate)"
+        f" build {path} (`nix path-info` does not report it ultimate)",
+        file=sys.stderr,
+        flush=True,
     )
+    return True
 
 
 def nix_build(
@@ -553,11 +558,8 @@ def nix_build(
             # After the evaluation, which registers what it writes.
             start = int(time.time())
             paths = text("build", argv, refusal=refusal, finished=finished)
-            if verdict:
-                reason = _not_executed_here(name, paths)
-                if reason is not None:
-                    print(reason, file=sys.stderr, flush=True)
-                    raise StepFailed(1, False)
+            if verdict and _reported_not_executed_here(name, paths):
+                raise StepFailed(1, False)
             _record_outcome(span, 0, False)
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)

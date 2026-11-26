@@ -66,8 +66,9 @@ for identical inputs.
 - A `jaunder.cache = substituted` label on a static step is expected, not a
   policy violation.
 
-_Superseded by #2103:_ as of 2026-11-25, CI sets
-`always-allow-substitutes = false` and `dev` fails a coverage or e2e verdict
-step whose output this machine did not build. The cache-safety probe is retired.
-The static-verdict rule carried forward unchanged
-([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md)).
+_Superseded by #2103:_ as of 2026-11-25, CI set
+`always-allow-substitutes = false`, `dev` failed a coverage or e2e verdict step
+whose output this machine had not built, and the cache-safety probe had been
+retired. The static-verdict rule carried forward unchanged
+([CI honours non-substitutable verdicts](drafts/ci-honours-non-substitutable-verdicts.md));
+current state: ARCHITECTURE.md §The verify ladder & git-enforced gate.
