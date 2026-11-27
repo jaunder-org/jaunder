@@ -77,8 +77,8 @@ for that run and is never written anywhere; it holds the output path of each
 tool package the run has built, which is still built lazily on its first use. A
 step that holds a resource across others wraps a sub-declaration: test-local
 runs its steps through the same loop inside the `host-artifacts-lock` it holds,
-and each Cargo step resolves the bundle root as it starts. Three steps catch
-`StepFailed` on purpose, and only they may: index custody records a failed check
+and each Cargo step resolves the bundle root as it starts. Among the gates'
+steps, three catch `StepFailed` on purpose: index custody records a failed check
 and still reconciles staging, the `static-docs` request still runs its
 post-check, and the e2e server-fn inventory turns a failed listing into an
 evidence refusal. Each re-raises a signal. Steps keep raising rather than

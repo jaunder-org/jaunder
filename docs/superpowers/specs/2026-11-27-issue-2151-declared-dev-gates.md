@@ -21,8 +21,8 @@ exit statuses stay the same.
   - Groups such as `host(mode, docs)` and `host_tests()` become functions that
     return tuples, and gates concatenate them, e.g.
     `check_no_test() = (*host(FIX, HOST), *host_tests())`.
-- **The runner** is `run(declaration)`: `for step in declaration: step()`. It
-  catches nothing.
+- **The runner** is `steps.execute(declaration)`:
+  `for step in declaration: step()`. It catches nothing.
   - `steps.gate` keeps its signal handling and trace. It takes a factory that
     builds the declaration, calls it inside the gate after `checkout.enter`, and
     runs the result.
@@ -37,7 +37,7 @@ exit statuses stay the same.
     `dev wasm-audit report` (`cli.py`).
 - **A step that holds a resource wraps a sub-declaration.** test-local becomes
   `holding_host_artifacts_lock(inner)`. That step takes the lock and runs
-  `inner` through the same `run`. The lexical `with` releases the lock when
+  `inner` through the same `execute`. The lexical `with` releases the lock when
   `inner` ends, fails or is interrupted, so the lock is held exactly as long as
   it is today. Each Cargo step in `inner` computes its Cargo environment when it
   runs: the bundle's resolved root, `CFLAGS` and the test executable. The lock
@@ -52,7 +52,7 @@ exit statuses stay the same.
 - **Deliberate failure-combining stays where it is.** `dev precommit` is the
   declaration `(custody,)`. `index.precommit` takes
   `select: Callable[[bool], Declaration]` and calls
-  `run(select(markdown_only))`, where `select` returns `docs_checks(FIX)` or
+  `execute(select(markdown_only))`, where `select` returns `docs_checks(FIX)` or
   `check_no_test()`. Its existing `except StepFailed` still:
   - records a failed check,
   - runs the after-snapshot and staging anyway,

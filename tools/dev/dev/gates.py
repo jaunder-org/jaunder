@@ -248,6 +248,7 @@ def csr_bundle() -> str:
 
 
 def _build_csr_bundle() -> None:
+    # As a step: the root it returns is the constant CSR_BUNDLE_ROOT.
     csr_bundle()
 
 
@@ -291,16 +292,14 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> Declaration:
     JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
     `nextest_args` select tests; none run the whole workspace.
     """
-    given = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
-    bundle: Declaration = (
-        ()
-        if given is not None
-        else (
+    root = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
+    bundle: Declaration = ()
+    if root is None:
+        root = CSR_BUNDLE_ROOT
+        bundle = (
             _tool_step("csr-admission", ADMIT_INPUTS, ".#csrBundle.sourceAdmits"),
             _build_csr_bundle,
         )
-    )
-    root = CSR_BUNDLE_ROOT if given is None else given
     # The tests compile apart from their run when `dev` chooses the selection.
     # Hand-typed arguments may include run options nextest refuses with
     # --no-run (--no-fail-fast), so they compile in the run.

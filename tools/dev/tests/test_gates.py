@@ -683,7 +683,7 @@ sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (body,)))
 """
 
 
-def test_a_package_builds_once_per_process_for_all_its_binaries(
+def test_a_package_builds_once_per_gate_run_for_all_its_binaries(
     workflow: Workflow,
 ) -> None:
     log = workflow.root / "commands"
