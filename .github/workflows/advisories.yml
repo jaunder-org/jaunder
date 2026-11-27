@@ -25,7 +25,10 @@ jobs:
     name: Advisory scan
     runs-on: ubuntu-24.04
     steps:
+      # A manual dispatch from another branch still scans `main`.
       - uses: actions/checkout@v7.0.1
+        with:
+          ref: main
       - uses: ./.github/actions/setup-ci
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}

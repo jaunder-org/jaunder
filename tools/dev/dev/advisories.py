@@ -10,6 +10,7 @@ advisory, commented on each day it still fails
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -24,11 +25,11 @@ class Advisory:
     id: str
     crate: str
     version: str
-    problem: str
+    summary: str
 
     @property
     def title(self) -> str:
-        return f"fix(deps): {self.id} {self.crate}: {self.problem}"
+        return f"fix(deps): {self.id} {self.crate}: {self.summary}"
 
 
 def findings(report: bytes) -> list[Advisory]:
@@ -103,6 +104,7 @@ def _report(advisory: Advisory, today: str, link: str) -> None:
     # The search is fuzzy; only an issue whose title carries the ID is this one.
     matches = [issue for issue in json.loads(listed) if advisory.id in issue["title"]]
     if matches:
+        # Should two be open, the oldest is the one the scan filed and keeps.
         number = str(min(issue["number"] for issue in matches))
         comment = f"Still reported on {today} by {link}."
         steps.run(
@@ -139,4 +141,8 @@ def scan() -> None:
     for advisory in findings(report):
         _report(advisory, today, link)
     if code:
+        # The report is the failure's only account, such as a database that
+        # could not be fetched, so it reaches the run's log.
+        sys.stderr.buffer.write(report)
+        sys.stderr.flush()
         raise steps.StepFailed(code, False)

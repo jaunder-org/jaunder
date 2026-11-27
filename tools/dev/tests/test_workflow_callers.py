@@ -161,7 +161,7 @@ def test_the_host_lane_checks_advisories_only_for_a_dependency_change(
     # The step's script runs for real; a fake `nix` records what `dev` gets.
     fake = tmp_path / "nix"
     fake.write_text(
-        '#!/bin/sh\nshift 5\nprintf \'%s\\n\' "$@" > "$NIX_ARGS"\n', encoding="utf-8"
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$NIX_ARGS"\n', encoding="utf-8"
     )
     fake.chmod(0o755)
     recorded = tmp_path / "args"
@@ -177,7 +177,14 @@ def test_the_host_lane_checks_advisories_only_for_a_dependency_change(
         check=False,
     )
     assert result.returncode == 0, result
-    assert recorded.read_text().splitlines() == arguments
+    given = recorded.read_text().splitlines()
+    assert given[: given.index("dev")] == [
+        "develop",
+        ".#ci",
+        "--accept-flake-config",
+        "-c",
+    ]
+    assert given[given.index("dev") + 1 :] == arguments
 
 
 def test_the_advisory_scan_cannot_overlap_or_hide_its_failure() -> None:
