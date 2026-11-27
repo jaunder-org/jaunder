@@ -702,12 +702,18 @@ producer uploads its evidence as `e2e-lane-<lane>` (rooted at
 `e2e-trace-<lane>`.
 
 The report is paired with `duration-budget-manifest-<lane>.json`; the copied
-report and manifest are the duration-pressure gate's source, not trace spans or
-suite wall-clock time. For an otherwise-successful lane, their selected tests
-and attempts must reconcile exactly; missing, malformed, incomplete, or
-inconsistent input fails closed after diagnostics are captured. The gate
-evaluates every reported attempt, including retries: any attempt at **80% or
-more** of its effective whole-test timeout fails, even if a later retry passes.
+report and manifest are the duration budget's source, not trace spans or suite
+wall-clock time. For an otherwise-successful lane, their selected tests and
+attempts must reconcile exactly; missing, malformed, incomplete, or inconsistent
+input (including an attempt without a known Playwright `status`) fails closed
+after diagnostics are captured. Every reported attempt is evaluated, including
+retries. A `timedOut` attempt fails the lane even if a later retry passes. Any
+other attempt at **80% or more** of its effective whole-test timeout is
+**duration pressure**: a reported signal, not a verdict. The producer lists it
+in its `e2e-evidence` output, and in CI as one `Duration pressure` warning
+annotation per lane plus every attempt in the step summary. `dev pr-watch` and
+`dev pr-land` repeat those annotations as `warning` events in their successful
+handoffs (docs/adr/drafts/e2e-duration-pressure-is-a-signal.md).
 
 Each backend/browser pair adds one host reconciliation after its four lane
 producers settle. It consumes the independent unsharded census plus every
@@ -729,8 +735,9 @@ justify re-sizing that deadline-derived budget.
 The successful-combo host checks serve distinct purposes and do not substitute
 for one another:
 
-- **Duration pressure** reconciles Playwright attempts with the duration
-  manifest and rejects attempts using 80% or more of their effective timeout.
+- **The duration budget** reconciles Playwright attempts with the duration
+  manifest, rejects any `timedOut` attempt, and reports attempts using 80% or
+  more of their effective timeout as duration pressure without failing.
 - **Boot-decomposition coverage** reconciles the Playwright report's executed
   project set with `e2e.test` and `e2e.page` trace navigation evidence in that
   combo's capture archive. It certifies complete, current, non-dropped,

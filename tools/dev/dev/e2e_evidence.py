@@ -56,8 +56,11 @@ from dev.traces import (
     read_trace_member,
 )
 
-# The utilization at or above which an attempt's duration fails the budget.
+# The utilization at or above which an attempt is reported as duration
+# pressure. It is a signal, never a verdict: only a `timedOut` attempt fails.
 PRESSURE_THRESHOLD = 0.80
+# Every status Playwright's JSON reporter gives an attempt.
+ATTEMPT_STATUSES = ("passed", "failed", "timedOut", "skipped", "interrupted")
 # The VM sidecar's phase that runs Playwright.
 GATE_PHASE = "gate-execution"
 # The VM sidecar's phases that must each have succeeded once (`nix/e2e_capture.py`).
@@ -271,9 +274,10 @@ def reconcile_ownership(
 
 
 # The duration budget: the duration manifest owns the selected population and
-# each attempt's effective timeout, the report owns measured durations. A lane
-# passes only when their identities and retry streams agree exactly and no
-# attempt reaches the pressure threshold.
+# each attempt's effective timeout, the report owns measured durations and
+# statuses. A lane passes only when their identities and retry streams agree
+# exactly and no attempt timed out. Attempts at or above the pressure threshold
+# are reported, not refused: a slow pass is still a pass.
 
 
 @dataclass(frozen=True, order=True)
@@ -300,8 +304,10 @@ class _TestIdentity:
             raise EvidenceError(f"{source} has line 0")
 
 
-# Each selected test's attempts: retry → effective timeout or duration, ms.
-_Attempts = dict[_TestIdentity, dict[int, float]]
+# Each selected test's attempts: retry → effective timeout, ms.
+_Timeouts = dict[_TestIdentity, dict[int, float]]
+# Each reported test's attempts: retry → (duration in ms, status).
+_Results = dict[_TestIdentity, dict[int, tuple[float, str]]]
 # A duration manifest's tests: each identity with its (retry, timeout) attempts.
 _ManifestTests = list[tuple[_TestIdentity, list[tuple[int, float]]]]
 
@@ -333,9 +339,7 @@ def _duration_manifest(document: dict[str, Any]) -> tuple[int, bool, _ManifestTe
     )
 
 
-def _contiguous(
-    retries: dict[int, float], source: str, identity: _TestIdentity
-) -> None:
+def _contiguous[T](retries: dict[int, T], source: str, identity: _TestIdentity) -> None:
     for expected, actual in enumerate(sorted(retries)):
         if actual != expected:
             raise EvidenceError(
@@ -344,10 +348,10 @@ def _contiguous(
             )
 
 
-def _manifest_attempts(tests: _ManifestTests) -> _Attempts:
+def _manifest_attempts(tests: _ManifestTests) -> _Timeouts:
     if not tests:
         raise EvidenceError("manifest selects no tests")
-    expected: _Attempts = {}
+    expected: _Timeouts = {}
     for identity, attempts in tests:
         identity.validate("manifest test")
         if not attempts:
@@ -373,10 +377,10 @@ def _manifest_attempts(tests: _ManifestTests) -> _Attempts:
     return expected
 
 
-def _report_attempts(specs: list[ReportSpec]) -> _Attempts:
+def _report_attempts(specs: list[ReportSpec]) -> _Results:
     if not specs:
         raise EvidenceError("report contains no selected tests")
-    observed: _Attempts = {}
+    observed: _Results = {}
     for spec in specs:
         if not spec.tests:
             raise EvidenceError(
@@ -396,9 +400,13 @@ def _report_attempts(specs: list[ReportSpec]) -> _Attempts:
                 raise EvidenceError(
                     f"report test has no results: {identity.describe()}"
                 )
-            durations: dict[int, float] = {}
+            results: dict[int, tuple[float, str]] = {}
             for attempt in test.results:
-                retry, duration = attempt.retry, attempt.duration
+                retry, duration, status = (
+                    attempt.retry,
+                    attempt.duration,
+                    attempt.status,
+                )
                 if retry is None:
                     raise EvidenceError(
                         f"report attempt has no retry: {identity.describe()}"
@@ -412,21 +420,72 @@ def _report_attempts(specs: list[ReportSpec]) -> _Attempts:
                         f"report retry {retry} has a non-finite or negative "
                         f"duration: {identity.describe()}"
                     )
-                if retry in durations:
+                if status not in ATTEMPT_STATUSES:
+                    raise EvidenceError(
+                        f"report retry {retry} has a missing or unknown status "
+                        f"{json.dumps(status)}: {identity.describe()}"
+                    )
+                if retry in results:
                     raise EvidenceError(
                         f"report has duplicate retry {retry}: {identity.describe()}"
                     )
-                durations[retry] = duration
-            _contiguous(durations, "report", identity)
+                results[retry] = (duration, status)
+            _contiguous(results, "report", identity)
             if identity in observed:
                 raise EvidenceError(
                     f"report has a duplicate selected test: {identity.describe()}"
                 )
-            observed[identity] = durations
+            observed[identity] = results
     return observed
 
 
-def _pressure(expected: _Attempts, observed: _Attempts) -> str:
+@dataclass(frozen=True)
+class Pressure:
+    """One attempt's measured duration against its effective timeout."""
+
+    identity: _TestIdentity
+    retry: int
+    duration: float
+    timeout: float
+
+    @property
+    def utilization(self) -> float:
+        return self.duration / self.timeout
+
+    def describe(self) -> str:
+        return (
+            f"{self.utilization * 100:.2f}%: {self.identity.describe()}; "
+            f"retry {self.retry}; duration {self.duration:.3f} ms / effective "
+            f"timeout {self.timeout:.3f} ms"
+        )
+
+
+@dataclass(frozen=True)
+class DurationBudget:
+    """A lane's passing duration budget: its greatest pressure, and every
+    attempt at or above the threshold, worst first."""
+
+    maximum: Pressure
+    pressured: list[Pressure]
+
+    def headline(self) -> str:
+        return (
+            f"{len(self.pressured)} attempt(s) at or above "
+            f"{PRESSURE_THRESHOLD * 100:.0f}% of their timeout"
+        )
+
+    def detail(self) -> str:
+        if not self.pressured:
+            return f"maximum duration pressure {self.maximum.describe()}"
+        return "\n".join(
+            [
+                f"duration pressure: {self.headline()}",
+                *(f"  {pressure.describe()}" for pressure in self.pressured),
+            ]
+        )
+
+
+def _pressure(expected: _Timeouts, observed: _Results) -> DurationBudget:
     if expected.keys() != observed.keys():
         missing = sorted(expected.keys() - observed.keys())
         unexpected = sorted(observed.keys() - expected.keys())
@@ -445,36 +504,27 @@ def _pressure(expected: _Attempts, observed: _Attempts) -> str:
     for identity in sorted(expected):
         if expected[identity].keys() != observed[identity].keys():
             raise EvidenceError(f"retry reconciliation mismatch: {identity.describe()}")
-    # The greatest utilization; `max` keeps the first in identity and retry
-    # order on a tie.
-    utilization, identity, retry, duration, timeout = max(
-        (
-            (
-                observed[identity][retry] / timeout,
-                identity,
-                retry,
-                observed[identity][retry],
-                timeout,
-            )
-            for identity in sorted(expected)
-            for retry, timeout in sorted(expected[identity].items())
-        ),
-        key=lambda attempt: attempt[0],
-    )
-    if utilization >= PRESSURE_THRESHOLD:
-        raise EvidenceError(
-            f"duration pressure {utilization * 100:.2f}% (threshold 80.00%): "
-            f"{identity.describe()}; retry {retry}; duration {duration:.3f} ms; "
-            f"effective timeout {timeout:.3f} ms"
-        )
-    return (
-        f"maximum duration pressure {utilization * 100:.2f}%: {identity.describe()}; "
-        f"retry {retry}; duration {duration:.3f} ms / effective timeout "
-        f"{timeout:.3f} ms"
+    attempts = []
+    for identity in sorted(expected):
+        for retry, timeout in sorted(expected[identity].items()):
+            duration, status = observed[identity][retry]
+            attempt = Pressure(identity, retry, duration, timeout)
+            if status == "timedOut":
+                raise EvidenceError(f"attempt timed out at {attempt.describe()}")
+            attempts.append(attempt)
+    # Worst first; both keep identity and retry order on a tie.
+    by_pressure = sorted(attempts, key=lambda attempt: -attempt.utilization)
+    return DurationBudget(
+        by_pressure[0],
+        [
+            attempt
+            for attempt in by_pressure
+            if attempt.utilization >= PRESSURE_THRESHOLD
+        ],
     )
 
 
-def validate_duration_json(report_json: str, manifest_json: str) -> str:
+def validate_duration_json(report_json: str, manifest_json: str) -> DurationBudget:
     """The duration budget over in-memory report and manifest JSON."""
     specs = report_specs(report_json, "parsing Playwright report")
     version, complete, tests = decode(
@@ -489,7 +539,7 @@ def validate_duration_json(report_json: str, manifest_json: str) -> str:
     return _pressure(_manifest_attempts(tests), _report_attempts(specs))
 
 
-def validate_duration_files(report: Path, manifest: Path) -> str:
+def validate_duration_files(report: Path, manifest: Path) -> DurationBudget:
     """The duration budget over a lane's lifted report and duration manifest."""
     return validate_duration_json(read(report, "report"), read(manifest, "manifest"))
 
@@ -743,9 +793,10 @@ def lane_evidence(identity: str, root: Path) -> LaneEvidence:
     )
 
 
-def verify_lane(identity: str, catalog: Path, root: Path) -> str:
+def verify_lane(identity: str, catalog: Path, root: Path) -> tuple[str, DurationBudget]:
     """One enabled lane's lifted evidence under `root`: its population, duration
-    budget and boot decomposition coverage."""
+    budget and boot decomposition coverage. The verdict, and the duration
+    budget its producer reports."""
     lane = next(
         (
             lane
@@ -762,9 +813,12 @@ def verify_lane(identity: str, catalog: Path, root: Path) -> str:
         read(evidence.report, "report"),
         read(evidence.lane_manifest, "manifest"),
     )
-    validate_duration_files(evidence.report, evidence.duration_manifest)
+    duration = validate_duration_files(evidence.report, evidence.duration_manifest)
     validate_boot_files(evidence.report, evidence.capture)
-    return f"{identity}: population, retry-duration and boot evidence verified"
+    verdict = f"{identity}: population, retry-duration and boot evidence verified"
+    if duration.pressured:
+        verdict += f"\n{duration.detail()}"
+    return verdict, duration
 
 
 def _ownership(
@@ -785,22 +839,25 @@ def _ownership(
         raise EvidenceError(f"ownership census: {error}") from error
 
 
-def _collect(
-    errors: list[str], prefix: str, check: Callable[..., object], *args: Any
-) -> None:
+def _collect[T](
+    errors: list[str], prefix: str, check: Callable[..., T], *args: Any
+) -> T | None:
     """Runs `check`, keeping its failure in `errors` rather than stopping."""
     try:
-        check(*args)
+        return check(*args)
     except EvidenceError as error:
         errors.append(f"{prefix}{error}")
+        return None
 
 
 def reconcile(
     backend: str, browser: str, lanes: list[ExpectedLane], evidence: list[LaneEvidence]
 ) -> str:
     """One pair's lanes reconciled: ownership first, then each lane's own
-    evidence. Every failure is collected, in that order, before refusing."""
+    evidence. Every failure is collected, in that order, before refusing.
+    Duration pressure is named, but each producer already reported it."""
     errors = []
+    pressured = 0
     supplied = {item.identity for item in evidence}
     if len(supplied) != len(evidence):
         errors.append("duplicate lane evidence")
@@ -818,13 +875,15 @@ def reconcile(
         if lane.backend != backend or lane.browser != browser or not lane.enabled:
             errors.append(f"unexpected lane `{item.identity}`")
             continue
-        _collect(
+        duration = _collect(
             errors,
             f"{item.identity} duration evidence: ",
             validate_duration_files,
             item.report,
             item.duration_manifest,
         )
+        if duration is not None:
+            pressured += len(duration.pressured)
         _collect(
             errors,
             f"{item.identity} trace evidence: ",
@@ -837,9 +896,15 @@ def reconcile(
         )
     if errors:
         raise EvidenceError("\n".join(errors))
-    return (
+    verdict = (
         f"{backend}/{browser}: reconciled {len(evidence)} lane-qualified evidence sets"
     )
+    if pressured:
+        verdict += (
+            f"; {pressured} attempt(s) under duration pressure, reported by "
+            "their lane producers"
+        )
+    return verdict
 
 
 def reconciled_lanes(

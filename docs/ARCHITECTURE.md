@@ -4213,13 +4213,20 @@ unsharded preflight census, then emits its own report, lane and duration
 manifests, phase sidecar, trace capture, journals, and Playwright archive. A
 `!cancelled()` host reconciliation job per backend/browser pair downloads its
 producer artifacts (three for Chromium, five for Firefox), proves the exact
-census/report/manifest union, and independently validates retries, duration
-pressure, panic phases, and boot traces. Missing, duplicated, misidentified,
-malformed, or failed evidence fails reconciliation; failed producers are still
-awaited and their recoverable evidence remains an aggregate input. The stable
-result-only `e2e gate` requires every producer, the `Merge-queue verdict` job
-that projects the catalog, and all four reconciliations; for a
-documentation-only change it requires that job and the E2E jobs skipped
+census/report/manifest union, and independently validates retries, timed-out
+attempts, panic phases, and boot traces. Duration pressure is a reported signal,
+not a verdict. A `timedOut` attempt fails at any retry. Any other attempt at 80%
+or more of its effective timeout passes. Its lane producer writes a
+`Duration pressure` warning annotation per lane and step-summary lines, and
+`dev pr-watch` (hence `dev pr-land`) reads those annotations back into `warning`
+events in its handoff
+([duration pressure is a signal](adr/drafts/e2e-duration-pressure-is-a-signal.md)).
+Missing, duplicated, misidentified, malformed, or failed evidence fails
+reconciliation; failed producers are still awaited and their recoverable
+evidence remains an aggregate input. The stable result-only `e2e gate` requires
+every producer, the `Merge-queue verdict` job that projects the catalog, and all
+four reconciliations; for a documentation-only change it requires that job and
+the E2E jobs skipped
 ([documentation-only CI scope](adr/0266-ci-documentation-only-scope.md)). Local
 `dev validate` inherits the non-E2E Elisp verdict, then calls the same
 synchronous `dev e2e` workflow; it does not rerun live ERT

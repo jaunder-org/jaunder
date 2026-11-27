@@ -194,6 +194,25 @@ def runs(*found: Any) -> Any:
     return {"total_count": len(found), "workflow_runs": list(found)}
 
 
+def annotations(**checks: list[tuple[str, str, str | None]]) -> Any:
+    """One commit's check runs, each with its (level, title, message)
+    annotations."""
+    nodes = [
+        {
+            "name": name,
+            "annotations": {
+                "nodes": [
+                    {"annotationLevel": level, "title": title, "message": message}
+                    for level, title, message in found
+                ]
+            },
+        }
+        for name, found in checks.items()
+    ]
+    suites = {"nodes": [{"checkRuns": {"nodes": nodes}}]}
+    return {"data": {"repository": {"object": {"checkSuites": suites}}}}
+
+
 def jobs(*conclusions: tuple[str, Any]) -> Any:
     return {"jobs": [{"name": n, "conclusion": c} for n, c in conclusions]}
 
@@ -214,7 +233,7 @@ def route(argv: Sequence[str]) -> str:
     if argv[1] == "pr":
         return "list"
     if argv[2] == "graphql":
-        return "pr"
+        return "annotations" if any(a.startswith("oid=") for a in argv) else "pr"
     if argv[2].endswith("/rules/branches/main"):
         return "rules"
     if "/contents/" in argv[2]:
@@ -242,11 +261,13 @@ class Native:
 
 def native(*snapshots: Any, **routes: Any) -> Native:
     """PR snapshots as replies, plus any other route; the ruleset defaults to
-    the live one, and a probe finds no merge-group run."""
+    the live one, a probe finds no merge-group run, and no commit has
+    annotations."""
     scripted: dict[str, list[Reply]] = {
         "remote get-url origin": [(0, ORIGIN, "")],
         "rules": [ok(rules(V, E))],
         "runs": [ok(runs())],
+        "annotations": [ok(annotations())],
         "pr": [reply if isinstance(reply, tuple) else ok(reply) for reply in snapshots],
     }
     for name, replies in routes.items():
@@ -1323,6 +1344,75 @@ def test_a_passive_watch_crosses_ready_to_merged(observe: Any) -> None:
     assert result.events("phase") == ["ready-to-land", "armed", "queued"]
 
 
+PRESSURE = ("WARNING", "Duration pressure", "sqlite-chromium-1-of-3: 1 attempt(s)")
+
+
+def test_a_ready_watch_reports_the_heads_duration_pressure(observe: Any) -> None:
+    fake = native(
+        green(),
+        annotations=[
+            annotations(
+                lane=[PRESSURE, ("WARNING", "Other", "x")],
+                summary=[("NOTICE", "Duration pressure", "y")],
+            )
+        ],
+    )
+    result = observe(fake)
+    assert (result.code, result.outcome) == (0, "ready-to-land")
+    assert result.events("warning") == ["lane: sqlite-chromium-1-of-3: 1 attempt(s)"]
+    assert [call[-1] for call in fake.asked("annotations")] == [f"oid={HEAD}"]
+
+
+def test_a_merged_watch_also_reports_the_merge_groups_pressure(observe: Any) -> None:
+    fake = native(
+        merged(),
+        annotations=[annotations(), annotations(e2e=[PRESSURE])],
+    )
+    result = observe(fake)
+    assert result.outcome == "merged"
+    assert result.events("warning") == ["e2e: sqlite-chromium-1-of-3: 1 attempt(s)"]
+    assert [call[-1] for call in fake.asked("annotations")] == [
+        f"oid={HEAD}",
+        f"oid={MERGE}",
+    ]
+
+
+def test_unreadable_annotations_are_a_warning_not_a_verdict(observe: Any) -> None:
+    result = observe(native(green(), annotations=[TRANSPORT]))
+    assert (result.code, result.outcome) == (0, "ready-to-land")
+    [warning] = result.events("warning")
+    assert warning.startswith(f"duration-pressure annotations of {HEAD} unread:")
+
+
+def test_an_unfinished_watch_reads_no_annotations(observe: Any) -> None:
+    fake = native(pending())
+    observe(fake, once=True)
+    assert fake.asked("annotations") == []
+
+
+@pytest.mark.parametrize(
+    ("body", "found"),
+    [
+        ({"data": {"repository": {"object": None}}}, []),
+        (annotations(lane=[PRESSURE]), ["lane: sqlite-chromium-1-of-3: 1 attempt(s)"]),
+    ],
+)
+def test_pressure_parsing(body: Any, found: list[str]) -> None:
+    assert pr_watch.parse_pressure(body) == found
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"data": {"repository": {"object": {}}}},
+        annotations(lane=[("WARNING", "Duration pressure", None)]),
+    ],
+)
+def test_malformed_pressure_replies_are_refused(body: Any) -> None:
+    with pytest.raises(GhError):
+        pr_watch.parse_pressure(body)
+
+
 def test_queue_disappearance_confirms_merge_with_metadata(observe: Any) -> None:
     result = observe(native(queued(2), green(), merged()))
     assert result.outcome == "merged"
@@ -1728,8 +1818,11 @@ def test_one_shot_observation_returns_readiness_and_only_reads(observe: Any) -> 
     assert (result.outcome, result.report["pr"]) == ("ready-to-land", 731)
     assert result.report["events"]
     assert clock.now == 0
+    # The remote, the ruleset, the PR, the ejection probe and the head's
+    # annotations.
     assert [call[:2] for call in fake.calls] == [
         ["git", "remote"],
+        ["gh", "api"],
         ["gh", "api"],
         ["gh", "api"],
         ["gh", "api"],

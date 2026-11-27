@@ -17,7 +17,7 @@ from typing import Any
 
 import pytest
 from conftest import REAL_GIT, REPOSITORY, Checkout, require
-from test_pr_watch import E, V, green, merged, rules, runs
+from test_pr_watch import PRESSURE, E, V, annotations, green, merged, rules, runs
 
 from dev import pr_watch
 
@@ -192,12 +192,21 @@ def test_an_approved_land_makes_one_head_bound_action_then_observes(
 
 def watched(*observer: Any) -> list[Any]:
     """The native calls of one real `dev pr-watch 731`: origin, ruleset, then
-    each scripted PR read."""
-    query = ["api", "graphql", "-f", f"query={pr_watch.PR_QUERY}"]
-    query += ["-f", "owner=jaunder-org", "-f", "name=jaunder", "-F", "number=731"]
+    each scripted read, `annotations:<oid>` naming one commit's annotations."""
+    repository = ["-f", "owner=jaunder-org", "-f", "name=jaunder"]
+    query = ["api", "graphql", "-f", f"query={pr_watch.PR_QUERY}", *repository]
+    query += ["-F", "number=731"]
     rules_path = "repos/jaunder-org/jaunder/rules/branches/main"
     runs_path = "repos/jaunder-org/jaunder/actions/runs?event=merge_group&per_page=100"
     paths = {"pr": query, "rules": ["api", rules_path], "runs": ["api", runs_path]}
+
+    def args(name: str) -> list[str]:
+        kind, _, oid = name.partition(":")
+        if kind != "annotations":
+            return paths[name]
+        annotations = ["api", "graphql", "-f", f"query={pr_watch.ANNOTATIONS_QUERY}"]
+        return [*annotations, *repository, "-f", f"oid={oid}"]
+
     return [
         {
             "tool": "git",
@@ -205,14 +214,20 @@ def watched(*observer: Any) -> list[Any]:
             "text": "https://github.com/jaunder-org/jaunder.git\n",
         },
         {"tool": "gh", "args": paths["rules"], "body": rules(V, E)},
-    ] + [{"tool": "gh", "args": paths[name], "body": body} for name, body in observer]
+    ] + [{"tool": "gh", "args": args(name), "body": body} for name, body in observer]
 
 
 def test_land_runs_the_real_observer_end_to_end(native: Native) -> None:
     native.checkout.dev_on_path()
     calls = land_calls(False)
-    calls[4:5] = watched(("pr", green()), ("runs", runs()))
-    calls[-1:] = watched(("pr", merged()))
+    calls[4:5] = watched(
+        ("pr", green()), ("runs", runs()), (f"annotations:{HEAD}", annotations())
+    )
+    calls[-1:] = watched(
+        ("pr", merged()),
+        (f"annotations:{HEAD}", annotations()),
+        (f"annotations:{MERGE}", annotations(e2e=[PRESSURE])),
+    )
     result = native.land(False, calls)
     assert result.returncode == 0, result
     assert native.count() == len(calls)
@@ -222,6 +237,10 @@ def test_land_runs_the_real_observer_end_to_end(native: Native) -> None:
         MERGE,
         731,
     )
+    # The merge-group run's duration pressure reaches the land handoff.
+    assert [e["detail"] for e in report["events"] if e["kind"] == "warning"] == [
+        "e2e: sqlite-chromium-1-of-3: 1 attempt(s)"
+    ]
 
 
 ADVERSE = ["pending", "blocked", "conflicted", "checks-failed", "ejected"]

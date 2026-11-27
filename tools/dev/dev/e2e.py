@@ -6,6 +6,7 @@ does not depend on where it ran. The verdicts themselves run here, in-process
 """
 
 import json
+import os
 import sys
 from collections import defaultdict
 from collections.abc import Callable
@@ -13,7 +14,7 @@ from pathlib import Path
 
 from opentelemetry.trace import Span
 
-from dev import e2e_evidence, server_fn_coverage, steps, trace, traces
+from dev import annotations, e2e_evidence, server_fn_coverage, steps, trace, traces
 from dev.commands import SOURCE_CONTRACT
 from dev.e2e_evidence import GATE_PHASE
 from dev.evidence import CATALOG, EvidenceError
@@ -171,6 +172,27 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     return add
 
 
+def report_pressure(lane: str, budget: e2e_evidence.DurationBudget) -> None:
+    """Under GitHub Actions, the lane's duration pressure as one warning
+    annotation and its every attempt in the step summary, so a green run still
+    shows it. One annotation per lane: GitHub drops a step's annotations past
+    ten. A summary that cannot be written is said, never a failure."""
+    if not budget.pressured or not annotations.in_github_actions():
+        return
+    title = annotations.DURATION_PRESSURE
+    worst = budget.pressured[0].describe()
+    annotations.warning(title, f"{lane}: {budget.headline()}; worst {worst}")
+    summary = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not summary:
+        return
+    lines = "".join(f"- {pressure.describe()}\n" for pressure in budget.pressured)
+    try:
+        with open(summary, "a", encoding="utf-8") as out:
+            out.write(f"### {title}: {lane}\n\n{lines}\n")
+    except OSError as error:
+        print(f"dev: {summary}: no pressure summary: {error}", file=sys.stderr)
+
+
 def producer(lane: str) -> None:
     """One lane's producer, then its verification, whose result is shown.
 
@@ -178,6 +200,7 @@ def producer(lane: str) -> None:
     records where that output came from and the VM phases its run measured;
     only a successful lift is verified. The lane is a verdict that must execute
     here (ADR-0192), so an output this machine did not build fails the step.
+    A verified lane's duration pressure is reported, never refused.
     """
     check = f"e2e-{lane}"
     steps.run(
@@ -188,10 +211,13 @@ def producer(lane: str) -> None:
         verdict=True,
     )
     output = Path(_selected_output(check))
-    steps.verdict(
-        "e2e-evidence",
-        lambda: e2e_evidence.verify_lane(lane, Path(CATALOG), output),
-    )
+
+    def decide() -> str:
+        verdict, budget = e2e_evidence.verify_lane(lane, Path(CATALOG), output)
+        report_pressure(lane, budget)
+        return verdict
+
+    steps.verdict("e2e-evidence", decide)
 
 
 def _inventory() -> list[server_fn_coverage.ServerFn]:
