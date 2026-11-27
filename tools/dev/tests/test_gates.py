@@ -212,11 +212,20 @@ TOOLS_TESTS = (
 )
 
 
-def host_tests() -> Commands:
+def tools_tests() -> Commands:
     return commands(
         # The tests compile with exactly their run's arguments.
         f"cargo test --no-run {TOOLS_TESTS}",
         f"cargo test {TOOLS_TESTS}",
+    )
+
+
+def host_tests() -> Commands:
+    return [*tools_tests(), *python_checks()]
+
+
+def python_checks() -> Commands:
+    return commands(
         "ruff format --check tools/dev",
         "ruff check tools/dev",
         "mypy --strict tools/dev",
@@ -316,11 +325,8 @@ def ci_host_lane(advisories: bool) -> Commands:
         *map(source_contract, SOURCE_CONTRACTS),
         *(commands("cargo deny check") if advisories else []),
         PLATFORM,
-        *commands(
-            f"cargo test --no-run {TOOLS_TESTS}",
-            f"cargo test {TOOLS_TESTS}",
-            "pytest -m repository tools/dev",
-        ),
+        *tools_tests(),
+        *commands("pytest -m repository tools/dev"),
     ]
 
 

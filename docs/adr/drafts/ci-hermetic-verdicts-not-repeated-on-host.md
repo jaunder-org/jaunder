@@ -21,9 +21,9 @@ never revisited, so CI still decided each of them twice:
 | `ert`                                                                  | `static-ert`        |
 | `ruff-format`, `ruff-check`, `mypy`, `pytest`                          | `dev-python`        |
 
-Across 68 CI runs (2026-11-24 to 2026-11-27) these steps took a median of 176 s
-of the host lane's 258 s of `dev` time. The host lane was rarely the last lane
-to finish, so the cost was runner time, not wall clock. The larger cost was
+Across the 68 CI runs measured on #2144 these steps took a median of 176 s of
+the host lane's 258 s of `dev` time. The host lane was rarely the last lane to
+finish, so the cost was runner time, not wall clock. The larger cost was
 ambiguity: two lanes could disagree, and "which lane decides this?" had no
 single answer.
 
@@ -58,7 +58,8 @@ Local gates are unchanged: `dev check`, `dev check-no-test`, the hooks and local
 `dev validate-no-e2e` keep every host step, so `validate-no-e2e` stays a
 superset of the CI lanes.
 
-This generalises ADR-0255 and narrows the `host` lane of
+This generalises ADR-0255, whose note that the host lane "still runs `tsc` and
+`cargo-deny`" no longer holds for `tsc`, and narrows the `host` lane of
 [distributed CI lane topology](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md)
 further: the hermetic lane owns each verdict it can decide.
 

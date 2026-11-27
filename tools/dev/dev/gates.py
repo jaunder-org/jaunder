@@ -133,11 +133,15 @@ def source_contract(name: str) -> None:
     steps.run(name, [*steps.tool(SOURCE_CONTRACT), name])
 
 
+def source_contract_checks() -> None:
+    for name in SOURCE_CONTRACTS:
+        source_contract(name)
+
+
 def source_contracts() -> None:
     static.run("ast-grep-tests", Mode.VERIFY)
     static.run("no-full-reload", Mode.VERIFY)
-    for name in SOURCE_CONTRACTS:
-        source_contract(name)
+    source_contract_checks()
 
 
 def tsc_and_cargo_deny(mode: Mode, shared: bool = False) -> None:
@@ -450,8 +454,7 @@ def ci_validate_host(advisories: bool) -> None:
     """
     clean_tree()
     docs_shape()
-    for name in SOURCE_CONTRACTS:
-        source_contract(name)
+    source_contract_checks()
     if advisories:
         static.run("cargo-deny", Mode.VERIFY)
     platform_contract()
