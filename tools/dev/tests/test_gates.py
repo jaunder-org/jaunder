@@ -552,7 +552,7 @@ STEP_FAILURES = {
     "run": ("check", host_tests()[-1]),
     "rendered-report": ("validate", COVERAGE[-1]),
     "nix-check": ("ci-validate-hermetic", nix("rust-format")[-1]),
-    "static-preparation": ("ci-validate-host", tsc_and_cargo_deny()[0]),
+    "static-preparation": ("validate-no-e2e", tsc_and_cargo_deny()[0]),
     # nextest-build, while test-local holds its lock; nextest must not run.
     "under-test-local-lock": ("check", TEST_LOCAL[-2]),
 }
