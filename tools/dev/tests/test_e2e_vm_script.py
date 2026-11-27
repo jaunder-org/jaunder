@@ -3,8 +3,8 @@
 `nix-instantiate` evaluates one lane's test script from the real
 `nix/checks.nix`, with only NixOS realization and store inputs replaced. The
 script's imports and function definitions then run in this process against a
-fake machine. It needs Nix and the repository, so only the filtered
-`checks.dev-python` source may skip it.
+fake machine. It needs Nix and the repository, so CI's host lane runs it, not
+`checks.dev-python`.
 """
 
 import ast
@@ -18,6 +18,8 @@ from typing import Any
 
 import pytest
 from conftest import REPOSITORY, require
+
+pytestmark = pytest.mark.repository
 
 CHECKS = REPOSITORY / "nix" / "checks.nix"
 LANE = "sqlite-firefox-1-of-5"

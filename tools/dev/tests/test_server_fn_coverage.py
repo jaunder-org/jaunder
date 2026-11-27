@@ -485,6 +485,7 @@ def committed_snapshot() -> Path:
     return path
 
 
+@pytest.mark.repository
 def test_the_committed_snapshot_renders_back_byte_for_byte() -> None:
     raw = committed_snapshot().read_text()
     committed = json.loads(raw)
@@ -550,6 +551,7 @@ def test_the_seed_keeps_non_api_traffic_as_the_negative_case(seed: list[Span]) -
     assert any(span.uri and "/api/" not in span.uri for span in seed)
 
 
+@pytest.mark.repository
 def test_the_seed_covers_every_fn_the_committed_snapshot_does(
     seed: list[Span], seed_inventory: list[ServerFn]
 ) -> None:
@@ -587,6 +589,7 @@ def seed_endpoints(spans: list[Span]) -> bytes:
     return (json.dumps(hits, indent=2) + "\n").encode()
 
 
+@pytest.mark.repository
 def test_the_seed_endpoint_fixture_is_derived_from_the_seed(seed: list[Span]) -> None:
     """To refresh it after re-recording the seed, write `seed_endpoints(seed)`
     to that fixture."""

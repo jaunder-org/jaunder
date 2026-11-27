@@ -28,6 +28,9 @@ testpaths = ["tests"]
 pythonpath = ["."]
 # Keep host runs from leaving a cache directory in the checkout.
 addopts = ["-p", "no:cacheprovider", "-n", "auto"]
+markers = [
+    "repository: needs the repository outside tools/dev, jq or Nix; CI runs it in the host lane, not checks.dev-python",
+]
 
 # Ruff reads only a pyproject.toml with this table, which makes this directory
 # its project root wherever it runs, so first-party imports sort the same on

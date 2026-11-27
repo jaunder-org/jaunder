@@ -11,6 +11,8 @@ from pathlib import Path
 import pytest
 from conftest import REPOSITORY, require
 
+pytestmark = pytest.mark.repository
+
 SCRIPT = REPOSITORY / "scripts" / "ci-storage-probe"
 
 

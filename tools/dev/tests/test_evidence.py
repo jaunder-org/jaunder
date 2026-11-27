@@ -194,6 +194,7 @@ def test_a_pairs_lanes_are_its_enabled_ones_in_catalog_order() -> None:
     assert pair_lanes(catalog, "sqlite", "webkit") == []
 
 
+@pytest.mark.repository
 def test_the_catalog_fixture_is_the_repository_catalog() -> None:
     """The verdict tests read the catalog the lanes really run under, as the
     Rust tests read it in place; refresh the fixture by copying it."""

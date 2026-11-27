@@ -170,7 +170,7 @@ TOOLS_TESTS = (
 )
 
 
-def host_tests() -> None:
+def tools_tests() -> None:
     # Compiled first with the run's own arguments, so `tools-tests` times the
     # tests alone.
     steps.run(
@@ -179,6 +179,10 @@ def host_tests() -> None:
         compiles=True,
     )
     steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS], compiles=True)
+
+
+def host_tests() -> None:
+    tools_tests()
     steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
     steps.run("ruff-check", ["ruff", "check", "tools/dev"])
     steps.run("mypy", ["mypy", "--strict", "tools/dev"])
@@ -432,8 +436,12 @@ def validate() -> None:
 
 
 def ci_validate_host(advisories: bool) -> None:
-    """The host check groups without Clippy, whose CI verdict is the hermetic
-    lane's `static-code` (docs/adr/0255-ci-clippy-verdict-from-nix.md).
+    """The host checks whose CI verdict the hermetic lane does not own.
+
+    Every other host check is a step of a `STATIC_CHECKS` derivation, whose
+    verdict CI takes instead
+    (docs/adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md); the
+    `repository` tests are those `checks.dev-python` deselects.
 
     cargo-deny runs only with `advisories`, which CI passes for a change to the
     product dependencies (`dev.scope`): the hermetic lane checks bans, licenses
@@ -441,15 +449,14 @@ def ci_validate_host(advisories: bool) -> None:
     (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
     """
     clean_tree()
-    format_checks(Mode.VERIFY)
     docs_shape()
-    source_contracts()
-    static.run("tsc", Mode.VERIFY)
+    for name in SOURCE_CONTRACTS:
+        source_contract(name)
     if advisories:
         static.run("cargo-deny", Mode.VERIFY)
-    elisp_checks(Mode.VERIFY)
     platform_contract()
-    host_tests()
+    tools_tests()
+    steps.run("pytest-repository", ["pytest", "-m", "repository", "tools/dev"])
 
 
 def docs_checks(mode: Mode) -> None:

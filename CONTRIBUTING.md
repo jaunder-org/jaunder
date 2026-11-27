@@ -1084,11 +1084,14 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 
 The host check surface that `check-no-test`, `prepush` and `validate-no-e2e`
 share is five public groups, run in this order and stopping at the first
-failure. `ci-validate-host` runs the same groups without the six Clippy units,
-because CI takes its Clippy verdict from the hermetic lane's `static-code`
-([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md)), and
-runs cargo-deny only with `--advisories`. Each group can be run on its own to
-re-check one kind of failure; `mode` is `verify` (the default) or `fix`:
+failure. `ci-validate-host` repeats no check whose CI verdict a hermetic-lane
+derivation owns
+([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md),
+[hermetic verdicts not repeated on host](docs/adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md)).
+It runs the docs-shape and source-contract checks, the platform contract, the
+tools Cargo tests and `pytest -m repository tools/dev`, and cargo-deny only with
+`--advisories`. Each group can be run on its own to re-check one kind of
+failure; `mode` is `verify` (the default) or `fix`:
 
 | Group                       | Runs                                                                                   |
 | --------------------------- | -------------------------------------------------------------------------------------- |
@@ -2583,7 +2586,9 @@ server-function coverage verification to `dev validate-no-e2e`.
 - `checks.x86_64-linux.dev-python` — the `dev` package's own gate: ruff,
   `mypy --strict`, and pytest under coverage.py at `fail_under = 100` with
   branch coverage, subprocesses included. New `dev` code needs behaviour tests
-  that keep it at 100%.
+  that keep it at 100%. It deselects tests marked `repository`: mark any test
+  that needs the repository outside `tools/dev`, jq or Nix (its `require()`
+  fails without them), and CI's host lane runs exactly those.
 - `checks.x86_64-linux.wasm-tests` — `wasm-bindgen-test` cases executed in
   headless Nix-store Chromium through the matching Nix-store chromedriver. This
   is behavioral pass/fail execution for irreducible browser code, not wasm line

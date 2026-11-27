@@ -5,8 +5,7 @@ name, under bash. A theme release version is strict SemVer, and the release
 step publishes the package once and never replaces it: a re-run uploads a
 missing package, accepts identical bytes, refuses different or duplicate
 packages, and corrects the draft and prerelease flags. It needs the
-repository's `.github/`, so only the filtered `checks.dev-python` source may
-skip it.
+repository's `.github/`, so CI's host lane runs it, not `checks.dev-python`.
 """
 
 import os
@@ -16,6 +15,8 @@ from pathlib import Path
 
 import pytest
 from conftest import load_workflow
+
+pytestmark = pytest.mark.repository
 
 # Answers `gh release view` from the case's release state and logs every other
 # call, one line of arguments each, for the test to compare exactly.

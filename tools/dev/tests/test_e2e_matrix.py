@@ -4,8 +4,8 @@
 projection or a malformed catalog would silently run fewer lanes, or merge
 lanes' traces, while CI stays green. The projection runs under the real `jq`
 over the repository's catalog and mutated copies of it. It needs the
-repository's files and `jq`, so only the filtered `checks.dev-python` source
-may skip it.
+repository's files and `jq`, so CI's host lane runs it, not
+`checks.dev-python`.
 """
 
 import json
@@ -15,6 +15,8 @@ from typing import Any
 
 import pytest
 from conftest import REPOSITORY, require
+
+pytestmark = pytest.mark.repository
 
 PROJECTION = "scripts/e2e-matrix.jq"
 
