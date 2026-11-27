@@ -325,6 +325,7 @@ def pressured_output() -> Path:
         return immutable(artifacts(slow_first_lane(Path(directory))))
 
 
+@pytest.mark.repository
 def test_a_pressured_lane_passes_and_is_annotated_and_summarized(e2e: E2E) -> None:
     result = e2e.run(
         "e2e-producer",
@@ -400,6 +401,7 @@ def test_pressure_is_annotated_only_when_github_runs_a_pressured_lane(
     assert not summary.exists()
 
 
+@pytest.mark.repository
 def test_reconciliation_names_pressure_but_never_annotates_it(e2e: E2E) -> None:
     slow_first_lane(e2e.root / "lanes")
     result = e2e.run(
@@ -1002,6 +1004,7 @@ def test_a_failed_producer_lifts_available_evidence_but_never_verifies_it(
     assert b"e2e-evidence" not in result.stdout
 
 
+@pytest.mark.repository
 def test_a_producer_build_that_exits_1_runs_once_more(e2e: E2E) -> None:
     # Nix exits 1 when no builder failed, as when a substitute download fails.
     result = e2e.run("e2e-producer", LANE, output=capture_only(), status="1")
