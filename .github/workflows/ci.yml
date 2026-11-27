@@ -55,11 +55,11 @@ jobs:
   # script in the hermetic checks.
   #
   # It also decides whether the change is documentation-only, and whether it
-  # changes the product dependencies, with the slim image's own `python3` and
-  # `git` running `dev.scope`, which needs only the standard library; the pinned
-  # Python runs the same module in `dev`'s tests. A push has no base, so it is
-  # never documentation-only and never checks advisories: the daily
-  # `advisories.yml` scan owns `main`.
+  # changes either Cargo workspace's dependencies, with the slim image's own
+  # `python3` and `git` running `dev.scope`, which needs only the standard
+  # library; the pinned Python runs the same module in `dev`'s tests. A push has
+  # no base, so it is never documentation-only and never checks advisories: the
+  # daily `advisories.yml` scan owns `main`.
   merge-queue-verdict:
     name: Merge-queue verdict
     runs-on: ubuntu-slim
@@ -181,8 +181,9 @@ jobs:
           retention-days: 14
       - name: Enter the ci shell
         run: scripts/nix-retry develop .#ci --accept-flake-config -c true
-      # RustSec advisories are checked only for a change to the product
-      # dependencies, so a newly published advisory fails no unrelated work.
+      # RustSec advisories are checked, on both Cargo workspaces, only for a
+      # change to their dependencies, so a newly published advisory fails no
+      # unrelated work.
       - name: Validate host lane (via dev)
         env:
           DEPENDENCIES: ${{ needs.merge-queue-verdict.outputs.dependencies }}

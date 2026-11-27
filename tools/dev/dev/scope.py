@@ -5,9 +5,10 @@ the precommit's narrow route uses (`rawdiff.markdown_only`), runs only the
 documentation checks. Anything this cannot establish runs everything.
 
 The host lane checks RustSec advisories only for an entry that changes the
-product workspace's dependencies, so a newly published advisory against an
-unchanged dependency fails no unrelated work; the daily scan of `main`
-(`.github/workflows/advisories.yml`) reports it instead.
+dependencies of either Cargo workspace, the product or `tools/`, so a newly
+published advisory against an unchanged dependency fails no unrelated work;
+the daily scan of `main` (`.github/workflows/advisories.yml`) reports it
+instead.
 
 CI's merge-queue verdict job runs it with the slim image's own Python, from a
 sparse checkout and before any Nix shell exists, so it imports only the
@@ -22,9 +23,9 @@ import sys
 
 from dev.rawdiff import Change, Reason, markdown_only, raw_changes
 
-# The product workspace's dependency inputs that cargo-deny reads. `tools/` is a
-# separate workspace cargo-deny does not check, so its changes do not count.
-_PRODUCT_DEPENDENCY_FILES = ("Cargo.lock", "deny.toml")
+# The inputs cargo-deny reads: every workspace's manifests and lock, and the one
+# root policy both workspaces are checked under.
+_MANIFESTS = ("Cargo.toml", "Cargo.lock")
 
 
 def _git(*args: str) -> subprocess.CompletedProcess[bytes]:
@@ -47,10 +48,8 @@ def _changes(base: str) -> list[Change] | str:
     return changes
 
 
-def _product_dependency(path: str) -> bool:
-    return path in _PRODUCT_DEPENDENCY_FILES or (
-        path.rsplit("/", 1)[-1] == "Cargo.toml" and not path.startswith("tools/")
-    )
+def _dependency(path: str) -> bool:
+    return path == "deny.toml" or path.rsplit("/", 1)[-1] in _MANIFESTS
 
 
 def ci_scope(base: str) -> None:
@@ -68,7 +67,7 @@ def ci_scope(base: str) -> None:
             reason, dependencies = changes, True
         else:
             reason = markdown_only(changes)
-            dependencies = any(_product_dependency(c.path) for c in changes)
+            dependencies = any(_dependency(c.path) for c in changes)
     docs_only = reason == Reason.ISOLATED_STAGED_MARKDOWN
     print(f"docs_only={'true' if docs_only else 'false'}", flush=True)
     print(f"dependencies={'true' if dependencies else 'false'}", flush=True)

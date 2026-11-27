@@ -657,7 +657,6 @@ STATIC_ALL = [
     words("emacs --batch -Q -l elisp/scripts/byte-compile.el"),
     ["setup-e2e-node-modules", "", ""],
     words("tsc --noEmit -p end2end/tsconfig.json"),
-    words("cargo deny check"),
     words(
         "cargo clippy --workspace --exclude web --exclude client --exclude csr "
         "--all-targets -- -D warnings"
@@ -673,6 +672,8 @@ STATIC_ALL = [
         "cargo clippy --manifest-path tools/Cargo.toml --workspace --all-targets "
         "--features coverage/host -- -D warnings"
     ),
+    words("cargo deny check"),
+    words("cargo deny --manifest-path tools/Cargo.toml check"),
     words("emacs --batch -Q -l elisp/scripts/run-tests.el"),
 ]
 

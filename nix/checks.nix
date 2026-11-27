@@ -4000,6 +4000,7 @@ static-code =
       dev static ast-grep-tests --sandbox
       dev static no-full-reload --sandbox
       dev static cargo-deny --sandbox
+      dev static tools-cargo-deny --sandbox
       test -e ${self.checks.${system}.clippy-aggregate}
       touch $out
     '';

@@ -1,9 +1,9 @@
 name: Advisories
 
-# CI checks RustSec advisories only for a change to the product dependencies,
-# so a newly published advisory fails no unrelated pull request. This daily scan
-# checks `main` and files one issue per failing advisory, or comments on the one
-# already open (`dev advisory-scan`).
+# CI checks RustSec advisories only for a change to the dependencies of either
+# Cargo workspace, so a newly published advisory fails no unrelated pull request.
+# This daily scan checks both workspaces on `main` and files one issue per
+# failing advisory, or comments on the one already open (`dev advisory-scan`).
 on:
   schedule:
     # Daily 06:17 UTC, off the hour and clear of the other scheduled runs.

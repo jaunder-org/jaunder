@@ -26,6 +26,8 @@ class Mode(StrEnum):
 
 PRODUCT_HOME = "JAUNDER_PRODUCT_CARGO_HOME"
 TOOLS_HOME = "JAUNDER_TOOLS_CARGO_HOME"
+# The Cargo arguments that select the tools workspace from the checkout root.
+TOOLS_MANIFEST = ("--manifest-path", "tools/Cargo.toml")
 
 
 @dataclass(frozen=True)
@@ -61,6 +63,10 @@ def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> 
         ],
         home,
     )
+
+
+def _offline_policies(sandbox: bool) -> list[str]:
+    return ["bans", "licenses", "sources"] if sandbox else []
 
 
 def _clippy(summary: str, home: str, *args: str) -> Leaf:
@@ -181,22 +187,24 @@ LEAVES = {
     "tools-fmt": _cargo(
         "Format the tools workspace.",
         TOOLS_HOME,
-        lambda fix, _sandbox: [
-            "fmt",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            "--all",
-            *_check(fix),
-        ],
+        lambda fix, _sandbox: ["fmt", *TOOLS_MANIFEST, "--all", *_check(fix)],
     ),
     # The sandbox has no advisory database, so it checks the offline policies.
+    # Both workspaces are checked under the one root `deny.toml`; `tools/` has
+    # no policy of its own.
     "cargo-deny": _cargo(
-        "Check the dependency policy.",
+        "Check the product workspace's dependency policy.",
         PRODUCT_HOME,
+        lambda _fix, sandbox: ["deny", "check", *_offline_policies(sandbox)],
+    ),
+    "tools-cargo-deny": _cargo(
+        "Check the tools workspace's dependency policy.",
+        TOOLS_HOME,
         lambda _fix, sandbox: [
             "deny",
+            *TOOLS_MANIFEST,
             "check",
-            *(["bans", "licenses", "sources"] if sandbox else []),
+            *_offline_policies(sandbox),
         ],
     ),
     "product-core-clippy": _clippy(
@@ -254,8 +262,7 @@ LEAVES = {
     "tools-clippy": _clippy(
         "Clippy on the tools workspace.",
         TOOLS_HOME,
-        "--manifest-path",
-        "tools/Cargo.toml",
+        *TOOLS_MANIFEST,
         "--workspace",
         "--all-targets",
         "--features",
@@ -291,8 +298,9 @@ ALL = [
     "no-full-reload",
     "byte-compile",
     "tsc",
-    "cargo-deny",
     *CLIPPY,
+    "cargo-deny",
+    "tools-cargo-deny",
     "ert",
 ]
 

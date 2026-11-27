@@ -178,8 +178,8 @@ def write(path: str, text: str = "") -> Callable[[], None]:
         (write("Cargo.lock", "version = 4\n"), True),
         (write("deny.toml", "[bans]\n"), True),
         (lambda: Path("main.rs").write_text("fn main() { }\n"), False),
-        (write("tools/Cargo.lock", "version = 4\n"), False),
-        (write("tools/dev-tool/Cargo.toml", "[package]\n"), False),
+        (write("tools/Cargo.lock", "version = 4\n"), True),
+        (write("tools/dev-tool/Cargo.toml", "[package]\n"), True),
         (write("server/Cargo.lock.md", "# Not a lock\n"), False),
     ],
     ids=[
@@ -193,14 +193,14 @@ def write(path: str, text: str = "") -> Callable[[], None]:
         "lookalike",
     ],
 )
-def test_advisories_run_when_the_product_dependencies_change(
+def test_advisories_run_when_any_workspace_dependencies_change(
     git: Git,
     change: Callable[[], None],
     dependencies: bool,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Only the product workspace is checked by cargo-deny, so only its
-    manifests, lock and policy decide whether advisories run."""
+    """cargo-deny checks both workspaces under the root policy, so any
+    manifest or lock, and that policy, decide whether advisories run."""
     base = changed(git, change)
     assert answer(base, capsys)[0].splitlines()[1] == (
         f"dependencies={str(dependencies).lower()}"

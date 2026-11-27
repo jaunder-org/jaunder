@@ -1106,7 +1106,7 @@ failure; `mode` is `verify` (the default) or `fix`:
 | `dev format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting |
 | `dev docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs        |
 | `dev source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy      |
-| `dev compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                              |
+| `dev compile-checks [mode]` | `tsc`, the six Clippy units, then `cargo-deny` and `tools-cargo-deny`                  |
 | `dev elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                         |
 
 `dev source-contract <name>` runs one source-contract policy, such as
@@ -1178,12 +1178,16 @@ selected consumers, inputs and populations in detail:
   Hooks and local gates run host Clippy; CI runs only the hermetic Clippy
   verdict, an attributable-cost decision under the deferral below (#2010). Host
   cargo-deny includes advisories; sandbox mode intentionally checks only offline
-  bans, licenses and sources (ADR-0145). Local gates always run host cargo-deny.
-  CI runs it only for a pull request or merge-queue entry that changes the root
-  `Cargo.lock`, `deny.toml` or a `Cargo.toml` outside `tools/`
+  bans, licenses and sources (ADR-0145). Every lane checks both Cargo workspaces
+  under the root `deny.toml`: `cargo-deny` for the product and
+  `tools-cargo-deny` for `tools/`. Local gates always run host cargo-deny. CI
+  runs it only for a pull request or merge-queue entry that changes any
+  `Cargo.toml` or `Cargo.lock`, or `deny.toml`
   (`dev ci-validate-host --advisories`). The daily `advisories.yml` scan
-  (`dev advisory-scan`) checks `main` and files one issue per failing advisory
-  ([CI checks advisories only on a dependency change](docs/adr/drafts/ci-checks-advisories-on-dependency-change.md)).
+  (`dev advisory-scan`) checks both workspaces of `main` and files one issue per
+  failing advisory
+  ([CI checks advisories only on a dependency change](docs/adr/drafts/ci-checks-advisories-on-dependency-change.md),
+  [cargo-deny checks every Cargo workspace](docs/adr/drafts/cargo-deny-checks-every-workspace.md)).
 - **Doctests:** execute the root fence population only in the hermetic producer,
   whose bidirectional reconciliation prevents population loss, plus the
   separate, unreconciled `tools-doctests` run of the tools workspace.

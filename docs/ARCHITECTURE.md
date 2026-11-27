@@ -5171,15 +5171,18 @@ skips `advisories` and checks only `bans`, `licenses`, and `sources`
 
 #### When CI checks advisories
 
-The hermetic `static-code` check is CI's bans, licenses and sources verdict on
-every run. The CI host lane runs full `cargo deny check` only when `dev.scope`
-finds that a pull request or merge-queue entry changes the product dependencies:
-the root `Cargo.lock`, `deny.toml`, or a `Cargo.toml` outside `tools/`. An
+cargo-deny checks both Cargo workspaces, the product and `tools/`, under the one
+root `deny.toml`: `cargo-deny` and `tools-cargo-deny` run side by side
+everywhere either runs. The hermetic `static-code` check is CI's bans, licenses
+and sources verdict on every run. The CI host lane runs the full check on both
+workspaces only when `dev.scope` finds that a pull request or merge-queue entry
+changes a dependency file: any `Cargo.toml` or `Cargo.lock`, or `deny.toml`. An
 unreadable diff counts as a change. A push to `main` never checks advisories.
-The daily `advisories.yml` workflow runs `dev advisory-scan` on `main` instead,
-and comments on or opens one issue per failing advisory. Local gates keep full
-`cargo deny check`
-([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)).
+The daily `advisories.yml` workflow runs `dev advisory-scan` on both workspaces
+of `main` instead, and comments on or opens one issue per failing advisory.
+Local gates keep the full check on both workspaces
+([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
+[cargo-deny checks every Cargo workspace](adr/drafts/cargo-deny-checks-every-workspace.md)).
 
 #### Shared static-check definitions
 
@@ -5608,12 +5611,13 @@ the sole command-capture interface.
   residual code (including end-to-end and CSS Prettier), Elisp
   formatting/byte-compilation, and ERT respectively. Static-code requests the
   six-leaf Clippy aggregate once; its own derivation does not rerun those lints.
-  Code retains workspace-specific offline Cargo homes; Cargo-deny uses full
-  `cargo deny check` on host and skips `advisories` in sandbox mode. The CI host
-  lane runs it only for a product-dependency change
+  Code retains workspace-specific offline Cargo homes; Cargo-deny checks both
+  workspaces, using the full check on host and skipping `advisories` in sandbox
+  mode. The CI host lane runs it only for a dependency change
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
   [CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
+  [cargo-deny checks every Cargo workspace](adr/drafts/cargo-deny-checks-every-workspace.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
   [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
