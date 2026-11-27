@@ -500,7 +500,7 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
             assert result.returncode == 17, (gate, argv, result)
             # Past the clean-tree refusal, a failure inside custody is still
             # followed by its post-check.
-            post = custody and index > 0
+            post = custody and index >= len(CLEAN)
             expected = [*success[: index + 1], *(INDEX_QUERIES if post else [])]
             assert workflow.commands() == expected, (gate, argv)
             tail = f"{argv[0]} failed\n" + (

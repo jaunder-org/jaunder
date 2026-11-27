@@ -4817,7 +4817,8 @@ The explicit local workflows are:
   custody spans every check: after the clean-tree precheck, the
   `prepush-admission` phase requires raw/index identity for every tracked
   regular file, and the `prepush-post-check` phase at the end requires Git state
-  unchanged, also after a failed step, whose status stays the gate's. Other
+  unchanged, also after a failed step, whose status stays the gate's when the
+  post-check passes. An edit made while the push runs therefore fails it. Other
   platforms run the host leaves.
 - **`dev validate-no-e2e`** requires a clean tree, then runs Verify host/static
   checks, the platform contract, all nine Nix static checks (including

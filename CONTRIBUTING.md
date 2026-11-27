@@ -253,9 +253,10 @@ by CI through Cachix
 Index custody spans all of prepush's checks: after the clean-tree refusal,
 `prepush-admission` requires raw/index identity for every tracked regular file,
 and `prepush-post-check` at the end requires Git state unchanged. The post-check
-also runs after a failed step, whose status stays the hook's; a signal skips it.
-Other checks keep their order, and other platforms run the host leaves. Bypass
-with `SKIP_PRE_PUSH=1 git push` for WIP.
+also runs after a failed step, whose status stays the hook's when the post-check
+passes; a signal skips it. Editing a tracked or nonignored file while the push
+runs therefore fails it. Other checks keep their order, and other platforms run
+the host leaves. Bypass with `SKIP_PRE_PUSH=1 git push` for WIP.
 
 Run `dev static tsc` for the single-command TypeScript workflow, including after
 `cd` to another worktree in an existing devShell. On the host it first runs
@@ -1053,7 +1054,7 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 | `dev check-no-test`   | the host check groups (below) in Fix mode + auxiliary host tests                                                                                                                                                            | auto-fixes    |
 | `dev check`           | adds `test-local`, Nix `wasm-tests` and `doctests`/`doctests-gate`                                                                                                                                                          | auto-fixes    |
 | `dev precommit`       | Git/index custody selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                                                             | auto-fixes    |
-| `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux takes the shared formatting, `tsc` and Elisp verdicts in place of their host leaves                          | never mutates |
+| `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux takes shared Rust-format, Markdown, `tsc` and Elisp verdicts in place of their host leaves                   | never mutates |
 | `dev validate-no-e2e` | clean tree; Verify host/static, the platform contract, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
 | `dev validate`        | adds six Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                                                      | never mutates |
 

@@ -65,12 +65,13 @@ Index custody covers the whole of pre-push's checks, not one docs request:
   file's raw worktree bytes to equal its index blob. Symlinks and gitlinks are
   not hashed.
 - At the end, one post-check requires Git state to be unchanged.
-- The post-check also runs after a failed step, and that step's status is the
-  gate's.
+- The post-check also runs after a failed step. When it passes, that step's
+  status is the gate's; when it fails too, the gate refuses and names both.
 - A signal skips the post-check.
 
-The Markdown pre-commit route uses the same whole-tree identity. The hand-kept
-list of `static-docs` inputs is gone.
+The Markdown pre-commit route uses the same whole-tree identity and the same
+custody, so a failed `static-docs` request there now exits with its own status
+rather than 1. The hand-kept list of `static-docs` inputs is gone.
 
 ## Consequences
 
@@ -81,5 +82,10 @@ list of `static-docs` inputs is gone.
   CI's host lane still runs them.
 - A raw/index mismatch on any tracked file, not only Markdown, now refuses
   pre-push and the Markdown pre-commit route.
+- Custody now spans the whole push, about ten minutes, not one docs request.
+  Editing a tracked or nonignored file while a push runs fails the push.
 - The issue's "re-push under a minute" target is not met, by decision: host
   `nextest`, Clippy and source contracts still run on every push.
+- This amends the #1117 and #1863 supplements of
+  [ADR-0029](../0029-git-enforced-verify-gate.md). Current state:
+  `docs/ARCHITECTURE.md` §The verify ladder & git-enforced gate.

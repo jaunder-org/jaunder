@@ -68,7 +68,7 @@ _workflow(
     "prepush",
     gates.prepush,
     "Clean tree; the host check groups in Verify mode (on x86_64-linux with "
-    "shared Nix verdicts for formatting, tsc and Elisp), the auxiliary host "
+    "shared Nix verdicts for Rust format, Markdown, tsc and Elisp), the auxiliary host "
     "tests, test-local and the doctests producer and gate.",
 )
 _workflow(

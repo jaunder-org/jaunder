@@ -539,7 +539,7 @@ def test_prepush_keeps_the_request_failure_when_the_post_check_query_fails(
     text = stderr(result)
     assert "error: original request failure\n" in text
     assert (
-        "[FAIL] prepush — the checks exited 19\n"
+        "[FAIL] prepush — a step exited 19\n"
         "prepush-state: git status --porcelain=v1 -z failed: " in text
     )
     assert "prepush-state: unchanged" not in text
@@ -582,7 +582,7 @@ def test_a_failed_request_cannot_hide_a_mutation_or_restage_it(
     result = repo.dev("prepush")
     assert result.returncode == 1
     assert stderr(result).endswith(
-        "[FAIL] prepush — the checks exited 19\n"
+        "[FAIL] prepush — a step exited 19\n"
         "prepush-state: tracked, staged, or nonignored untracked Git "
         "state changed during prepush\n"
     )

@@ -2,9 +2,9 @@
 
 ADR-0029: the precommit snapshots the dirty tree, runs the host checks its
 class selects, and then re-stages only provably safe formatter/check fixes,
-also after a failed check. A Markdown-only change, and the whole of prepush's
-checks, request shared Nix verdicts between an admission and a mandatory
-post-check. A signal is the one exception: a check or request killed by signal
+also after a failed check. A Markdown-only change requests the shared
+`static-docs` verdict, and prepush runs all of its checks, some of them shared
+Nix verdicts, between an admission and a mandatory post-check. A signal is the one exception: a check or request killed by signal
 n, or a termination request to `dev`, skips the reconciliation and the
 post-check, and `dev` exits 128+n.
 
@@ -445,8 +445,9 @@ def custody(
 
     The Git flake reads worktree bytes: the admission proves they are the
     index's, and the post-check that no Git state changed while `body` ran. The
-    post-check runs even when `body` fails. If it passes, `body`'s failure is
-    raised unchanged; if it fails too, the refusal names both. A step killed by
+    post-check runs even after a failed step in `body`. If it passes, that
+    failure is raised unchanged; if it fails too, the refusal names both. A
+    step killed by
     a signal, or a termination request to `dev`, skips the post-check: the gate
     stops at once and exits 128+n.
     """
@@ -468,7 +469,7 @@ def custody(
     except Refused as refused:
         post = f"{name}-state: {refused}"
         if failed is not None:
-            post = f"the checks exited {failed.code}\n{post}"
+            post = f"a step exited {failed.code}\n{post}"
         raise Refused(post) from refused
     print(f"{name}-state: unchanged", file=sys.stderr, flush=True)
     if failed is not None:
