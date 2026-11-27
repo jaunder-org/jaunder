@@ -105,9 +105,16 @@ def test_probe_uses_exact_objects_and_interprets_exit_status(monkeypatch, tmp_pa
     assert calls == [arguments]
 
 
-def test_no_promoted_drafts_cites_nothing_without_running_git(monkeypatch, tmp_path):
-    monkeypatch.setattr(git, "process", lambda *args: pytest.fail("unexpected git grep"))
+def test_no_promoted_drafts_or_unmoved_main_short_circuit_without_running_git(monkeypatch, tmp_path):
+    monkeypatch.setattr(git, "process", lambda *args: pytest.fail("unexpected git"))
     assert git.tree_contains(tmp_path, "tree", []) is False
+    assert git.strict_ancestor(tmp_path, "main", "main") is False
+
+
+def test_clean_merge_without_a_tree_is_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(git, "process", lambda repo, *args: subprocess.CompletedProcess(args, 0, b"\n", b""))
+    with pytest.raises(RuntimeError, match="no tree"):
+        git.merged_tree(tmp_path, "main", "head")
 
 
 def test_deleted_drafts_exclude_rename_destinations(monkeypatch, tmp_path):

@@ -8,7 +8,7 @@ from github import GithubException
 from requests import RequestException
 
 from . import git, github
-from .promotion import DRAFTS, promote
+from .promotion import DRAFTS, citation, promote
 
 
 BRANCH = "automation/adr-promoter"
@@ -163,9 +163,8 @@ def _stale(repo, head):
     tree = git.merged_tree(repo, main, head)
     if tree is None:
         return True
-    slugs = [PurePosixPath(path).name.removesuffix(".md")
-             for path in git.deleted_paths(repo, parent, head, DRAFTS + "/")]
-    return git.tree_contains(repo, tree, [f"drafts/{slug}" for slug in slugs])
+    deleted = git.deleted_paths(repo, parent, head, DRAFTS + "/")
+    return git.tree_contains(repo, tree, [citation(PurePosixPath(path).stem) for path in deleted])
 
 
 def _existing_or_retire(repo, api):

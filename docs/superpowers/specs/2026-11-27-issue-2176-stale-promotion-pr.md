@@ -33,7 +33,7 @@ armed/queued and failed-check returns:
 3. List the drafts the head deletes:
    `git diff --no-renames --diff-filter=D --name-only -z parent head -- docs/adr/drafts/`.
    - No deleted drafts: **not stale**.
-   - Otherwise run `git grep -l --fixed-strings -e drafts/<slug> … <tree>`: exit
+   - Otherwise run `git grep -q --fixed-strings -e drafts/<slug> … <tree>`: exit
      0 is **stale**, exit 1 is not stale, any other exit is an error.
 
 A stale PR goes through the existing retirement path: lease-delete the exact

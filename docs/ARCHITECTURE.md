@@ -6140,15 +6140,15 @@ unverified writes exit nonzero.
 Tests cover project-owned evidence selection, correlation, refusal/outcome and
 postcondition policy, expected-head/retry arguments, complete original-byte
 outputs, staging and admission. The three Marko exclusions remain covered in
-whole-promotion output. Git boundary tests exercise our lease/conflict argv,
-exit interpretation and policy with supplied results; one selected-package smoke
-uses temporary Git for runtime integration, not bootstrap. Remove all tests
-redundant with consumed-library testing, even behind our adapters. Trust
-PyGithub, Marko, Git and standard-library mechanics; do not test parser/AST
-recognition, HTTP, SDK or pagination engines, provider/library or unconsumed
-field/error matrices, or add a fake route framework. Normal locked realization
-retains configured substitutes; it does not guarantee cold source bootstrap or
-hide realization failures.
+whole-promotion output. Git boundary tests exercise our lease and
+staleness-probe argv, exit interpretation and policy with supplied results; one
+selected-package smoke uses temporary Git for runtime integration, not
+bootstrap. Remove all tests redundant with consumed-library testing, even behind
+our adapters. Trust PyGithub, Marko, Git and standard-library mechanics; do not
+test parser/AST recognition, HTTP, SDK or pagination engines, provider/library
+or unconsumed field/error matrices, or add a fake route framework. Normal locked
+realization retains configured substitutes; it does not guarantee cold source
+bootstrap or hide realization failures.
 
 This branch is not delivered to or observed on trusted `main`; the numberless
 [Python ADR promoter draft](adr/0242-adr-promoter-host-tool-extraction.md)

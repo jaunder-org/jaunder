@@ -212,6 +212,11 @@ def _dead_links(repo, relative):
     return dead
 
 
+def citation(slug: str) -> str:
+    """The literal path stem promotion rewrites wherever a draft is cited."""
+    return f"drafts/{slug}"
+
+
 def promote(repo: Path) -> str:
     """Admit the complete set before moving; subsequent I/O is not transactional."""
     slugs = sorted(
@@ -254,7 +259,7 @@ def promote(repo: Path) -> str:
         git.run(repo, "add", "--", new)
         summaries.append(f"{old} -> {new}" + (" (status: proposed -> accepted)" if accepted else ""))
     for slug, number, _, _, _ in assigned:
-        old_stem, new_stem = f"drafts/{slug}", f"{number:04}-{slug}"
+        old_stem, new_stem = citation(slug), f"{number:04}-{slug}"
         matching = git.paths(
             repo, "grep", "-l", "-z", "--fixed-strings", "--", old_stem, allowed=(0, 1)
         )
