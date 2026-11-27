@@ -1,6 +1,6 @@
-"""`dev coverage` and `dev doctests`: real Git admission, then fail-fast steps.
+"""`dev coverage` and `dev doctests`: real Git admission and their verdicts.
 
-Their full success populations are in test_gates.
+Their full success populations, and the runner's fail-fast, are in test_gates.
 """
 
 import json
@@ -32,22 +32,6 @@ STEPS = {
         f"{NIX_BUILD} --print-out-paths --no-link .#checks.x86_64-linux.doctests-gate",
     ],
 }
-
-
-@pytest.mark.parametrize(
-    ("workflow_name", "failing"),
-    [(name, index) for name, lines in STEPS.items() for index in range(len(lines))],
-)
-def test_workflows_stop_at_each_failing_boundary(
-    workflow: Workflow, workflow_name: str, failing: int
-) -> None:
-    lines = STEPS[workflow_name]
-    result = workflow.dev(workflow_name, failure=lines[failing])
-    assert result.returncode == 17
-    assert workflow.commands() == [
-        CLEAN,
-        *(line.split(" ") for line in lines[: failing + 1]),
-    ]
 
 
 @pytest.mark.parametrize(("check", "build"), [("coverage", 1), ("coverage-gate", 3)])

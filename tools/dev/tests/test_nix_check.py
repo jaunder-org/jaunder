@@ -244,7 +244,7 @@ def test_a_failed_fetch_query_records_no_fetched_bytes_and_changes_nothing_else(
 NIX_CHECK = (
     "from pathlib import Path; from dev import steps; "
     'sys.exit(steps.gate(Path.cwd(), "dev nix-check", '
-    'lambda: steps.nix_check("demo")))'
+    'lambda: (lambda: steps.nix_check("demo"),)))'
 )
 
 
@@ -303,7 +303,7 @@ def build(
     gate = (
         "from pathlib import Path; from dev import steps; "
         'sys.exit(steps.gate(Path.cwd(), "dev demo", '
-        f"lambda: print(steps.nix_build({call}))))"
+        f"lambda: (lambda: print(steps.nix_build({call})),)))"
     )
     return checkout.run(launch(gate), checkout.environment(**extra))
 
@@ -399,7 +399,7 @@ def realizing(
     gate = (
         "from pathlib import Path; from dev import steps; "
         'sys.exit(steps.gate(Path.cwd(), "dev demo", '
-        'lambda: steps.run("producer", ["builder"], realizes=lambda: "build-out")))'
+        'lambda: (lambda: steps.run("producer", ["builder"], realizes=lambda: "build-out"),)))'
     )
     return checkout.run(launch(gate), checkout.environment(**extra))
 

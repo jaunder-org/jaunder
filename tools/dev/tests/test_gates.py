@@ -6,11 +6,14 @@ not derived from `dev`'s own tables.
 
 import platform
 import re
+from functools import partial
+from pathlib import Path
 
 import pytest
 from conftest import REAL_GIT, REPOSITORY, Workflow, launch, require, write_bundle
 
-from dev import static
+from dev import static, steps
+from dev.trace import TRACE_DIR
 
 PREPUSH_SHARES = (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
@@ -98,7 +101,7 @@ def build(package: str) -> Commands:
     return nix_build(f".#{package}", "--no-link")
 
 
-# Built once per process, before the first of its binaries runs.
+# Built once per gate run, before the first of its binaries runs.
 POLICY_BUILD = build("repository-policy")
 HOST_TOOL_BUILD = build("host-tool")
 COVERAGE_CHECK_BUILD = build("coverage-check")
@@ -544,33 +547,43 @@ def test_dirty_fix_check_reaches_its_doctests_without_admission(
     assert CLEAN[0] not in workflow.commands()
 
 
-# One failing step for each way a gate runs a step, each with later steps for
-# the failure to stop. Every kind raises through one path per runner, which
-# `steps.gate` turns into the exit status; precommit's combined failures are
-# in test_index.py, with its index custody.
-STEP_FAILURES = {
-    "run": ("check", host_tests()[-1]),
-    "rendered-report": ("validate", COVERAGE[-1]),
-    "nix-check": ("ci-validate-hermetic", nix("rust-format")[-1]),
-    "static-preparation": ("validate-no-e2e", tsc_and_cargo_deny()[0]),
-    # nextest-build, while test-local holds its lock; nextest must not run.
-    "under-test-local-lock": ("check", TEST_LOCAL[-2]),
-}
-
-
+# Fail-fast is the runner's alone: no gate runs a step itself
+# (`steps.execute`), so this one test stands for every gate. The population
+# tests above pin each gate's steps and their order.
 @pytest.mark.parametrize(
-    ("gate", "argv"), STEP_FAILURES.values(), ids=STEP_FAILURES.keys()
+    ("code", "signalled"), [(17, False), (143, True)], ids=["failed", "signalled"]
 )
-def test_a_step_failure_is_its_status_and_stops_subsequent_work(
-    workflow: Workflow, gate: str, argv: list[str]
+def test_the_runner_stops_at_the_first_failed_step_and_exits_with_its_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, code: int, signalled: bool
 ) -> None:
-    success = GATES[gate]
-    index = success.index(argv)
-    assert index < len(success) - 1, "the failure must have later steps to stop"
-    result = workflow.dev(gate, failure=" ".join(argv))
-    assert result.returncode == 17, result
-    assert workflow.commands() == success[: index + 1]
-    assert result.stderr.endswith(f"{argv[0]} failed\n".encode())
+    monkeypatch.delenv(TRACE_DIR, raising=False)
+    ran: list[str] = []
+
+    def step(name: str, failure: steps.StepFailed | None = None) -> steps.Step:
+        def run() -> None:
+            ran.append(name)
+            if failure is not None:
+                raise failure
+
+        return run
+
+    declaration = (
+        step("first"),
+        step("failing", steps.StepFailed(code, signalled)),
+        step("later"),
+    )
+    assert steps.gate(tmp_path, "dev demo", lambda: declaration) == code
+    assert ran == ["first", "failing"]
+
+
+def test_the_runner_runs_every_step_of_a_passing_declaration_in_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv(TRACE_DIR, raising=False)
+    ran: list[int] = []
+    declaration = tuple(partial(ran.append, number) for number in range(3))
+    assert steps.gate(tmp_path, "dev demo", lambda: declaration) == 0
+    assert ran == [0, 1, 2]
 
 
 def test_a_failing_gate_records_the_failed_step_and_status(
@@ -664,9 +677,9 @@ from dev import gates, steps
 from dev.commands import SOURCE_CONTRACT, repository_policy
 def body():
     print(steps.tool(SOURCE_CONTRACT))
-    gates.host_tests()
+    steps.execute(gates.host_tests())
     print(steps.tool(repository_policy("repository-docs")))
-sys.exit(steps.gate(Path.cwd(), "dev demo", body))
+sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (body,)))
 """
 
 
@@ -712,18 +725,20 @@ def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> N
 def test_prepush_runs_the_host_leaves_without_custody_off_x86_64_linux(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dev import gates, index, static, steps
+    from dev import gates, index, static
 
     ran: list[str] = []
     monkeypatch.setattr(index, "shares_verdicts", lambda: False)
     monkeypatch.setattr(index, "prepush", lambda _checks: pytest.fail("custody"))
     monkeypatch.setattr(gates, "clean_tree", lambda: ran.append("clean-tree"))
-    monkeypatch.setattr(gates, "test_local", lambda: ran.append("test-local"))
+    monkeypatch.setattr(
+        gates, "test_local", lambda: (partial(ran.append, "test-local"),)
+    )
     monkeypatch.setattr(static, "run", lambda name, _mode: ran.append(name))
     monkeypatch.setattr(steps, "tool", lambda name: [name])
     monkeypatch.setattr(steps, "run", lambda name, *_, **__: ran.append(name))
     monkeypatch.setattr(steps, "nix_check", lambda name, *_, **__: ran.append(name))
-    gates.prepush()
+    steps.execute(gates.prepush())
     assert ran[0] == "clean-tree"
     covered = [name for leaves in gates.SHARED_VERDICTS.values() for name in leaves]
     assert set(covered) <= set(ran)

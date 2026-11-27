@@ -635,7 +635,7 @@ def body():
     with steps.phase("check"):
         {failure}
     steps.run("never", ["true"])
-sys.exit(steps.gate(Path.cwd(), "dev demo", body))
+sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (body,)))
 """
 
 
@@ -667,7 +667,7 @@ def test_a_failed_phase_gives_the_gate_its_reason(
 def test_a_refusal_outside_any_step_still_gives_its_reason(checkout: Checkout) -> None:
     script = launch(
         "from pathlib import Path\nfrom dev import steps\n"
-        'sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: steps.refuse("no")))'
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (lambda: steps.refuse("no"),)))'
     )
     assert checkout.run(script, checkout.environment()).returncode == 1
     gate = checkout.merged()["dev demo"]["args"]
@@ -683,7 +683,7 @@ def test_a_failure_the_caller_judged_is_not_the_gate_s_failure(
         "def body():\n"
         '    steps.captured("probe", ["false"])\n'
         '    steps.refuse("the real reason")\n'
-        'sys.exit(steps.gate(Path.cwd(), "dev demo", body))'
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (body,)))'
     )
     assert checkout.run(script, checkout.environment()).returncode == 1
     merged = checkout.merged()
