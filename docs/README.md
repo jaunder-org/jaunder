@@ -302,6 +302,10 @@ convention). See the Status column below for each ADR's current status.
 | [0272](adr/0272-e2e-duration-pressure-is-a-signal.md)                    | E2E duration pressure is a reported signal; only a timeout fails                                             | accepted   |
 | [0273](adr/0273-prepush-takes-shared-static-verdicts.md)                 | Pre-push takes reusable static verdicts from Nix                                                             | accepted   |
 | [0274](adr/0274-keep-dev-runs-at-worktree-removal.md)                    | Keep dev runs at worktree removal                                                                            | accepted   |
+| [0275](adr/0275-cargo-deny-checks-every-workspace.md)                    | cargo-deny checks every Cargo workspace                                                                      | accepted   |
+| [0276](adr/0276-ci-checks-advisories-on-dependency-change.md)            | CI checks advisories only on a dependency change, plus a daily scan                                          | accepted   |
+| [0277](adr/0277-ci-hermetic-verdicts-not-repeated-on-host.md)            | CI does not repeat hermetic verdicts in the host lane                                                        | accepted   |
+| [0278](adr/0278-dev-steps-label-their-kache-events.md)                   | Compiling dev steps label their kache events and record its counts                                           | accepted   |
 
 <!-- adr-table:end -->
 
