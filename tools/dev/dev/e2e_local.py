@@ -8,6 +8,7 @@ output goes to stderr.
 """
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -17,12 +18,13 @@ import socket
 import sys
 import tempfile
 import time
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from http.client import HTTPException
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import urllib.request
 
 from dev import checkout, report, steps, supervision, trace, traces
 from dev.commands import ADMIT_INPUTS
@@ -489,12 +491,21 @@ def _start_collector(source: Path) -> _Collector:
         )
 
 
-_OPENER = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+@functools.cache
+def _opener() -> urllib.request.OpenerDirector:
+    """Built on first use: building it creates a TLS context, which every
+    other `dev` command would otherwise pay for at import."""
+    import urllib.request
+
+    return urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
 
 def _responds(url: str) -> bool:
+    # Imported here with the opener, for the same reason.
+    from http.client import HTTPException
+
     try:
-        with _OPENER.open(f"{url}/", timeout=2):
+        with _opener().open(f"{url}/", timeout=2):
             return True
     except OSError, HTTPException:
         return False

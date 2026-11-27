@@ -465,48 +465,33 @@ def test_dirty_fix_check_reaches_its_doctests_without_admission(
     assert CLEAN[0] not in workflow.commands()
 
 
-# Every gate and lane whose failures the hooks and CI depend on.
-# Precommit's are in test_index.py, with its index custody.
-FAIL_FAST = [
-    "check",
-    "prepush",
-    "validate",
-    "ci-validate-host",
-    "ci-validate-docs",
-    "ci-validate-hermetic",
-    "ci-validate-test-checks",
-    "coverage",
-]
+# One failing step for each way a gate runs a step, each with later steps for
+# the failure to stop. Every kind raises through one path per runner, which
+# `steps.gate` turns into the exit status; precommit's combined failures are
+# in test_index.py, with its index custody.
+STEP_FAILURES = {
+    "run": ("check", host_tests()[-1]),
+    "rendered-report": ("validate", COVERAGE[-1]),
+    "nix-check": ("ci-validate-hermetic", nix("rust-format")[-1]),
+    "static-preparation": ("ci-validate-host", tsc_and_cargo_deny()[0]),
+    # nextest-build, while test-local holds its lock; nextest must not run.
+    "under-test-local-lock": ("check", TEST_LOCAL[-2]),
+}
 
 
-def test_every_step_failure_is_its_status_and_stops_subsequent_work(
-    workflow: Workflow,
+@pytest.mark.parametrize(
+    ("gate", "argv"), STEP_FAILURES.values(), ids=STEP_FAILURES.keys()
+)
+def test_a_step_failure_is_its_status_and_stops_subsequent_work(
+    workflow: Workflow, gate: str, argv: list[str]
 ) -> None:
-    # Shared steps need one fault injection, plus each gate's first and final
-    # steps; repeating the whole host surface per gate adds nothing.
-    tested: set[tuple[str, ...]] = set()
-    for gate in FAIL_FAST:
-        success = GATES[gate]
-        custody = gate == "prepush" and PREPUSH_SHARES
-        for index, argv in enumerate(success):
-            if custody and argv in INDEX_QUERIES:
-                # Index custody combines its failures (test_index.py).
-                continue
-            first_time = tuple(argv) not in tested
-            tested.add(tuple(argv))
-            if not first_time and index not in (0, len(success) - 1):
-                continue
-            result = workflow.dev(gate, failure=" ".join(argv))
-            assert result.returncode == 17, (gate, argv, result)
-            # Past the clean-tree refusal, a failure inside custody is still
-            # followed by its post-check.
-            post = custody and index >= len(CLEAN)
-            expected = [*success[: index + 1], *(INDEX_QUERIES if post else [])]
-            assert workflow.commands() == expected, (gate, argv)
-            tail = f"{argv[0]} failed\n" + (
-                "prepush-state: unchanged\n" if post else ""
-            )
-            assert result.stderr.endswith(tail.encode())
+    success = GATES[gate]
+    index = success.index(argv)
+    assert index < len(success) - 1, "the failure must have later steps to stop"
+    result = workflow.dev(gate, failure=" ".join(argv))
+    assert result.returncode == 17, result
+    assert workflow.commands() == success[: index + 1]
+    assert result.stderr.endswith(f"{argv[0]} failed\n".encode())
 
 
 def test_a_failing_gate_records_the_failed_step_and_status(
