@@ -1334,7 +1334,7 @@ adds its producer's stages (below), both as
 phase, the `e2e-producer` step also adds its lifted capture's test tree: each
 test's spans and the server requests under them. The tree is written whole, and
 only when its top-level spans fit inside that phase
-([e2e capture spans](docs/adr/drafts/dev-trace-shows-e2e-capture-spans.md)). A
+([e2e capture spans](docs/adr/0271-dev-trace-shows-e2e-capture-spans.md)). A
 capture span carries `otel.status_code` instead of `jaunder.status`. A step span
 records:
 

@@ -298,6 +298,7 @@ convention). See the Status column below for each ADR's current status.
 | [0268](adr/0268-narrow-repository-policy.md)                             | Narrow repository-policy to source contracts and documentation checks                                        | accepted   |
 | [0269](adr/0269-per-worker-e2e-server-instances.md)                      | Every Playwright worker owns its own E2E server instance                                                     | accepted   |
 | [0270](adr/0270-perf-data-python-reads-validated-data.md)                | Performance host work is Python that reads already-validated data                                            | accepted   |
+| [0271](adr/0271-dev-trace-shows-e2e-capture-spans.md)                    | Dev traces show an e2e lane's capture spans                                                                  | accepted   |
 
 <!-- adr-table:end -->
 

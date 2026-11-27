@@ -1,20 +1,19 @@
-# ADR-DRAFT: Dev traces show an e2e lane's capture spans
+# ADR-0271: Dev traces show an e2e lane's capture spans
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2115](https://github.com/jaunder-org/jaunder/issues/2115)
 
 ## Context
 
-[ADR-0263](../0263-dev-traces-producer-timed-phases.md) let a `dev` step write
+[ADR-0263](0263-dev-traces-producer-timed-phases.md) let a `dev` step write
 after-the-fact child spans for the phases its sandboxed producer timed itself.
 In doing so it amended the "attributes only" rule of
-[ADR-0254](../0254-dev-trace-step-accounting.md). An e2e lane's `e2e-producer`
-step therefore shows the lane's VM phases, `gate-execution` among them. The rest
-of the picture sat in the lane's lifted OTLP capture
-(`capture/otel-traces.jsonl`) and was not on the `dev` timeline. That part is
-each test's `e2e.*` spans and the server `request`, server and storage spans
-under them.
+[ADR-0254](0254-dev-trace-step-accounting.md). An e2e lane's `e2e-producer` step
+therefore shows the lane's VM phases, `gate-execution` among them. The rest of
+the picture sat in the lane's lifted OTLP capture (`capture/otel-traces.jsonl`)
+and was not on the `dev` timeline. That part is each test's `e2e.*` spans and
+the server `request`, server and storage spans under them.
 
 One measured CI lane (`sqlite-chromium-2-of-3`, run 45888881602) held 23.5k
 capture spans:

@@ -446,7 +446,7 @@ The tree is written whole or not at all. It is left out, with one `dev:`
 warning, when one of its top-level spans falls outside `gate-execution`, since
 the capture runs on the guest's clock, or when the capture is unreadable. It is
 left out silently when this run wrote no `gate-execution` or the lane lifted no
-capture ([e2e capture spans](adr/drafts/dev-trace-shows-e2e-capture-spans.md)).
+capture ([e2e capture spans](adr/0271-dev-trace-shows-e2e-capture-spans.md)).
 
 The `coverage` step's `build` child likewise has, as children, the stages its
 producer timed (#2031): `workspace-resolution` through `crap-report`, read from
