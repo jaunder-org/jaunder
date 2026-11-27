@@ -7,6 +7,8 @@ from pathlib import Path
 import pytest
 from conftest import Checkout, launch
 
+from dev import steps
+
 # The fake check announces readiness, then waits to be signalled or released.
 WAIT = """\
 def note(text):
@@ -136,6 +138,45 @@ def test_a_signal_while_no_step_runs_closes_the_gate_as_signalled(
         assert slices[name]["args"]["process.exit.code"] == 128 + sent
     for child in ("eval", "build"):
         assert slices[child]["args"]["jaunder.status"] == "ok"
+
+
+def test_a_nix_build_that_exits_1_after_a_signal_is_not_retried(
+    checkout: Checkout,
+) -> None:
+    # Nix answers an interruption by exiting 1, as it does when no builder
+    # failed; that exit is the request's, not a reason to build again.
+    exit_1 = (
+        "def leave(signum, _frame):\n"
+        "    note(signal.Signals(signum).name)\n"
+        "    sys.exit(1)\n"
+        "signal.signal(signal.SIGTERM, leave)\n"
+    )
+    checkout.tool(
+        "nix",
+        'if "--derivation" in sys.argv:\n'
+        '    print("/nix/store/0000-demo.drv")\n'
+        "    sys.exit()\n" + WAIT.format(handlers=exit_1),
+    )
+    dev = checkout.popen("nix-check", "demo")
+    wait_for(checkout.root / "ready")
+    dev.send_signal(signal.SIGTERM)
+    _, stderr = dev.communicate(timeout=30)
+
+    assert signals(checkout) == "SIGTERM\n"
+    assert dev.returncode == 1
+    assert b"running it once more" not in stderr
+    assert checkout.order().count("nix build") == 1
+
+
+def test_an_interrupt_while_a_child_runs_is_remembered() -> None:
+    # A terminal's SIGINT reaches Nix directly, and Nix then exits 1: `dev`,
+    # which does not forward it, still has to know not to build again.
+    state = steps._Signals()
+    state.supervising = True
+    state.handle(signal.SIGINT, None)
+
+    assert state.received == [signal.SIGINT]
+    assert state.forwarded == []
 
 
 def test_a_child_killed_by_a_signal_exits_128_plus_n(checkout: Checkout) -> None:

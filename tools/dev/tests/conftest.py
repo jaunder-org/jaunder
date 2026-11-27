@@ -518,7 +518,12 @@ else:
     if env("NIX_TWO_OUTPUTS"):
         print("build-out-dev")
     print("build-err", file=sys.stderr)
-    code = int(env("NIX_BUILD_CODE", "0"))
+    # A comma-separated status per build attempt; the last one repeats.
+    attempt = len(pathlib.Path("attempts").read_text()) if os.path.exists("attempts") else 0
+    with open("attempts", "a") as attempts:
+        attempts.write(".")
+    codes = env("NIX_BUILD_CODE", "0").split(",")
+    code = int(codes[min(attempt, len(codes) - 1)])
     if code == 0 and not env("NIX_LOST"):
         registered = LONG_AGO if os.path.exists("built") else FUTURE
         with open("built", "w") as store:

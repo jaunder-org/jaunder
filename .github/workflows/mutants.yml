@@ -220,6 +220,9 @@ jobs:
           restore-keys: |
             mutants-v1-${{ matrix.package }}-${{ matrix.shards }}-${{ matrix.shard }}-
 
+      - name: Enter the mutants shell
+        run: scripts/nix-retry develop .#mutants --accept-flake-config -c true
+
       - name: Run mutants
         env:
           # A hosted runner has ~4 cores. Two parallel jobs each running a

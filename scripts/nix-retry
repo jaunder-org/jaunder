@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# Runs `nix "$@"`, and once more if it exits 1. Nix exits 100 to 104 when a
+# builder failed and 1 when none did. A substitute download that failed is one
+# such failure (#2135, NixOS/nix#16722), and its second attempt starts the
+# download afresh. `dev`'s own Nix builds retry the same way.
+set -uo pipefail
+# Nix exits 1 when interrupted too: an interrupt ends this, not a retry.
+trap 'exit 130' INT
+status=0
+nix "$@" || status=$?
+if ((status == 1)); then
+  echo "nix-retry: nix exited 1 without a builder failing, as when a substitute download fails; running it once more" >&2
+  status=0
+  nix "$@" || status=$?
+fi
+exit "$status"

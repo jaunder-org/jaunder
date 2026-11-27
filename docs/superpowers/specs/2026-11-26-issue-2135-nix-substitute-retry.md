@@ -38,10 +38,10 @@ and not merged.
 
 The six example jobs failed in two places:
 
-| Where the failure happened             | Jobs                                                   | The derivation that stopped     |
-| -------------------------------------- | ------------------------------------------------------ | ------------------------------- |
-| `nix develop` entering the dev shell   | 132077987962, 133042027609, 135941369307, 137822809833 | `nix-shell-env`                 |
-| `dev`'s `nix build` inside an e2e lane | 135959112730, 139367553983                             | `nixos-vm`, `vendor-cargo-deps` |
+| Where the failure happened           | Jobs                                                   | The derivation that stopped     |
+| ------------------------------------ | ------------------------------------------------------ | ------------------------------- |
+| `nix develop` entering the dev shell | 132077987962, 133042027609, 135941369307, 137822809833 | `nix-shell-env`                 |
+| the e2e producer's `nix build`       | 135959112730, 139367553983                             | `nixos-vm`, `vendor-cargo-deps` |
 
 ## Approach and tradeoffs
 
@@ -57,35 +57,33 @@ from offset zero. Paths that downloaded the first time are already in the store,
 and an out-link is written only on success, so running the command again is
 harmless.
 
-The rule applies in two places:
+The rule is written twice: in `dev`'s Python, and as the bash script
+`scripts/nix-retry`, which takes `nix`'s arguments. It applies in these places:
 
-1. **`dev`'s `nix build`.** Every Nix build `dev` runs goes through one
-   function, `nix_build`. When its `build` step fails with status 1 and wasn't
-   interrupted by a signal, `nix_build` runs it once more. Nix's stdout and
-   stderr are handled exactly as they are now, for interactive and CI runs
-   alike. Details:
-   - Both attempts stay inside the one `build` trace span, which gains a
-     `retried` attribute.
+1. **`dev`'s `nix build`.** Most Nix builds `dev` runs go through one function,
+   `nix_build`. When its `build` step fails with status 1, and no signal arrived
+   while it ran, `nix_build` runs it once more. SIGINT counts as a signal,
+   because a terminal's Ctrl-C reaches Nix directly and Nix then exits 1. Nix's
+   stdout and stderr are handled exactly as they are now. Details:
+   - Both attempts stay inside the one `build` trace span, which records
+     `jaunder.nix.retried`.
    - The start time used for cache attribution is taken before the first
      attempt.
    - The `eval` step is out of scope, since none of the failures were there.
-   - Before retrying, `dev` says that Nix failed without a build failure and
-     that it is retrying once.
-2. **Workflow steps outside `dev`.** A new composite action,
-   `.github/actions/nix-retry`, takes Nix arguments and runs `nix <args>`. If
-   that exits 1, it prints a warning and runs it once more. It is a few lines of
-   bash. Each job uses it in two ways:
-   - **To enter its dev shell.** The job runs
-     `develop .#<shell> --accept-flake-config -c true` through the action, just
-     before its first `nix develop` step. That keeps the storage and resource
-     baselines measured before heavy work. Every job in `ci.yml`, `mutants.yml`
-     and `upgrade.yml` enters exactly one shell (`ci`, `ci-nix` or `mutants`).
-     `nix develop` realises the same environment whatever its `-c` command is,
-     and nothing collects garbage in between, so later steps find the shell
-     already in the store.
-   - **For direct builds.** The test-checks job's two direct `nix build` steps,
-     `.#ux-sandbox` and `.#emacsPackages.x86_64-linux.jaunder`, run through the
-     action instead of calling `nix` themselves.
+   - Before retrying, `dev` says that Nix exited 1 without a builder failing and
+     that it is running the build once more.
+2. **The e2e producer's build.** `scripts/e2e-workflow` runs `nix build` through
+   `scripts/nix-retry`. This is where both e2e failures happened. The script
+   exits 130 on an interrupt instead of retrying.
+3. **Workflow steps.** Each job runs
+   `scripts/nix-retry develop .#<shell> --accept-flake-config -c true` just
+   before its first `nix develop` step. That keeps the storage and resource
+   baselines measured before heavy work. Every job in `ci.yml`, `mutants.yml`
+   and `upgrade.yml` enters exactly one shell (`ci`, `ci-nix` or `mutants`).
+   `nix develop` realises the same environment whatever its `-c` command is, and
+   nothing collects garbage in between, so later steps find the shell already in
+   the store. The test-checks job's two direct `nix build` steps, `.#ux-sandbox`
+   and `.#emacsPackages.x86_64-linux.jaunder`, also run through the script.
 
 Alternatives:
 
@@ -115,13 +113,17 @@ Nix step. We expect that to be rare.
   - A second exit 1 fails the step, and `dev`'s message says it retried.
   - A build that exits 100 isn't retried.
   - A run interrupted by a signal isn't retried.
-- A test runs the `nix-retry` action's command with a fake `nix` and shows three
-  things: exit 1 is retried once, exit 100 isn't, and the action exits with
-  Nix's final status.
+- Tests run `scripts/nix-retry` with a fake `nix` and show four things:
+  - Exit 1 is retried once.
+  - Exit 100 isn't retried.
+  - The script exits with Nix's final status and passes stdout and stderr
+    through.
+  - An interrupt isn't retried.
+- An `e2e-workflow` test shows that a producer build exiting 1 runs once more.
 - A workflow test asserts two things for every job in `ci.yml`, `mutants.yml`
   and `upgrade.yml` that runs `nix develop`. The job must first enter that same
-  shell through `nix-retry`, before its first `nix develop` step. The job must
-  also run no direct `nix build` step outside the action.
+  shell through `scripts/nix-retry`, before its first `nix develop` step. The
+  job must also run no direct `nix build` outside the script.
 - The required CI gates pass.
 - The root cause is posted as a comment on #2135.
 - After the merge, at least 20 merge-queue runs show no lane failures with this
