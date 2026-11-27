@@ -470,17 +470,12 @@ def test_dirty_fix_check_reaches_its_doctests_without_admission(
 # `steps.gate` turns into the exit status; precommit's combined failures are
 # in test_index.py, with its index custody.
 STEP_FAILURES = {
-    "run": ("check", ["pytest", "tools/dev"]),
-    "rendered-report": (
-        "validate",
-        ["coverage-check", "policy", "--out", ".xtask/gcroots/coverage"],
-    ),
+    "run": ("check", host_tests()[-1]),
+    "rendered-report": ("validate", COVERAGE[-1]),
     "nix-check": ("ci-validate-hermetic", nix("rust-format")[-1]),
-    "static-preparation": ("ci-validate-host", ["setup-e2e-node-modules", "", ""]),
-    "under-test-local-lock": (
-        "check",
-        ["cargo", "nextest", "run", "--no-run", "--workspace"],
-    ),
+    "static-preparation": ("ci-validate-host", tsc_and_cargo_deny()[0]),
+    # nextest-build, while test-local holds its lock; nextest must not run.
+    "under-test-local-lock": ("check", TEST_LOCAL[-2]),
 }
 
 
