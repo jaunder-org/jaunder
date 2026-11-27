@@ -168,7 +168,7 @@ def format_command(mode: Mode) -> None:
 @cli.command("compile-checks")
 @mode_argument
 def compile_checks(mode: Mode) -> None:
-    """TypeScript, cargo-deny and the Clippy units."""
+    """TypeScript, the Clippy units, then cargo-deny on both workspaces."""
     _gate(lambda: gates.compile_checks(mode))
 
 

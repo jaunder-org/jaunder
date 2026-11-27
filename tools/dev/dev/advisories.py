@@ -21,7 +21,10 @@ from dev.issues import REPO
 
 LABELS = "security,dependencies,needs-triage"
 # Each Cargo workspace, by name, with the arguments that select it.
-WORKSPACES = {"product": [], "tools": static.TOOLS_MANIFEST}
+WORKSPACES: dict[str, tuple[str, ...]] = {
+    "product": (),
+    "tools": static.TOOLS_MANIFEST,
+}
 
 
 @dataclass(frozen=True)
@@ -184,7 +187,7 @@ def scan() -> None:
         raise steps.StepFailed(failed[0].code, False)
 
 
-def _check(workspace: str, args: list[str]) -> Checked:
+def _check(workspace: str, args: tuple[str, ...]) -> Checked:
     code, _, report = steps.captured(
         f"cargo-deny-advisories-{workspace}",
         ["cargo", "deny", *args, "--format", "json", "check", "advisories"],

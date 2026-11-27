@@ -173,12 +173,8 @@ CARGO_DENY = commands(
 )
 
 
-def tsc_and_cargo_deny() -> Commands:
-    return [*TSC, *commands("cargo deny check")]
-
-
 def compile_checks() -> Commands:
-    return [*tsc_and_cargo_deny(), *commands(*CLIPPY)]
+    return [*TSC, *commands(*CLIPPY), *CARGO_DENY]
 
 
 def elisp_checks() -> Commands:
@@ -211,7 +207,8 @@ SHARED_HOST = [
     *docs_shape(),
     *source_contracts(policy_built=True),
     *shared("static-typescript"),
-    *commands("cargo deny check", *CLIPPY),
+    *commands(*CLIPPY),
+    *CARGO_DENY,
     *shared("static-ert"),
 ]
 

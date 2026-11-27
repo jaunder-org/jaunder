@@ -27,7 +27,7 @@ class Mode(StrEnum):
 PRODUCT_HOME = "JAUNDER_PRODUCT_CARGO_HOME"
 TOOLS_HOME = "JAUNDER_TOOLS_CARGO_HOME"
 # The Cargo arguments that select the tools workspace from the checkout root.
-TOOLS_MANIFEST = ["--manifest-path", "tools/Cargo.toml"]
+TOOLS_MANIFEST = ("--manifest-path", "tools/Cargo.toml")
 
 
 @dataclass(frozen=True)
@@ -298,8 +298,9 @@ ALL = [
     "no-full-reload",
     "byte-compile",
     "tsc",
-    "cargo-deny",
     *CLIPPY,
+    "cargo-deny",
+    "tools-cargo-deny",
     "ert",
 ]
 

@@ -48,5 +48,5 @@ it didn't touch, in either workspace.
 The decision lands with `zip` still at 9.0.4, so that the first scan after it
 files that advisory's issue from Actions. Until `zip` is upgraded, every local
 gate and every dependency-changing pull request fails on RUSTSEC-2026-0548. Both
-cargo-deny checks run last wherever they run, so that failure hides no other
-check's verdict.
+cargo-deny checks run after the other compile checks, and last in the CI host
+lane, so that such a failure hides as few other verdicts as it can.

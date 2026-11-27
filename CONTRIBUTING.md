@@ -1106,7 +1106,7 @@ failure; `mode` is `verify` (the default) or `fix`:
 | `dev format [mode]`         | Rust/tools `cargo fmt`, `leptosfmt`, Prettier Markdown/`end2end`/CSS, Elisp formatting |
 | `dev docs-shape`            | documentation sequence, ADR format and README/view parity, doc links, flow docs        |
 | `dev source-contracts`      | ast-grep rule tests and `no-full-reload`, every repository source-contract policy      |
-| `dev compile-checks [mode]` | `tsc`, `cargo-deny`, the six Clippy units                                              |
+| `dev compile-checks [mode]` | `tsc`, the six Clippy units, then `cargo-deny` and `tools-cargo-deny`                  |
 | `dev elisp-checks [mode]`   | Elisp byte-compilation and ERT                                                         |
 
 `dev source-contract <name>` runs one source-contract policy, such as

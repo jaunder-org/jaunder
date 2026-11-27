@@ -177,24 +177,22 @@ def source_contracts() -> Declaration:
     )
 
 
-def tsc_and_cargo_deny(mode: Mode, shared: bool = False) -> Declaration:
-    return (*leaf("tsc", mode, shared), _static("cargo-deny", mode))
-
-
 def cargo_deny(mode: Mode) -> Declaration:
     """Both Cargo workspaces' dependency policy
     (docs/adr/drafts/cargo-deny-checks-every-workspace.md).
 
-    Each caller runs it last: a newly published advisory is one the change at
-    hand may have no way to fix, so it should hide no other check's verdict.
+    It runs after the other compile checks, and last in the CI host lane: a
+    newly published advisory is one the change at hand may have no way to fix,
+    so it should hide as few other verdicts as it can.
     """
     return (_static("cargo-deny", mode), _static("tools-cargo-deny", mode))
 
 
 def compile_checks(mode: Mode, shared: bool = False) -> Declaration:
     return (
-        *tsc_and_cargo_deny(mode, shared),
+        *leaf("tsc", mode, shared),
         *(_static(name, mode) for name in static.CLIPPY),
+        *cargo_deny(mode),
     )
 
 
