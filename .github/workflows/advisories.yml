@@ -33,6 +33,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Enter the ci shell
+        run: scripts/nix-retry develop .#ci --accept-flake-config -c true
       - name: Scan advisories (via dev)
         env:
           GH_TOKEN: ${{ github.token }}
