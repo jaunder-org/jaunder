@@ -1,6 +1,7 @@
 """The `dev` command line: one subcommand per workflow."""
 
 import dataclasses
+import os
 import re
 from collections.abc import Callable
 from pathlib import Path
@@ -16,6 +17,7 @@ from dev import (
     forwarding,
     gates,
     issues,
+    keep,
     perf,
     pr_watch,
     static,
@@ -562,6 +564,18 @@ def trace_summary(path: Path | None, markdown: bool) -> None:
     except OSError as error:
         raise click.ClickException(f"cannot summarise {path}: {error}") from error
     click.echo(summary.render(summarized, markdown), nl=False)
+
+
+@cli.command("keep-runs")
+def keep_runs() -> None:
+    """Copy this checkout's traces and run summaries to the per-user store."""
+    runs = keep.store(os.environ)
+    try:
+        kept = keep.keep(checkout.root(), runs)
+    except OSError as error:
+        click.echo(f"dev: keep-runs: warning: runs not kept: {error}", err=True)
+        raise SystemExit(1) from error
+    click.echo("no runs to keep" if kept is None else f"kept runs in {kept}")
 
 
 @cli.group("trace-analysis")

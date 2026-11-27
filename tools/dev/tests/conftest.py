@@ -313,7 +313,7 @@ TOOL_PACKAGES = {
 # host tool that reports prints a minimal report with no steps. Fake Git
 # answers index custody's queries (the only Git that honours a hook's
 # overrides) for a clean index, refuses inherited repository overrides
-# anywhere else with 23, answers checkout discovery from the real Git, and
+# anywhere else with 23, answers checkout discovery and the root's HEAD from the real Git, and
 # reports a dirty tree while `dirty-status` exists.
 # An evaluation prints a fake derivation named after the installable's last
 # component, and a check's build prints `$FAKE_STORE/fake-<check>`. A store
@@ -338,7 +338,7 @@ if [ "$name" = git ]; then
         exit 23
     fi
     case "$*" in
-      'rev-parse --show-toplevel') exec "$REAL_GIT" "$@" ;;
+      'rev-parse --show-toplevel'|'rev-parse HEAD --symbolic-full-name HEAD') exec "$REAL_GIT" "$@" ;;
     esac
 fi
 case "$name $*" in
@@ -692,6 +692,7 @@ def isolated_from_the_callers_git(
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
+    monkeypatch.setenv("XDG_STATE_HOME", str(home / ".local" / "state"))
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
 

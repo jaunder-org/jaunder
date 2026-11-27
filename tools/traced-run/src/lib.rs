@@ -297,7 +297,29 @@ pub fn execute(
         stdout: stream_of(&out_path),
         stderr: stream_of(&err_path),
     };
+    // Parked so the summary outlives this terminal: `dev keep-runs` keeps it
+    // when the worktree is removed, while the output bodies stay behind.
+    write_summary(
+        &dir.join(format!("{id}.run.json")),
+        &summary_text(&result),
+        &mut std::io::stderr(),
+    );
     Ok((result, process_code))
+}
+
+/// The summary exactly as `run` prints it.
+fn summary_text(result: &RunResult) -> String {
+    format!("{}\n", serde_json::to_string_pretty(result).unwrap())
+}
+
+/// A failure only warns: the printed summary and exit code stay the verdict.
+fn write_summary(path: &Path, text: &str, stderr: &mut impl Write) {
+    if fs::write(path, text).is_err() {
+        let _ = writeln!(
+            stderr,
+            "traced-run: warning: traced-run.summary_file: ignored failure while parking the summary"
+        );
+    }
 }
 
 /// CLI entry: parse the deliberately small option surface, then run.
@@ -344,7 +366,7 @@ pub fn run(argv: &[String], cwd: Option<PathBuf>, timeout: Option<u64>) -> ! {
     let cwd = cwd.unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
     match execute(argv, &cwd, timeout) {
         Ok((result, code)) => {
-            println!("{}", serde_json::to_string_pretty(&result).unwrap());
+            print!("{}", summary_text(&result));
             std::process::exit(code);
         }
         Err(e) => {
@@ -540,6 +562,28 @@ mod tests {
         assert_eq!(code, 124);
         assert!(Path::new(&r.stdout.path).exists());
         assert!(Path::new(&r.stderr.path).exists());
+    }
+
+    #[test]
+    fn summary_is_parked_beside_the_output() {
+        let fixture = tmp();
+        let cwd = fixture.path();
+        let (r, code) = execute(&["false".into()], cwd, None).unwrap();
+        assert_eq!(code, 1);
+        let parked = Path::new(&r.stdout.path).with_extension("run.json");
+        assert_eq!(fs::read_to_string(parked).unwrap(), summary_text(&r));
+    }
+
+    #[test]
+    fn ancillary_warning_summary_write_failure_leaves_the_result() {
+        let fixture = tmp();
+        let unwritable = fixture.path().join("missing").join("1.run.json");
+        let mut stderr = Vec::new();
+        write_summary(&unwritable, "{}\n", &mut stderr);
+        let warning = String::from_utf8(stderr).unwrap();
+        assert_eq!(warning.matches("traced-run.summary_file").count(), 1);
+        assert_eq!(warning.lines().count(), 1);
+        assert!(!unwritable.exists());
     }
 
     #[test]

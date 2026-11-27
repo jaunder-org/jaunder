@@ -191,6 +191,36 @@ def test_a_merged_report_carries_the_commit_and_time(observer: Observer) -> None
     assert (found["pointer"], found["detail"]) == (MERGE, "2026-07-30T15:00:00Z")
 
 
+def test_the_gate_span_keeps_the_final_report(observer: Observer) -> None:
+    observer.watch("731", "--once", pr=[merged()])
+    gate = observer.checkout.merged()["dev pr-watch"]["args"]
+    assert {key: value for key, value in gate.items() if "jaunder.pr." in key} == {
+        "jaunder.pr.number": "731",
+        "jaunder.pr.head_sha": HEAD,
+        "jaunder.pr.outcome": "merged",
+        "jaunder.pr.pointer": MERGE,
+        "jaunder.pr.detail": "2026-07-30T15:00:00Z",
+    }
+    assert "jaunder.failed_reason" not in gate
+
+
+def test_an_unsuccessful_report_is_the_gate_s_failure(observer: Observer) -> None:
+    observer.watch("731", "--once", pr=[pending()])
+    gate = observer.checkout.merged()["dev pr-watch"]["args"]
+    assert gate["jaunder.failed_reason"] == "outcome pending"
+    assert "jaunder.pr.pointer" not in gate
+
+
+def test_a_refusal_is_the_gate_s_failure_reason(observer: Observer) -> None:
+    observer.watch("--once", list=[ok([])])
+    gate = observer.checkout.merged()["dev pr-watch"]["args"]
+    assert gate["jaunder.failed_reason"] == (
+        "no open PR for branch issue-731-example; pass a PR number"
+    )
+    # No step failed: the answer was the refusal.
+    assert "jaunder.failed_step" not in gate
+
+
 def test_the_expected_head_is_stale_even_when_merged(observer: Observer) -> None:
     result = observer.watch(
         "731", "--once", "--expected-head", HEAD, pr=[merged(OTHER)]

@@ -219,7 +219,9 @@ trace.run = run
 """
 WHILE_STARTING = """\
 def starting(*args, **kwargs):
-    terminate()
+    # The step's child, not the root's own Git query.
+    if args[0] == ["demo"]:
+        terminate()
     return popen(*args, **kwargs)
 subprocess.Popen = starting
 """

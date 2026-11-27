@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout, cells, nests
+from conftest import Checkout, cells, launch, nests
 
 from dev import chrome, runner
 from dev.summary import BEFORE_DEV
@@ -568,3 +568,108 @@ def test_an_outside_traceparent_does_not_parent_the_root(checkout: Checkout) -> 
     assert gate["parent_id"] is None
     assert gate["trace_id"] != "0af7651916cd43dd8448eb211c80319c"
     assert gate["jaunder.status"] == "ok"
+
+
+def commit(checkout: Checkout) -> str:
+    git = ["git", "-C", str(checkout.root), "-c", "user.name=t", "-c", "user.email=t@t"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "c"], check=True)
+    found = subprocess.run(
+        [*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True
+    )
+    return found.stdout.strip()
+
+
+def test_the_root_records_its_branch_and_commit(checkout: Checkout) -> None:
+    head = commit(checkout)
+    subprocess.run(
+        ["git", "-C", str(checkout.root), "switch", "-qc", "b/x"], check=True
+    )
+    checkout.tool("tsc", "")
+    assert checkout.dev("static", "tsc", "--sandbox").returncode == 0
+    merged = checkout.merged()
+    gate = merged["dev static tsc"]["args"]
+    assert (gate[runner.REVISION], gate[runner.BRANCH]) == (head, "b/x")
+    assert runner.REVISION not in merged["tsc"]["args"]
+
+
+def test_a_detached_head_records_no_branch(checkout: Checkout) -> None:
+    head = commit(checkout)
+    subprocess.run(
+        ["git", "-C", str(checkout.root), "switch", "-q", "--detach"], check=True
+    )
+    assert runner.head(checkout.root) == {runner.REVISION: head}
+
+
+def test_a_checkout_without_a_commit_records_neither(
+    checkout: Checkout, tmp_path: Path
+) -> None:
+    assert runner.head(checkout.root) == {}
+    # Nor does a directory git cannot run in.
+    assert runner.head(tmp_path / "missing") == {}
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        ("sys.exit(2)", "exited 2"),
+        ("os.kill(os.getpid(), signal.SIGTERM)", "signalled 15"),
+    ],
+)
+def test_a_failed_gate_names_its_failed_step(
+    checkout: Checkout, body: str, reason: str
+) -> None:
+    checkout.tool("tsc", body)
+    assert checkout.dev("static", "tsc", "--sandbox").returncode
+    gate = checkout.merged()["dev static tsc"]["args"]
+    assert (gate["jaunder.failed_step"], gate["jaunder.failed_reason"]) == (
+        "tsc",
+        reason,
+    )
+
+
+FAILING_PHASE = """\
+from pathlib import Path
+from dev import steps
+def body():
+    steps.run("first", ["true"])
+    with steps.phase("check"):
+        {failure}
+    steps.run("never", ["true"])
+sys.exit(steps.gate(Path.cwd(), "dev demo", body))
+"""
+
+
+@pytest.mark.parametrize(
+    ("failure", "reason"),
+    [
+        ('steps.refuse("the tree is dirty\\nsecond line")', "the tree is dirty"),
+        ('steps.refuse("x" * 300)', "x" * 256),
+        ('raise ValueError("boom")', "boom"),
+        ("raise ValueError()", "ValueError"),
+    ],
+)
+def test_a_failed_phase_gives_the_gate_its_reason(
+    checkout: Checkout, failure: str, reason: str
+) -> None:
+    script = launch(FAILING_PHASE.format(failure=failure))
+    result = checkout.run(script, checkout.environment())
+    assert result.returncode == 1, result
+    merged = checkout.merged()
+    gate = merged["dev demo"]["args"]
+    assert (gate["jaunder.failed_step"], gate["jaunder.failed_reason"]) == (
+        "check",
+        reason,
+    )
+    assert merged["first"]["args"]["jaunder.status"] == "ok"
+    assert "never" not in merged
+
+
+def test_a_refusal_outside_any_step_still_gives_its_reason(checkout: Checkout) -> None:
+    script = launch(
+        "from pathlib import Path\nfrom dev import steps\n"
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: steps.refuse("no")))'
+    )
+    assert checkout.run(script, checkout.environment()).returncode == 1
+    gate = checkout.merged()["dev demo"]["args"]
+    assert gate["jaunder.failed_reason"] == "no"
+    assert "jaunder.failed_step" not in gate

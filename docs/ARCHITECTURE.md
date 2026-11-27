@@ -4722,7 +4722,14 @@ and E2E job and appends the summary to its step summary, diagnostically only.
 Spans go only to files, never OTLP, and tracing never changes a step's exit
 status or output. This replaces traced-run's custom span mechanism
 (`JAUNDER_TRACED_RUN_CONTEXT`, trace fragments and workflow folding). Product
-telemetry is unchanged.
+telemetry is unchanged. The root also records its branch and HEAD
+(`vcs.ref.head.*`), and a failed gate names its first unsuccessful span and why
+(`jaunder.failed_step`, `jaunder.failed_reason`). Before `wt remove` deletes a
+worktree, a Worktrunk `pre-remove` hook runs `dev keep-runs`. It copies the span
+records, merged traces and `traced-run` summaries (`<id>.run.json`, never the
+parked output) into a per-user store under `$XDG_STATE_HOME/jaunder/runs/`
+capped at 20 GiB, warning but never blocking removal on failure
+([keep dev runs at worktree removal](adr/drafts/keep-dev-runs-at-worktree-removal.md)).
 
 The auxiliary repository-policy package owns only the fixed documentation
 policies (`repository-docs`) and the fixed Rust/TypeScript source contracts
