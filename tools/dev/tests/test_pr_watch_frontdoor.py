@@ -73,6 +73,11 @@ class Observer:
 
     def watch(self, *args: str, **routes: Any) -> subprocess.CompletedProcess[bytes]:
         """Runs `dev pr-watch ARGS` with the live ruleset unless scripted."""
+        return self.dev("pr-watch", *args, **routes)
+
+    def dev(
+        self, command: str, *args: str, **routes: Any
+    ) -> subprocess.CompletedProcess[bytes]:
         fixture = self.checkout.root.parent
         scripted = {"rules": [ok(rules(V, E))], "runs": [ok(runs())]} | {
             name: [
@@ -83,7 +88,7 @@ class Observer:
         (fixture / "replies.json").write_text(json.dumps(scripted))
         (fixture / "state.json").write_text("{}")
         (fixture / "calls.jsonl").write_text("")
-        return self.checkout.dev("pr-watch", *args, FIXTURE=str(fixture))
+        return self.checkout.dev(command, *args, FIXTURE=str(fixture))
 
     def calls(self) -> list[list[str]]:
         text = (self.checkout.root.parent / "calls.jsonl").read_text()
@@ -178,9 +183,11 @@ def test_each_outcome_has_its_exit_status_and_report(
     # Absent optional fields are omitted, never null.
     assert set(found) <= {"outcome", "pr", "head_sha", "phase", "detail"} | {
         "pointer",
+        "ejection",
         "events",
     }
     assert ("phase" in found) == (outcome == "pending")
+    assert ("ejection" in found) == (outcome == "ejected")
     assert None not in found.values()
     terminal = [e["detail"] for e in found["events"] if e["kind"] == "terminal"]
     assert terminal == ([] if outcome == "pending" else [outcome])
@@ -329,3 +336,26 @@ def test_workflow_membership_decides_a_failure_outside_the_ruleset(
         f"repos/jaunder-org/jaunder/contents/{path}?ref={HEAD}"
         for path in [".github/workflows/other.yml", WORKFLOW]
     ]
+
+
+def test_pr_land_arms_once_and_reports_the_merge(observer: Observer) -> None:
+    # `pr-land` shares this observer in process; only `jq`-free fakes here.
+    observer.git("checkout", "-q", "-b", "elsewhere")
+    identity = ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid"]
+    observer.git(
+        *identity,
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "--allow-empty",
+        "-m",
+        "fixture",
+    )
+    armed = green(armed=True)
+    snapshots = [green(), green(), green(), armed, merged()]
+    result = observer.dev("pr-land", "731", HEAD, pr=snapshots, merge=[ok({})])
+    assert result.returncode == 0, result
+    assert (report(result)["outcome"], report(result)["pointer"]) == ("merged", MERGE)
+    merges = [call for call in observer.calls() if call[1:3] == ["pr", "merge"]]
+    assert len(merges) == 1

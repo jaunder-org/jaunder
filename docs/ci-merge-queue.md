@@ -194,11 +194,14 @@ same way.
 
 **Rollback trigger.** A failed internal validation lane makes
 `Validate (no e2e)` fail. Inspect `Validation core` or `Validation coverage` for
-the work-bearing failure; the aggregate itself performs no validation work. **An
-ejected PR is _not_ requeued automatically** — the live `merge_queue` rule has
-no requeue parameter, so a failed front-of-queue `merge_group` drops the PR out
-of the queue and it stays `OPEN` until someone re-enqueues it. If repeated lane
-infrastructure failures thrash the queue, run the rollback above before
+the work-bearing failure; the aggregate itself performs no validation work.
+**The queue never requeues an ejected PR** — the live `merge_queue` rule has no
+requeue parameter, so a failed front-of-queue `merge_group` drops the PR out of
+the queue and it stays `OPEN` until someone re-enqueues it. A running
+`dev pr-land` re-enqueues it once by itself when the failure matches a known
+infrastructure signature
+([one-shot recovery](adr/0220-explicit-one-shot-pr-reenqueue.md)). If repeated
+lane infrastructure failures thrash the queue, run the rollback above before
 repairing the lane.
 
 **Observing queue state.** Ejection is silent — the queue entry vanishes while

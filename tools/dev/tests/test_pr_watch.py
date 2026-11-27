@@ -14,8 +14,12 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from conftest import REPOSITORY, require
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 
-from dev import pr_watch, steps
+from dev import pr_watch, steps, trace
 from dev.pr_watch import (
     FAILURE,
     PENDING,
@@ -120,6 +124,8 @@ def pr(
                 "pullRequest": {
                     "number": 731,
                     "state": state,
+                    "baseRefName": "main",
+                    "headRefName": "issue-731-example",
                     "mergedAt": "2026-07-30T15:00:00Z" if merged else None,
                     "mergeCommit": {"oid": MERGE} if merged else None,
                     "mergeable": mergeable,
@@ -180,14 +186,17 @@ def run(
     conclusion: str | None = "failure",
     run_id: int = 9,
     number: int = 731,
+    workflow: str | None = None,
 ) -> Any:
-    return {
+    """A merge-group run; only one naming its `workflow` can be classified."""
+    found = {
         "id": run_id,
         "html_url": f"https://github.com/o/r/actions/runs/{run_id}",
         "created_at": created,
         "head_branch": f"gh-readonly-queue/main/pr-{number}-base",
         "conclusion": conclusion,
     }
+    return found if workflow is None else found | {"path": workflow}
 
 
 def runs(*found: Any) -> Any:
@@ -214,7 +223,8 @@ def annotations(**checks: list[tuple[str, str, str | None]]) -> Any:
 
 
 def jobs(*conclusions: tuple[str, Any]) -> Any:
-    return {"jobs": [{"name": n, "conclusion": c} for n, c in conclusions]}
+    found = enumerate(conclusions, start=100)
+    return {"jobs": [{"id": i, "name": n, "conclusion": c} for i, (n, c) in found]}
 
 
 def contents(source: str) -> Any:
@@ -231,7 +241,8 @@ def route(argv: Sequence[str]) -> str:
     if argv[0] == "git":
         return " ".join(argv[1:])
     if argv[1] == "pr":
-        return "list"
+        # `gh pr list` resolves the subject; `gh pr merge` is `pr-land`'s arm.
+        return argv[2]
     if argv[2] == "graphql":
         return "annotations" if any(a.startswith("oid=") for a in argv) else "pr"
     if argv[2].endswith("/rules/branches/main"):
@@ -239,6 +250,9 @@ def route(argv: Sequence[str]) -> str:
     if "/contents/" in argv[2]:
         # Each workflow file is its own route.
         return "contents:" + argv[2].partition("/contents/")[2].partition("?")[0]
+    if argv[2].endswith("/logs"):
+        # Each job's log is its own route.
+        return "log:" + argv[2].split("/")[-2]
     return "jobs" if "/jobs?" in argv[2] else "runs"
 
 
@@ -689,6 +703,8 @@ PAGE = (*PULL, "statusCheckRollup", "contexts", "pageInfo")
         ((*COMMIT, "committedDate"), None, "committedDate"),
         ((*COMMIT, "committedDate"), "2026-07-30", "committedDate"),
         ((*COMMIT, "committedDate"), "yesterday", "committedDate"),
+        ((*PULL, "baseRefName"), None, "branch name"),
+        ((*PULL, "headRefName"), "", "branch name"),
         ((*PULL, "statusCheckRollup"), ..., "rollup"),
         ((*PULL, "statusCheckRollup", "contexts", "pageInfo"), ..., "hasNextPage"),
         ((*PAGE, "hasNextPage"), None, "hasNextPage"),
@@ -801,7 +817,8 @@ def test_in_progress_jobs_are_read_across_pages() -> None:
 @pytest.mark.parametrize(
     "page",
     [TRANSPORT, ok({"total_count": 0}), ok(jobs(("odd", 42))), ok({"jobs": ["odd"]})]
-    + [ok({"jobs": [{"conclusion": "failure"}]})],
+    + [ok({"jobs": [{"conclusion": "failure"}]})]
+    + [ok({"jobs": [{"name": "unidentified", "conclusion": "failure"}]})],
 )
 def test_in_progress_job_failures_propagate_instead_of_reading_as_no_ejection(
     page: Reply,
@@ -852,33 +869,52 @@ jobs:
     runs-on: ubuntu-latest
   matrix:
     name: e2e (${{ matrix.lane }})
+    needs: build
   odd:
     name: 7
   bare: null
+  gate:
+    needs: [build, matrix, 7]
+  loose:
+    needs: {build: true}
 """
-    assert pr_watch.job_names(source) == frozenset(
+    definitions = pr_watch.job_definitions(source)
+    assert definitions is not None
+    needs = {definition.key: definition.needs for definition in definitions}
+    assert needs == {
+        "build": frozenset(),
+        "e2e-gate": frozenset(),
+        "matrix": {"build"},
+        "bare": frozenset(),
+        "gate": {"build", "matrix"},
+    }
+    assert pr_watch.job_names(definitions) == frozenset(
         {
             V,
             "e2e-gate",
             "e2e (${{ matrix.lane }})",
             "bare",
+            "gate",
         }
     )
 
 
 @pytest.mark.parametrize("source", ["jobs: [", "jobs: []", "- a list", ""])
 def test_an_unparseable_workflow_has_no_jobs(source: str) -> None:
-    assert pr_watch.job_names(source) is None
+    assert pr_watch.job_definitions(source) is None
 
 
 CI_FILE = f"contents:{WORKFLOW}"
 
 
+ONE_JOB = ((pr_watch.Definition("j0", E),), None)
+
+
 def test_a_workflow_is_read_once_per_path_and_head() -> None:
     reader, fake = github(**{CI_FILE: [contents(workflow(E))]})
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
-    assert reader.workflow_jobs(WORKFLOW, OTHER) == (frozenset({E}), None)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == ONE_JOB
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == ONE_JOB
+    assert reader.workflow_jobs(WORKFLOW, OTHER) == ONE_JOB
     assert fake.asked("contents") == [
         ["gh", "api", f"repos/o/r/contents/{WORKFLOW}?ref={ref}"]
         for ref in [HEAD, OTHER]
@@ -902,25 +938,25 @@ def test_an_unusable_workflow_has_no_jobs_and_says_why_once(
     reply: Reply, problem: str
 ) -> None:
     reader, fake = github(**{CI_FILE: [reply, ok(contents(workflow(E)))]})
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset(), problem)
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset(), problem)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == ((), problem)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == ((), problem)
     assert len(fake.asked("contents")) == 1
 
 
 @pytest.mark.parametrize("reply", [TRANSPORT, RATE_LIMITED, (0, "not json", "")])
 def test_a_transient_read_failure_is_retried_on_the_next_poll(reply: Reply) -> None:
     reader, fake = github(**{CI_FILE: [reply, ok(contents(workflow(E)))]})
-    names, problem = reader.workflow_jobs(WORKFLOW, HEAD)
-    assert names == frozenset() and problem is not None
+    definitions, problem = reader.workflow_jobs(WORKFLOW, HEAD)
+    assert definitions == () and problem is not None
     assert problem.startswith("it is unreadable: ")
-    assert reader.workflow_jobs(WORKFLOW, HEAD) == (frozenset({E}), None)
+    assert reader.workflow_jobs(WORKFLOW, HEAD) == ONE_JOB
     assert len(fake.asked("contents")) == 2
 
 
 def test_a_file_outside_the_workflows_directory_is_never_read() -> None:
     reader, fake = github()
     assert reader.workflow_jobs(".github/actions/x/action.yml", HEAD) == (
-        frozenset(),
+        (),
         "it is outside .github/workflows/",
     )
     assert fake.asked("contents") == []
@@ -1902,3 +1938,262 @@ def test_an_internal_defect_exits_2_without_a_report(observe: Any) -> None:
     result = observe(broken)
     assert (result.code, result.report) == (2, {})
     assert "RuntimeError: defect" in result.stderr
+
+
+# ---- classifying an ejection: infrastructure, or a decision for a human ----
+
+# Recorded from PR #2016's ejection: merge-group run 44632169176, job
+# 135941369307 (Validation test checks), whose log carried GitHub's escapes.
+NIX_LOG = (
+    "2026-11-19T22:50:50.0331455Z \x1b[31;1merror:\x1b[0m unable to download "
+    "'https://jaunder-org.cachix.org/nar/edbc0fcd.nar.zst': HTTP error 416\n"
+    "2026-11-19T22:50:50.0333085Z error: path '/nix/store/xnhf8331-cargo-package"
+    "-tree-sitter-julia-0.23.1' is required, but there is no substituter that "
+    "can build it\n"
+)
+# PR #2072's variant (job 137822809833): a 206, not a 416.
+PARTIAL_LOG = (
+    "error: unable to download 'https://jaunder-org.cachix.org/nar/78662aee.nar"
+    ".zst': HTTP error 206 (curl error: Failure when receiving data from the "
+    "peer)\nerror: path '/nix/store/x-perl' is required, but there is no "
+    "substituter that can build it\n"
+)
+TEST_FAILURE_LOG = "FAILED tools/dev/tests/test_gates.py::test_population\n"
+# The shape of the repository's ci.yml: lanes, the aggregates over them, and
+# per-pair reconciliation that runs after a failed lane.
+CI_SOURCE = """
+jobs:
+  merge-queue-verdict:
+    name: Merge-queue verdict
+  validate-host:
+    name: Validation host
+    needs: [merge-queue-verdict]
+  validate-test-checks:
+    name: Validation test checks
+    needs: [merge-queue-verdict]
+  validate-no-e2e:
+    name: Validate (no e2e)
+    needs: [merge-queue-verdict, validate-host, validate-test-checks]
+  e2e-lane:
+    name: e2e (${{ matrix.lane }})
+    needs: [merge-queue-verdict]
+  e2e-reconcile:
+    name: e2e reconcile (${{ matrix.backend }}/${{ matrix.browser }})
+    needs: [merge-queue-verdict, e2e-lane]
+  e2e-gate:
+    name: e2e gate
+    needs: [merge-queue-verdict, e2e-lane, e2e-reconcile]
+"""
+LANE, GATE = "Validation test checks", V
+RUN_URL = "https://github.com/o/r/actions/runs/9"
+
+
+def failed_jobs(*named: tuple[int, str]) -> Any:
+    return {
+        "jobs": [{"id": i, "name": n, "conclusion": "failure"} for i, n in named]
+        + [{"id": 1, "name": "E2E catalog", "conclusion": "success"}]
+    }
+
+
+def classified(**routes: Any) -> pr_watch.Ejection:
+    """The repository's own workflow, PR #2016's failed jobs and its log,
+    unless a route is scripted."""
+    scripted: dict[str, Any] = {
+        CI_FILE: [contents(CI_SOURCE)],
+        "jobs": [failed_jobs((7, LANE), (8, GATE))],
+        "log:7": [(0, NIX_LOG, "")],
+    }
+    reader, _ = github(**(scripted | routes))
+    found = pr_watch.parse_runs(runs(run(workflow=WORKFLOW)), 731)
+    assert found is not None
+    return reader.classify_ejection(found, HEAD)
+
+
+@pytest.mark.parametrize("log", [NIX_LOG, PARTIAL_LOG])
+def test_a_nix_substitute_failure_is_infrastructure(log: str) -> None:
+    assert pr_watch.signature(log) == "nix-substitute"
+
+
+@pytest.mark.parametrize(
+    "log",
+    [NIX_LOG.splitlines()[0], NIX_LOG.splitlines()[1], TEST_FAILURE_LOG, ""],
+)
+def test_half_a_signature_or_another_failure_matches_nothing(log: str) -> None:
+    assert pr_watch.signature(log) is None
+
+
+@pytest.mark.parametrize(
+    ("template", "name", "matches"),
+    [
+        ("e2e (${{ matrix.lane }})", "e2e (sqlite/chromium)", True),
+        ("e2e (${{ matrix.lane }})", "e2e ()", True),
+        ("e2e (${{ matrix.lane }})", "e2e gate", False),
+        ("e2e reconcile (${{ a }}/${{ b }})", "e2e reconcile (postgres/firefox)", True),
+        ("Validation host", "Validation host", True),
+        ("Validation host", "Validation hostile", False),
+        ("a.b", "axb", False),
+    ],
+)
+def test_a_name_expression_stands_for_any_text(
+    template: str, name: str, matches: bool
+) -> None:
+    definition = pr_watch.Definition("key", template)
+    assert pr_watch.defines(definition, name) is matches
+
+
+@pytest.mark.parametrize("source", ["shape", "repository"])
+def test_the_ci_workflow_drops_aggregates_and_keeps_lanes(source: str) -> None:
+    if source == "repository":
+        path = REPOSITORY / WORKFLOW
+        require(path.is_file(), f"the repository's {WORKFLOW}")
+        definitions = pr_watch.job_definitions(path.read_text(encoding="utf-8"))
+    else:
+        definitions = pr_watch.job_definitions(CI_SOURCE)
+    assert definitions is not None
+    failed = [
+        pr_watch.FailedJob(1, "e2e (postgres-firefox-ordinary-1-of-2)"),
+        pr_watch.FailedJob(2, "e2e reconcile (postgres/firefox)"),
+        pr_watch.FailedJob(3, "e2e gate"),
+        pr_watch.FailedJob(4, LANE),
+        pr_watch.FailedJob(5, GATE),
+    ]
+    jobs = pr_watch.derive(failed, definitions)
+    assert not isinstance(jobs, str)
+    assert [job.derived for job in jobs] == [False, True, True, False, True]
+
+
+def test_an_aggregate_failing_alone_is_primary() -> None:
+    definitions = pr_watch.job_definitions(CI_SOURCE)
+    assert definitions is not None
+    jobs = pr_watch.derive([pr_watch.FailedJob(5, GATE)], definitions)
+    assert jobs == (pr_watch.FailedJob(5, GATE),)
+
+
+@pytest.mark.parametrize(
+    ("names", "why"),
+    [
+        (["Validation hostile"], "job 'Validation hostile' matches 0 workflow jobs"),
+        (["twin"], "job 'twin' matches 2 workflow jobs"),
+    ],
+)
+def test_a_job_the_workflow_does_not_identify_cannot_be_judged(
+    names: list[str], why: str
+) -> None:
+    definitions = [
+        pr_watch.Definition("a", "twin"),
+        pr_watch.Definition("b", "t${{ x }}"),
+    ]
+    failed = [pr_watch.FailedJob(1, name) for name in names]
+    assert pr_watch.derive(failed, definitions) == why
+
+
+def test_pr_2016s_ejection_is_infrastructure() -> None:
+    ejection = classified()
+    assert ejection.signature == "nix-substitute"
+    assert ejection.report() == {
+        "run": RUN_URL,
+        "signature": "nix-substitute",
+        "unclassified": None,
+        "jobs": [
+            {"id": 7, "name": LANE, "derived": False, "signature": "nix-substitute"},
+            {"id": 8, "name": GATE, "derived": True, "signature": None},
+        ],
+    }
+    assert ejection.detail == f"infrastructure: nix-substitute ({RUN_URL})"
+
+
+UNCLASSIFIED = [
+    # Infrastructure beside a real failure is a decision for a human.
+    (
+        {
+            "jobs": [failed_jobs((7, LANE), (9, "Validation host"), (8, GATE))],
+            "log:9": [(0, TEST_FAILURE_LOG, "")],
+        },
+        "job 'Validation host' matches no infrastructure signature",
+    ),
+    ({"log:7": [(0, TEST_FAILURE_LOG, "")]}, f"job '{LANE}' matches no"),
+    ({"jobs": [failed_jobs()]}, "no failed job to classify"),
+    ({"log:7": [TRANSPORT]}, f"job '{LANE}' log is unreadable: transport"),
+    ({"log:7": [NOT_FOUND]}, f"job '{LANE}' log is unreadable: not found"),
+    ({"jobs": [TRANSPORT]}, "its jobs are unreadable: transport"),
+    (
+        {"jobs": [{"jobs": [{"conclusion": "failure", "name": LANE}]}]},
+        "its jobs are unreadable: malformed response: merge-group job omitted",
+    ),
+    ({CI_FILE: [NOT_FOUND]}, f"workflow {WORKFLOW}: it is unreadable: not found"),
+    (
+        {"jobs": [failed_jobs((7, "Renamed lane"))]},
+        "job 'Renamed lane' matches 0 workflow jobs",
+    ),
+]
+
+
+@pytest.mark.parametrize(("routes", "why"), UNCLASSIFIED)
+def test_anything_but_known_infrastructure_is_unclassified(
+    routes: dict[str, Any], why: str
+) -> None:
+    ejection = classified(**routes)
+    assert ejection.signature is None
+    assert ejection.unclassified is not None and ejection.unclassified.startswith(why)
+    assert ejection.detail == f"unclassified: {ejection.unclassified} ({RUN_URL})"
+
+
+def test_a_run_naming_no_workflow_is_unclassified_without_reading() -> None:
+    reader, fake = github()
+    found = pr_watch.parse_runs(runs(run()), 731)
+    assert found is not None
+    ejection = reader.classify_ejection(found, HEAD)
+    assert ejection.unclassified == "the run names no workflow file"
+    assert fake.calls == []
+
+
+def test_a_job_log_is_read_as_escaped_text() -> None:
+    reader, fake = github(**{"log:7": [(0, NIX_LOG, "")]})
+    assert reader.job_log(7) == NIX_LOG
+    assert fake.calls == [
+        ["gh", "api", "repos/o/r/actions/jobs/7/logs", "--allow-escape-sequences"]
+    ]
+
+
+def test_the_classification_is_a_trace_phase_with_its_verdict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider()
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(trace, "tracer", lambda: provider.get_tracer("t"))
+    classified()
+    (span,) = exporter.get_finished_spans()
+    assert span.name == "classify-ejection"
+    assert dict(span.attributes or {}) == {
+        pr_watch.EJECTION_RUN: RUN_URL,
+        pr_watch.EJECTION_SIGNATURE: "nix-substitute",
+    }
+
+
+def infrastructure_ejection(**routes: Any) -> Native:
+    scripted: dict[str, Any] = {
+        "runs": [runs(run(workflow=WORKFLOW))],
+        CI_FILE: [contents(CI_SOURCE)],
+        "jobs": [failed_jobs((7, LANE), (8, GATE))],
+        "log:7": [(0, NIX_LOG, "")],
+    }
+    return native(green(), **(scripted | routes))
+
+
+def test_an_ejected_report_says_whether_infrastructure_caused_it(
+    observe: Any,
+) -> None:
+    result = observe(infrastructure_ejection())
+    assert (result.code, result.outcome) == (1, "ejected")
+    assert result.report["ejection"]["signature"] == "nix-substitute"
+    assert result.events("classify") == [f"infrastructure: nix-substitute ({RUN_URL})"]
+    assert [e["kind"] for e in result.report["events"]][-2:] == ["classify", "terminal"]
+
+
+@pytest.mark.parametrize("once", [False, True])
+def test_a_failed_log_read_never_changes_the_outcome(observe: Any, once: bool) -> None:
+    result = observe(infrastructure_ejection(**{"log:7": [TRANSPORT]}), once=once)
+    assert (result.code, result.outcome) == (1, "ejected")
+    assert result.report["ejection"]["signature"] is None
+    assert result.events("poll-error") == []

@@ -1734,10 +1734,11 @@ baseline.
   through `gh` and never mutates. After obtaining and recording human approval
   for the exact PR/head/scope, use `dev pr-land <PR> <approved-head-SHA>`. Both
   identity arguments are required; the SHA must be full lowercase 40-hex. `dev`
-  cannot attest to human approval. The thin native `gh`/`git` frontdoor requires
-  origin `jaunder-org/jaunder`, live base `main`, matching PR/head, no divergent
-  local PR branch, and a one-snapshot `ready-to-land` verdict from the same
-  observer before one `gh pr merge --auto --merge --match-head-commit` action.
+  cannot attest to human approval. `dev pr-land` (`tools/dev/dev/pr_land.py`)
+  requires origin `jaunder-org/jaunder`, live base `main`, matching PR/head, no
+  divergent local PR branch, and a one-snapshot `ready-to-land` verdict from the
+  same observer, run in process, before each
+  `gh pr merge --auto --merge --match-head-commit` action.
 
   The branch ruleset remains authoritative for direct required contexts and
   readiness. For an early failure, `pr-watch` uses workflow membership: a failed
@@ -1758,7 +1759,7 @@ baseline.
   dev pr-watch 731 --once                   # direct JSON, no --json flag
   dev pr-watch 731 --until merged           # passive external-approval watch
   dev pr-land 731 <approved-head-SHA>        # only after recorded human approval
-  dev pr-land 731 <approved-head-SHA> --reenqueue # separately authorized recovery
+  dev pr-land 731 <approved-head-SHA> --reenqueue # authorized recovery
   ```
 
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
@@ -1773,12 +1774,12 @@ baseline.
   `pr-watch` exits 0 for `ready-to-land` or `merged`; `pr-land` exits 0 only
   after complete exact-head `merged` evidence. Observer stdout is direct JSON:
   root `.outcome`, `.pr` (number), `.head_sha`, `.events`, and optional
-  `.phase`, `.detail`, `.pointer`. There is no `--json` flag or result sidecar.
-  Progress/diagnostics go to stderr. Adverse/pending observer outcomes exit 1;
-  invalid arguments/setup failure exit 2 and may have no report. Land
-  refusal/native failure is nonzero and may have no JSON; post-action
-  observation retains its direct report/status. Honor exit status, not partial
-  output. An arm or queue readback is not a merge verdict.
+  `.phase`, `.detail`, `.pointer`, plus `.ejection` on `ejected` (below). There
+  is no `--json` flag or result sidecar. Progress/diagnostics go to stderr.
+  Adverse/pending observer outcomes exit 1; invalid arguments/setup failure exit
+  2 and may have no report. Land refusal/native failure is nonzero and may have
+  no JSON; post-action observation retains its direct report/status. Honor exit
+  status, not partial output. An arm or queue readback is not a merge verdict.
 
   `watch` only observes — it never merges, re-runs a job, rebases, or
   re-enqueues. `--until merged` explicitly keeps observing across
@@ -1793,31 +1794,40 @@ baseline.
   equal required `--expected-head`. Only positive live queued readback supplies
   this input; an arm alone or absent queue evidence does not. It seeds the
   observer's queue history, so a dequeue before the first poll is still reported
-  as `dequeued`; no shell classifier or new poller is added, and default
+  as `dequeued`; there is no second classifier or poller, and default
   observation is unchanged. See
   [ADR-0087](docs/adr/0087-xtask-github-pr-observation.md) for the
   observer/armer split and
   [the actionable-handoff decision](docs/adr/0135-pr-watch-actionable-handoff.md)
   for the stopping policy.
 
-  Default `land` refuses an observed ejection. Routine technical diagnosis is
-  owned by the assigned Lead; recovery requires explicit authorization from the
-  authority assigned by governing owner policy (the Manager where that policy
-  reserves the decision, otherwise the Lead within approved scope). Diagnosis
-  alone does not authorize recovery. Use
-  `dev pr-land <PR> <approved-head-SHA> --reenqueue` only after that
-  authorization and exact-head merge approval. It refuses queued/armed PRs,
-  captures the historical run URL from live `ejected` preflight, and requires
-  another one-snapshot `ready-to-land` verdict from the SAME observer with only
-  that run acknowledged before its ONE native action. Incomplete, adverse or
-  unavailable evidence refuses; there is no second classifier, poller or armer.
-  Post-action observation uses
-  `--expected-head <SHA> --acknowledged-ejection <URL>` on the same observer.
-  These read-only inputs neither mutate nor authorize recovery. Acknowledgment
-  requires an expected head and a GitHub Actions run URL; `dev pr-land` supplies
-  the URL from preflight, not caller guesswork. The failed verdict stays failed;
-  delayed fresh visibility uses the normal deadline, and a distinct fresh
-  failure ends observation. Ordinary land refuses ejection; neither mode retries
+  **Ejection.** On `ejected`, the observer classifies the failed merge-group run
+  and reports `.ejection`: `run`, `signature` (set only for a known
+  infrastructure failure), `unclassified` (why not, otherwise) and each failed
+  job with whether it is `derived` (it `needs` another failed job, as the
+  aggregates and reconciliation do) and the signature its log matched. Every
+  non-derived job must match a signature from the closed list in
+  `pr_watch.SIGNATURES`; a mix, an unknown failure or any failed read is
+  unclassified. Classification only reads and never changes the outcome; it is
+  also a `classify` event and a `classify-ejection` trace phase.
+
+  `dev pr-land` re-enqueues at most once per invocation, through the same
+  guarded sequence: not queued or armed, a one-snapshot `ready-to-land` with
+  only that run acknowledged, one native action, readback, then observation with
+  `--acknowledged-ejection <URL>` semantics. It does so automatically when the
+  ejection, seen at preflight or after arming, has a `signature`, and prints
+  `re-enqueueing once: <signature> (<run URL>)` first. Any later ejection in the
+  same invocation is terminal, whatever its cause: the report is printed and the
+  exit is 1. Routine technical diagnosis of any other ejection is owned by the
+  assigned Lead; recovery requires explicit authorization from the authority
+  assigned by governing owner policy (the Manager where that policy reserves the
+  decision, otherwise the Lead within approved scope). Diagnosis alone does not
+  authorize it; only a classified infrastructure ejection inside an approved
+  land does. Use `dev pr-land <PR> <approved-head-SHA> --reenqueue` only after
+  that authorization and exact-head merge approval. It requires a live `ejected`
+  preflight, refuses otherwise, and spends the invocation's one re-enqueue on
+  it. The failed verdict stays failed; delayed fresh visibility uses the normal
+  deadline, and a distinct fresh failure ends observation. Neither mode retries
   a no-op. Existing head, check, queue and fail-closed guards remain in force.
   See
   [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).

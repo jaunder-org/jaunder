@@ -19,6 +19,7 @@ from dev import (
     issues,
     keep,
     perf,
+    pr_land,
     pr_watch,
     static,
     steps,
@@ -488,16 +489,21 @@ def pr_watch_command(**options: Any) -> None:
     _gate(lambda: pr_watch.run(watch))
 
 
-@cli.command("pr-land", context_settings={"ignore_unknown_options": True})
-@click.argument("number")
-@click.argument("expected_head")
-@click.argument("mode", default="ordinary")
-def pr_land(number: str, expected_head: str, mode: str) -> None:
-    """Land an approved PR head; MODE --reenqueue needs one-shot authorization.
+@cli.command("pr-land")
+@click.argument("number", type=click.IntRange(min=1))
+@click.argument("expected_head", callback=_full_sha)
+@click.option(
+    "--reenqueue",
+    is_flag=True,
+    help="Re-enqueue the live preflight ejection, of any cause, once; needs "
+    "separate recovery authorization.",
+)
+def pr_land_command(number: int, expected_head: str, reenqueue: bool) -> None:
+    """Land an approved PR head, re-enqueueing one infrastructure ejection.
 
     Prior recorded exact PR/head human approval is mandatory, not inferred here.
     """
-    _gate(lambda: forwarding.pr_land(number, expected_head, mode))
+    _gate(lambda: pr_land.run(pr_land.Land(number, expected_head, reenqueue)))
 
 
 @cli.command("pr-cleanup")

@@ -3,6 +3,8 @@
 - Status: accepted
 - Date: 2026-11-24
 - Issue: [#2067](https://github.com/jaunder-org/jaunder/issues/2067)
+- Amended: 2026-11-26 — automatic one-shot re-enqueue after an infrastructure
+  ejection ([#2139](https://github.com/jaunder-org/jaunder/issues/2139))
 
 ## Context
 
@@ -26,7 +28,8 @@ field and it never changed a verdict.
 - PR observation is a module of the Python `dev` package that implements
   `dev pr-watch` in-process. It is read-only: it never arms, merges,
   re-enqueues, cleans up or edits the tracker. `scripts/pr-land.sh` remains the
-  only armer and uses this same observer. This amends
+  only armer and uses this same observer. _Amended by #2139:_ `pr-land` is now
+  `tools/dev/dev/pr_land.py`, which calls this observer in-process. This amends
   [ADR-0240](0240-just-frontdoors-host-pr-observer.md)'s `tools/pr-observer`
   host executable and removes `pr-observer` from
   [ADR-0258](0258-dev-runs-nix-built-host-tools.md)'s Nix-built host tools.
@@ -42,6 +45,13 @@ field and it never changed a verdict.
   aggregate fails. No graph, `needs`, matrix or expression evaluation; no
   hard-coded check, job or workflow names. Approved by the human at spec
   approval for #2067, as ADR-0240 requires for changes to these guarantees.
+  _Amended by #2139, approved at its spec approval:_ classifying an ejection
+  reads one `needs` hop, matching each failed job to its definition by literal
+  name with every `${{ … }}` standing for any text. It only labels derived jobs
+  in the `ejection` report and never decides an outcome or early failure. The
+  jobs API does not expose `needs`; `needs: [e2e-lane]` names the whole matrix,
+  so a real reconciliation failure beside an infrastructure lane failure is one
+  bounded retry.
 - These ADR-0195 rules still hold: readiness requires every ruleset context to
   have succeeded; checks on a superseded head never affect the verdict; a
   pending re-run outranks its earlier failure and otherwise the latest
