@@ -40,8 +40,6 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, NamedTuple
 
-import yaml
-
 from dev import annotations, steps
 
 # Runs one command (`gh` or `git`): its status, stdout and stderr.
@@ -505,6 +503,10 @@ def parse_pressure(value: Any) -> list[str]:
 def job_names(source: str) -> frozenset[str] | None:
     """What a ruleset context can match in one workflow file: each job's
     literal `name`, or its key when it has none; None if it is no workflow."""
+    # Imported here: only this parse needs it, and every `dev` command would
+    # otherwise pay for it at import.
+    import yaml
+
     try:
         jobs = _get(yaml.safe_load(source), "jobs")
     except yaml.YAMLError:

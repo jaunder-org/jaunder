@@ -8,8 +8,6 @@ import json
 from collections.abc import Sequence
 from typing import Any, Literal
 
-from tabulate import tabulate
-
 
 def render_report(report: Any) -> str:
     """A report already in hand, as a dict, rendered."""
@@ -55,6 +53,10 @@ def table(
     every column is left-aligned without it. A pipe table's rule carries the
     alignment; tabulate does not escape a `|` in a cell, so it is escaped here.
     """
+    # Imported here: every `dev` command imports this module for its step
+    # reports, and only the diagnostics' tables need tabulate.
+    from tabulate import tabulate
+
     if markdown:
         rows = [[cell.replace("|", "\\|") for cell in row] for row in rows]
     return tabulate(
