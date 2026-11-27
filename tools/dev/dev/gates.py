@@ -1,15 +1,17 @@
-"""The gates, CI lanes and host check groups, each a fixed sequence of steps.
+"""The gates, CI lanes and host check groups, each a declaration of its steps.
 
-Every function runs its steps in order on the host, from the checkout root,
-and stops at the first failure (`steps.StepFailed`). Host tools that print one
-JSON report are shown through `report.render`; their exit status stays the
-verdict.
+Each function returns the steps it runs, in order, on the host, from the
+checkout root; `steps.execute` runs them and stops at the first failure
+(`steps.StepFailed`). No function here runs a step itself. Host tools that
+print one JSON report are shown through `report.render`; their exit status
+stays the verdict.
 """
 
 import fcntl
 import json
 import os
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 from opentelemetry.trace import Span
@@ -20,9 +22,11 @@ from dev.commands import (
     ADMIT_INPUTS,
     COVERAGE_CHECK,
     SOURCE_CONTRACT,
+    Tool,
     repository_policy,
 )
 from dev.static import Mode
+from dev.steps import Declaration, Step
 
 # The Nix checks prepush takes on x86_64-linux in place of host leaves, each
 # with the leaves it covers. Their filtered sources let a verdict built for
@@ -35,6 +39,7 @@ SHARED_VERDICTS = {
     "static-typescript": ("tsc",),
     "static-ert": ("ert",),
 }
+
 
 DOCS_SHAPE = (
     "sequence-check",
@@ -81,83 +86,110 @@ STATIC_CHECKS = (
 )
 
 
+def _static(name: str, mode: Mode) -> Step:
+    return partial(static.run, name, mode)
+
+
+def _run(name: str, *argv: str, compiles: bool = False) -> Step:
+    return partial(steps.run, name, list(argv), compiles=compiles)
+
+
+def _tool_step(
+    name: str,
+    wanted: Tool,
+    *args: str,
+    render: Callable[[bytes], str | None] | None = None,
+) -> Step:
+    """Runs a binary of a tool package, built on its first use in the run."""
+
+    def step() -> None:
+        steps.run(name, [*steps.tool(wanted), *args], render)
+
+    return step
+
+
 # The host check surface: its named groups in fail-fast order.
 
 
-def leaf(name: str, mode: Mode, shared: bool) -> None:
+def leaf(name: str, mode: Mode, shared: bool) -> Declaration:
     """The host static leaf `name`, or with `shared` the Nix check covering it.
 
     `shared` is only ever prepush's: Verify mode, inside its index custody.
     """
     for check, leaves in SHARED_VERDICTS.items():
         if shared and name in leaves:
-            if name == leaves[0]:
-                steps.nix_check(check, index.SHARED_FLAGS)
-            return
-    static.run(name, mode)
+            if name != leaves[0]:
+                return ()
+            return (partial(steps.nix_check, check, index.SHARED_FLAGS),)
+    return (_static(name, mode),)
 
 
-def host(mode: Mode, shared: bool = False) -> None:
-    format_checks(mode, shared)
-    docs_shape()
-    source_contracts()
-    compile_checks(mode, shared)
-    elisp_checks(mode, shared)
+def host(mode: Mode, shared: bool = False) -> Declaration:
+    return (
+        *format_checks(mode, shared),
+        *docs_shape(),
+        *source_contracts(),
+        *compile_checks(mode, shared),
+        *elisp_checks(mode, shared),
+    )
 
 
-def format_checks(mode: Mode, shared: bool = False) -> None:
-    leaf("fmt", mode, shared)
-    leaf("leptosfmt", mode, shared)
-    markdown(mode, shared)
-    static.run("prettier-css", mode)
-    leaf("elisp-fmt", mode, shared)
-    leaf("tools-fmt", mode, shared)
+def format_checks(mode: Mode, shared: bool = False) -> Declaration:
+    return (
+        *leaf("fmt", mode, shared),
+        *leaf("leptosfmt", mode, shared),
+        *markdown(mode, shared),
+        _static("prettier-css", mode),
+        *leaf("elisp-fmt", mode, shared),
+        *leaf("tools-fmt", mode, shared),
+    )
 
 
-def markdown(mode: Mode, shared: bool = False) -> None:
+def markdown(mode: Mode, shared: bool = False) -> Declaration:
     """Markdown and end2end Prettier."""
-    leaf("prettier-markdown", mode, shared)
-    static.run("prettier-end2end", mode)
+    return (
+        *leaf("prettier-markdown", mode, shared),
+        _static("prettier-end2end", mode),
+    )
 
 
-def repository_docs(check: str) -> None:
-    steps.run(check, [*steps.tool(repository_policy("repository-docs")), check])
+def repository_docs(check: str) -> Declaration:
+    return (_tool_step(check, repository_policy("repository-docs"), check),)
 
 
-def docs_shape() -> None:
-    for check in DOCS_SHAPE:
-        repository_docs(check)
+def docs_shape() -> Declaration:
+    return tuple(step for check in DOCS_SHAPE for step in repository_docs(check))
 
 
-def source_contract(name: str) -> None:
-    steps.run(name, [*steps.tool(SOURCE_CONTRACT), name])
+def source_contract(name: str) -> Declaration:
+    return (_tool_step(name, SOURCE_CONTRACT, name),)
 
 
-def source_contract_checks() -> None:
-    for name in SOURCE_CONTRACTS:
-        source_contract(name)
+def source_contract_checks() -> Declaration:
+    return tuple(step for name in SOURCE_CONTRACTS for step in source_contract(name))
 
 
-def source_contracts() -> None:
-    static.run("ast-grep-tests", Mode.VERIFY)
-    static.run("no-full-reload", Mode.VERIFY)
-    source_contract_checks()
+def source_contracts() -> Declaration:
+    return (
+        _static("ast-grep-tests", Mode.VERIFY),
+        _static("no-full-reload", Mode.VERIFY),
+        *source_contract_checks(),
+    )
 
 
-def tsc_and_cargo_deny(mode: Mode, shared: bool = False) -> None:
-    leaf("tsc", mode, shared)
-    static.run("cargo-deny", mode)
+def tsc_and_cargo_deny(mode: Mode, shared: bool = False) -> Declaration:
+    return (*leaf("tsc", mode, shared), _static("cargo-deny", mode))
 
 
-def compile_checks(mode: Mode, shared: bool = False) -> None:
-    tsc_and_cargo_deny(mode, shared)
-    for name in static.CLIPPY:
-        static.run(name, mode)
+def compile_checks(mode: Mode, shared: bool = False) -> Declaration:
+    return (
+        *tsc_and_cargo_deny(mode, shared),
+        *(_static(name, mode) for name in static.CLIPPY),
+    )
 
 
-def elisp_checks(mode: Mode, shared: bool = False) -> None:
-    leaf("byte-compile", mode, shared)
-    leaf("ert", mode, shared)
+def elisp_checks(mode: Mode, shared: bool = False) -> Declaration:
+    return (*leaf("byte-compile", mode, shared), *leaf("ert", mode, shared))
 
 
 # Shared steps of the gates.
@@ -174,136 +206,171 @@ TOOLS_TESTS = (
 )
 
 
-def tools_tests() -> None:
-    # Compiled first with the run's own arguments, so `tools-tests` times the
-    # tests alone.
-    steps.run(
-        "tools-tests-build",
-        ["cargo", "test", "--no-run", *TOOLS_TESTS],
-        compiles=True,
+def tools_tests() -> Declaration:
+    return (
+        # Compiled first with the run's own arguments, so `tools-tests` times
+        # the tests alone.
+        _run(
+            "tools-tests-build",
+            "cargo",
+            "test",
+            "--no-run",
+            *TOOLS_TESTS,
+            compiles=True,
+        ),
+        _run("tools-tests", "cargo", "test", *TOOLS_TESTS, compiles=True),
     )
-    steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS], compiles=True)
 
 
-def host_tests() -> None:
-    tools_tests()
-    steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
-    steps.run("ruff-check", ["ruff", "check", "tools/dev"])
-    steps.run("mypy", ["mypy", "--strict", "tools/dev"])
-    steps.run("pytest", ["pytest", "tools/dev"])
+def host_tests() -> Declaration:
+    return (
+        *tools_tests(),
+        _run("ruff-format", "ruff", "format", "--check", "tools/dev"),
+        _run("ruff-check", "ruff", "check", "tools/dev"),
+        _run("mypy", "mypy", "--strict", "tools/dev"),
+        _run("pytest", "pytest", "tools/dev"),
+    )
 
 
 # Held for the whole of test-local: a concurrent test-local in this checkout
 # would otherwise replace the CSR bundle root or the image worker while a run's
 # tests still use them.
 HOST_ARTIFACTS_LOCK = ".xtask/host-artifacts.lock"
-# The step that builds `.#csrBundle`, and the name of its GC root.
+# The step that builds `.#csrBundle`, and the GC root that holds its output.
 CSR_BUNDLE = "csr-bundle"
+CSR_BUNDLE_ROOT = f"{steps.GCROOTS}/{CSR_BUNDLE}"
 
 
 def csr_bundle() -> str:
     """Builds `.#csrBundle` as its own step; returns the GC root that holds it."""
     steps.nix_build(CSR_BUNDLE, ".#csrBundle")
-    return f"{steps.GCROOTS}/{CSR_BUNDLE}"
+    return CSR_BUNDLE_ROOT
 
 
-def test_local(nextest_args: tuple[str, ...] = ()) -> None:
-    """Focused host-native tests against a verified CSR bundle and image worker.
+def _build_csr_bundle() -> None:
+    # As a step: the root it returns is the constant CSR_BUNDLE_ROOT.
+    csr_bundle()
 
-    JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
-    `nextest_args` select tests; none run the whole workspace.
-    """
+
+def _holding_host_artifacts_lock(inner: Declaration) -> None:
+    """Runs `inner` holding the checkout's host-artifacts lock throughout."""
     Path(HOST_ARTIFACTS_LOCK).parent.mkdir(parents=True, exist_ok=True)
     # Python opens files non-inheritable, so no step's child (or a daemon it
     # leaves behind, such as the kache daemon) holds the lock past this run.
     with open(HOST_ARTIFACTS_LOCK, "a") as lock:
         with steps.phase("host-artifacts-lock"):
             fcntl.flock(lock, fcntl.LOCK_EX)
-        bundle = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
-        if bundle is None:
-            steps.run(
-                "csr-admission", [*steps.tool(ADMIT_INPUTS), ".#csrBundle.sourceAdmits"]
-            )
-            bundle = csr_bundle()
+        steps.execute(inner)
+
+
+def _cargo_step(name: str, argv: list[str], bundle: str) -> Step:
+    """A Cargo step of test-local, against the CSR bundle at `bundle`."""
+
+    def step() -> None:
         # server's build script validates the bundle and fails closed. It runs
         # in server/ and tracks the variable's value, so the root is absolute
         # and resolved past the GC-root symlink: a new bundle is a new value.
-        root = os.path.realpath(bundle)
-        # One environment for every Cargo step below: build scripts track
-        # these (server's JAUNDER_CSR_BUNDLE_DIR, aws-lc-sys's CFLAGS), so any
-        # difference would rebuild between them. aws-lc-sys keys its
-        # FORTIFY_SOURCE handling on CFLAGS being present: set it empty when
-        # absent and keep an inherited value unchanged.
+        # The lock keeps that root fixed, so every Cargo step resolves the
+        # same one: build scripts track these (server's
+        # JAUNDER_CSR_BUNDLE_DIR, aws-lc-sys's CFLAGS), so any difference
+        # would rebuild between steps. aws-lc-sys keys its FORTIFY_SOURCE
+        # handling on CFLAGS being present: set it empty when absent and keep
+        # an inherited value unchanged.
         environment = {
             "CFLAGS": os.environ.get("CFLAGS", ""),
-            "JAUNDER_CSR_BUNDLE_DIR": root,
+            "JAUNDER_CSR_BUNDLE_DIR": os.path.realpath(bundle),
             "JAUNDER_TEST_EXECUTABLE": str(Path.cwd() / "target/debug/jaunder"),
         }
-        # Storage and seeding tests start the application worker, so it is
-        # built even when nextest selects only storage.
-        steps.run(
-            "image-worker",
-            ["cargo", "build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
-            environment=environment,
-            compiles=True,
+        steps.run(name, argv, environment=environment, compiles=True)
+
+    return step
+
+
+def test_local(nextest_args: tuple[str, ...] = ()) -> Declaration:
+    """Focused host-native tests against a verified CSR bundle and image worker.
+
+    JAUNDER_CSR_BUNDLE_DIR names a bundle to use instead of building one.
+    `nextest_args` select tests; none run the whole workspace.
+    """
+    root = os.environ.get("JAUNDER_CSR_BUNDLE_DIR")
+    bundle: Declaration = ()
+    if root is None:
+        root = CSR_BUNDLE_ROOT
+        bundle = (
+            _tool_step("csr-admission", ADMIT_INPUTS, ".#csrBundle.sourceAdmits"),
+            _build_csr_bundle,
         )
-        if not nextest_args:
-            # The tests compile apart from their run when `dev` chooses the
-            # selection. Hand-typed arguments may include run options nextest
-            # refuses with --no-run (--no-fail-fast), so they compile in the run.
-            steps.run(
+    # The tests compile apart from their run when `dev` chooses the selection.
+    # Hand-typed arguments may include run options nextest refuses with
+    # --no-run (--no-fail-fast), so they compile in the run.
+    nextest_build: Declaration = (
+        ()
+        if nextest_args
+        else (
+            _cargo_step(
                 "nextest-build",
                 ["cargo", "nextest", "run", "--no-run", "--workspace"],
-                environment=environment,
-                compiles=True,
-            )
-        steps.run(
-            "nextest",
-            ["pg-run", "cargo", "nextest", "run", *(nextest_args or ("--workspace",))],
-            environment=environment,
-            compiles=True,
+                root,
+            ),
         )
+    )
+    nextest = ["pg-run", "cargo", "nextest", "run", *(nextest_args or ("--workspace",))]
+    inner = (
+        *bundle,
+        # Storage and seeding tests start the application worker, so it is
+        # built even when nextest selects only storage.
+        _cargo_step(
+            "image-worker",
+            ["cargo", "build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
+            root,
+        ),
+        *nextest_build,
+        _cargo_step("nextest", nextest, root),
+    )
+    return (partial(_holding_host_artifacts_lock, inner),)
 
 
-def platform_contract() -> None:
-    steps.run(
-        "platform",
-        [
+def platform_contract() -> Declaration:
+    return (
+        _run(
+            "platform",
             "nix",
             "eval",
             "--impure",
             "--expr",
             'import ./nix/platform-contract.nix { flake = builtins.getFlake ("git+file://" + toString ./.); }',
-        ],
+        ),
     )
 
 
-def static_checks() -> None:
-    for check in STATIC_CHECKS:
-        steps.nix_check(check)
+def static_checks() -> Declaration:
+    return tuple(partial(steps.nix_check, check) for check in STATIC_CHECKS)
 
 
-def wasm_budget() -> None:
+def wasm_budget() -> Declaration:
     """Builds the CSR bundle as its own step, then measures that output."""
-    wasm_audit.budget(csr_bundle())
+    return (_build_csr_bundle, partial(wasm_audit.budget, CSR_BUNDLE_ROOT))
 
 
-def wasm_tests() -> None:
-    steps.nix_check("wasm-tests")
+def wasm_tests() -> Declaration:
+    return (partial(steps.nix_check, "wasm-tests"),)
 
 
 def _producer_and_gate(
     check: str,
     finished: Callable[[Span, int], None] | None = None,
     verdict: bool = False,
-) -> None:
+) -> Declaration:
     """Realizes a hermetic producer as a GC root, then its hard status gate.
 
     `finished` is as for the producer's `build` step and `verdict` as for both
     builds (`steps.nix_build`).
     """
-    steps.nix_check(check, steps.NIX_LOCK_FLAGS, finished=finished, verdict=verdict)
-    steps.nix_check(f"{check}-gate", steps.NIX_LOCK_FLAGS, keep=False, verdict=verdict)
+    flags = steps.NIX_LOCK_FLAGS
+    return (
+        partial(steps.nix_check, check, flags, finished=finished, verdict=verdict),
+        partial(steps.nix_check, f"{check}-gate", flags, keep=False, verdict=verdict),
+    )
 
 
 def _non_negative_int(value: object) -> bool:
@@ -365,81 +432,83 @@ def _coverage_stage_spans(build: Span, started_ns: int) -> None:
     trace.record_phases(build, started_ns, _coverage_stages(COVERAGE_ROOT))
 
 
-def coverage_workflow() -> None:
+def coverage_workflow() -> Declaration:
     # Rust coverage must execute for every tested commit (ADR-0192); static
     # doctests may be substituted.
-    _producer_and_gate("coverage", _coverage_stage_spans, verdict=True)
-    steps.run(
-        "coverage-policy",
-        [*steps.tool(COVERAGE_CHECK), "policy", "--out", COVERAGE_ROOT],
-        report.render,
+    return (
+        *_producer_and_gate("coverage", _coverage_stage_spans, verdict=True),
+        _tool_step(
+            "coverage-policy",
+            COVERAGE_CHECK,
+            "policy",
+            "--out",
+            COVERAGE_ROOT,
+            render=report.render,
+        ),
     )
 
 
-def doctests_workflow() -> None:
-    _producer_and_gate("doctests")
+def doctests_workflow() -> Declaration:
+    return _producer_and_gate("doctests")
 
 
-def elisp_coverage() -> None:
-    steps.nix_check("elisp-coverage-producer")
-    consume = [*steps.tool(COVERAGE_CHECK), "elisp-consume"]
-    steps.run("elisp-consume", consume, report.render)
+def elisp_coverage() -> Declaration:
+    return (
+        partial(steps.nix_check, "elisp-coverage-producer"),
+        _tool_step(
+            "elisp-consume", COVERAGE_CHECK, "elisp-consume", render=report.render
+        ),
+    )
 
 
 # Gates.
 
 
-def check_no_test() -> None:
-    host(Mode.FIX)
-    host_tests()
+def check_no_test() -> Declaration:
+    return (*host(Mode.FIX), *host_tests())
 
 
-def check() -> None:
+def check() -> Declaration:
     # Fix-mode check keeps a dirty tree: it runs the doctest producer without
     # the public `doctests` admission.
-    check_no_test()
-    test_local()
-    wasm_tests()
-    doctests_workflow()
+    return (*check_no_test(), *test_local(), *wasm_tests(), *doctests_workflow())
 
 
-def prepush() -> None:
+def prepush() -> Declaration:
     """On x86_64-linux the shared verdicts replace their host leaves, and every
     check runs inside index custody; elsewhere the host leaves run."""
-    clean_tree()
     shared = index.shares_verdicts()
-
-    def checks() -> None:
-        host(Mode.VERIFY, shared)
-        host_tests()
-        test_local()
-        doctests_workflow()
-
+    checks = (
+        *host(Mode.VERIFY, shared),
+        *host_tests(),
+        *test_local(),
+        *doctests_workflow(),
+    )
     if shared:
-        index.prepush(checks)
-    else:
-        checks()
+        return (clean_tree, partial(index.prepush, checks))
+    return (clean_tree, *checks)
 
 
-def validate_no_e2e() -> None:
-    clean_tree()
-    host(Mode.VERIFY)
-    platform_contract()
-    static_checks()
-    wasm_budget()
-    host_tests()
-    wasm_tests()
-    coverage_workflow()
-    doctests_workflow()
-    elisp_coverage()
+def validate_no_e2e() -> Declaration:
+    return (
+        clean_tree,
+        *host(Mode.VERIFY),
+        *platform_contract(),
+        *static_checks(),
+        *wasm_budget(),
+        *host_tests(),
+        *wasm_tests(),
+        *coverage_workflow(),
+        *doctests_workflow(),
+        *elisp_coverage(),
+    )
 
 
-def validate() -> None:
-    validate_no_e2e()
-    e2e.run_all("")
+def validate() -> Declaration:
+    return (*validate_no_e2e(), partial(e2e.run_all, ""))
 
 
-def ci_validate_host(advisories: bool) -> None:
+def ci_validate_host(advisories: bool) -> Declaration:
     """The host checks whose CI verdict the hermetic lane does not own.
 
     Every other host check is a step of a `STATIC_CHECKS` derivation, whose
@@ -452,60 +521,49 @@ def ci_validate_host(advisories: bool) -> None:
     and sources on every run, so only the advisory check is the host's
     (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
     """
-    clean_tree()
-    docs_shape()
-    source_contract_checks()
-    if advisories:
-        static.run("cargo-deny", Mode.VERIFY)
-    platform_contract()
-    tools_tests()
-    steps.run("pytest-repository", ["pytest", "-m", "repository", "tools/dev"])
+    return (
+        clean_tree,
+        *docs_shape(),
+        *source_contract_checks(),
+        *((_static("cargo-deny", Mode.VERIFY),) if advisories else ()),
+        *platform_contract(),
+        *tools_tests(),
+        _run("pytest-repository", "pytest", "-m", "repository", "tools/dev"),
+    )
 
 
-def docs_checks(mode: Mode) -> None:
+def docs_checks(mode: Mode) -> Declaration:
     """The checks a Markdown-only change needs (`rawdiff.markdown_only`)."""
-    markdown(mode)
-    docs_shape()
+    return (*markdown(mode), *docs_shape())
 
 
-def ci_validate_docs() -> None:
+def ci_validate_docs() -> Declaration:
     """CI's whole verdict for a Markdown-only change (`dev.scope`)."""
-    clean_tree()
-    docs_checks(Mode.VERIFY)
+    return (clean_tree, *docs_checks(Mode.VERIFY))
 
 
-def ci_validate_hermetic() -> None:
-    clean_tree()
-    static_checks()
-    wasm_budget()
+def ci_validate_hermetic() -> Declaration:
+    return (clean_tree, *static_checks(), *wasm_budget())
 
 
-def ci_validate_test_checks() -> None:
-    clean_tree()
-    wasm_tests()
-    doctests_workflow()
-    elisp_coverage()
+def ci_validate_test_checks() -> Declaration:
+    return (clean_tree, *wasm_tests(), *doctests_workflow(), *elisp_coverage())
 
 
-def coverage() -> None:
-    clean_tree()
-    coverage_workflow()
+def coverage() -> Declaration:
+    return (clean_tree, *coverage_workflow())
 
 
-def doctests() -> None:
-    clean_tree()
-    doctests_workflow()
+def doctests() -> Declaration:
+    return (clean_tree, *doctests_workflow())
 
 
-def _precommit_checks(markdown_only: bool) -> None:
+def _precommit_checks(markdown_only: bool) -> Declaration:
     """A Markdown-only change takes the Markdown-sensitive Fix checks, in order;
     any other change takes check-no-test."""
-    if markdown_only:
-        docs_checks(Mode.FIX)
-    else:
-        check_no_test()
+    return docs_checks(Mode.FIX) if markdown_only else check_no_test()
 
 
-def precommit() -> None:
+def precommit() -> Declaration:
     """Index custody selects the host checks and reconciles the index."""
-    index.precommit(_precommit_checks)
+    return (partial(index.precommit, _precommit_checks),)

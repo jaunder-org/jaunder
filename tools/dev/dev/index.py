@@ -22,6 +22,7 @@ import subprocess
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from functools import partial
 from typing import NoReturn
 
 from dev import steps, trace
@@ -451,10 +452,11 @@ SHARED_FLAGS = (*steps.NIX_FLAGS, *steps.NIX_LOCK_FLAGS)
 
 
 def custody(
-    name: str, admission: Callable[[], Snapshot], body: Callable[[], None]
+    name: str, admission: Callable[[], Snapshot], body: steps.Declaration
 ) -> None:
-    """Runs `body`, which requests shared Nix verdicts, between `admission` and
-    the mandatory post-check, both phases named after `name`.
+    """Runs the steps `body` declares, which request shared Nix verdicts,
+    between `admission` and the mandatory post-check, both phases named after
+    `name`.
 
     The Git flake reads worktree bytes: the admission proves they are the
     index's, and the post-check that no Git state changed while `body` ran. The
@@ -471,7 +473,7 @@ def custody(
         raise Refused(f"{name}-admission: {refused}") from refused
     failed: steps.StepFailed | None = None
     try:
-        body()
+        steps.execute(body)
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
@@ -497,9 +499,12 @@ def _fail(operation: str, message: str) -> NoReturn:
     raise steps.StepFailed(1, signalled=False, reason=message)
 
 
-def precommit(checks: Callable[[bool], None]) -> None:
-    """The pre-commit gate around `checks`, called with whether the change is
-    Markdown-only.
+def precommit(checks: Callable[[bool], steps.Declaration]) -> None:
+    """The pre-commit gate around the host checks `checks` declares, given
+    whether the change is Markdown-only.
+
+    Unlike a gate, it deliberately combines failures: a failed check is
+    recorded rather than ending the gate.
 
     The after-snapshot and one staging reconciliation run even when the checks
     fail. The exception is a signal: a check killed by signal n, or a
@@ -526,7 +531,7 @@ def precommit(checks: Callable[[bool], None]) -> None:
     failures: list[str] = []
     try:
         with steps.phase(host):
-            checks(markdown)
+            steps.execute(checks(markdown))
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
@@ -552,14 +557,14 @@ def precommit(checks: Callable[[bool], None]) -> None:
             custody(
                 "static-docs",
                 markdown_admission,
-                lambda: steps.nix_check("static-docs", SHARED_FLAGS),
+                (partial(steps.nix_check, "static-docs", SHARED_FLAGS),),
             )
         except Refused as refused:
             _fail("precommit", str(refused))
     print("[ ok ] precommit", flush=True)
 
 
-def prepush(checks: Callable[[], None]) -> None:
+def prepush(checks: steps.Declaration) -> None:
     """The pre-push gate's `checks`, which request shared verdicts, in custody
     on a clean tree."""
     try:

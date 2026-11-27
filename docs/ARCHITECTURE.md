@@ -4643,15 +4643,19 @@ the workflows those decisions defined keep their names, arguments and steps as
 the work. This is not a blanket Rust-necessity or permanent-ownership claim. The
 Rust gate catalogs, phases, execution-policy switches and old cargo workflow
 aliases are removed, not forwarded. A step is a Python function call that runs
-one argv list without a shell; composition is ordinary Python, a gate stops at
-its first failing step and exits with that child's status, and there is no
-gate-wide result contract. Each host tool prints its own single JSON step report
-on stdout, which `dev` renders, and its exit status is the verdict.
-`dev static <name>` supplies formatting, Prettier, ast-grep, byte-compilation,
-cargo-deny, TSC, ERT and the six Clippy definitions to host and hermetic
-consumers. The obsolete static catalog, duplicate Leptosfmt source and the
-compiled static-check command are retired. The remaining in-derivation endpoints
-moved into the crates that own their logic
+one argv list without a shell. A gate is a declaration, the tuple of its steps,
+run by one loop that catches nothing: the first failing step stops it, and the
+gate exits with that child's status. Among the gates' steps, only precommit's
+staging reconciliation, index custody's post-check and the e2e server-fn
+inventory catch a step's failure, deliberately. Values passed between steps
+(tool package outputs) live in an in-memory environment for the one gate run,
+and there is no gate-wide result contract. Each host tool prints its own single
+JSON step report on stdout, which `dev` renders, and its exit status is the
+verdict. `dev static <name>` supplies formatting, Prettier, ast-grep,
+byte-compilation, cargo-deny, TSC, ERT and the six Clippy definitions to host
+and hermetic consumers. The obsolete static catalog, duplicate Leptosfmt source
+and the compiled static-check command are retired. The remaining in-derivation
+endpoints moved into the crates that own their logic
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md)).
 
 On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with

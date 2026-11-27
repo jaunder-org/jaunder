@@ -199,7 +199,7 @@ popen = subprocess.Popen
 def terminate():
     os.kill(os.getpid(), signal.SIGTERM)
 {hook}
-sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: steps.run("demo", ["demo"])))
+sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (lambda: steps.run("demo", ["demo"]),)))
 """
 WHILE_OPENING = """\
 @contextlib.contextmanager
@@ -258,9 +258,9 @@ from dev import steps
 def judge(text):
     os.kill(os.getpid(), signal.SIGTERM)
     return None
-sys.exit(steps.gate(
-    Path.cwd(), "dev demo", lambda: steps.text("demo", ["demo"], refusal=judge)
-))
+def demo():
+    steps.text("demo", ["demo"], refusal=judge)
+sys.exit(steps.gate(Path.cwd(), "dev demo", lambda: (demo,)))
 """
 
 

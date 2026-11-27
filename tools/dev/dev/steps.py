@@ -1,7 +1,9 @@
 """Gates and their steps: each step is one traced child process.
 
-A gate stops at the first failing step and exits with that step's status. A
-child killed by signal n reports 128+n, as a shell would; Python reports such a
+A gate is a declaration, the steps it runs in order; `execute` is the one loop
+that runs them. A failing step raises `StepFailed` out of that loop, so the
+gate stops there, and `gate` turns it into the gate's exit status. A child
+killed by signal n reports 128+n, as a shell would; Python reports such a
 child's return code as -n.
 
 Termination requests sent to `dev` alone are handled for the whole gate. While
@@ -21,6 +23,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import FrameType
 from typing import Any, NoReturn
@@ -89,6 +92,35 @@ def changed(base: Mapping[str, str], changes: Environment | None) -> dict[str, s
     return environment
 
 
+# One unit of a gate: it runs its work and raises StepFailed if that fails.
+Step = Callable[[], None]
+# A gate's steps, in the order they run.
+Declaration = tuple[Step, ...]
+
+
+def execute(declaration: Declaration) -> None:
+    """Runs `declaration`'s steps in order; a failed step's StepFailed stops it.
+
+    The loop catches nothing: the failure reaches `gate`, which makes it the
+    gate's exit status, or a step that deliberately combines failures and runs
+    a declaration of its own (`index.precommit`).
+    """
+    for step in declaration:
+        step()
+
+
+@dataclass
+class Env:
+    """Values one step of a gate run produces for its later steps.
+
+    `gate` creates one per run; it lives in this `dev` process's memory for the
+    whole run and is never written anywhere, so no run sees another's values.
+    """
+
+    # The output path of each tool package this run has built (`tool`).
+    packages: dict[str, str] = field(default_factory=dict)
+
+
 class StepFailed(Exception):
     """A step's failure; `reason`, when given, says why better than its status."""
 
@@ -149,6 +181,7 @@ class _Signals:
 
 
 _signals = _Signals()
+_env = Env()
 
 
 REASON_LIMIT = 256
@@ -204,11 +237,17 @@ def _record_gate_outcome(
     span.set_attribute(FAILED_REASON, why)
 
 
-def gate(root: Path, name: str, body: Callable[[], None]) -> int:
-    """Runs `body`'s steps under the gate span `name`; returns the exit status."""
-    global _signals, _failure
+def gate(root: Path, name: str, declare: Callable[[], Declaration]) -> int:
+    """Runs the declaration `declare` builds under the gate span `name`;
+    returns the exit status.
+
+    It is built inside the gate, so a defect in building it ends the gate
+    failed in the trace like any other.
+    """
+    global _signals, _failure, _env
     _signals = _Signals()
     _failure = None
+    _env = Env()
     previous = {number: signal.signal(number, _signals.handle) for number in _HANDLED}
     try:
         with trace.run(root, name) as span:
@@ -217,7 +256,7 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
                 if _signals.deferred:
                     raise _Interrupted(_signals.deferred[0])
                 _signals.armed = True
-                body()
+                execute(declare())
             except StepFailed as failure:
                 code, signalled, reason = (
                     failure.code,
@@ -777,20 +816,18 @@ def nix_build(
     return paths
 
 
-# The output path of each tool package this process has built.
-_packages: dict[str, str] = {}
-
-
 def tool(wanted: Tool) -> list[str]:
     """The argv that runs `wanted`, its package built first as `<package>-build`.
 
-    A process builds each package once, however many of its binaries it runs.
+    A gate run builds each package once, on its first use, however many of its
+    binaries it runs; the run's `Env` holds the output.
     """
-    if wanted.package not in _packages:
-        _packages[wanted.package] = nix_build(
+    packages = _env.packages
+    if wanted.package not in packages:
+        packages[wanted.package] = nix_build(
             f"{wanted.package}-build", f".#{wanted.package}", keep=False
         )
-    return [f"{_packages[wanted.package]}/bin/{wanted.binary}"]
+    return [f"{packages[wanted.package]}/bin/{wanted.binary}"]
 
 
 def nix_check(

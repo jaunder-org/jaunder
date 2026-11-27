@@ -6,6 +6,7 @@
 - Amended: 2026-11-25 — the wasm budget runs in-process in `dev` (#2101)
 - Amended: 2026-11-25 — `admit-inputs` moves to host-tool; `csr-prerequisite` is
   retired (#2102)
+- Amended: 2026-11-27 — gates are declarations run by one fail-fast loop (#2151)
 
 ## Context
 
@@ -56,6 +57,34 @@ records locally or from CI artifacts.
 Tracing never changes a step's exit status or output. traced-run keeps only its
 output-parking runner; its launcher, span, recorder and workflow-folding code is
 retired.
+
+_Amended by [#2151](https://github.com/jaunder-org/jaunder/issues/2151):_ a
+gate, CI lane or host check group in `tools/dev/dev/gates.py` is a declaration,
+the tuple of steps it runs in order, and never runs a step itself. Groups are
+functions that return tuples, and gates concatenate them. One loop,
+`steps.execute`, runs a declaration. It catches nothing: a failed step's
+`StepFailed` leaves the loop, so no later step runs, and `steps.gate` turns it
+into the gate's exit status. Fail-fast is therefore one loop's property, pinned
+by one test, while per-gate tests pin each population and its order.
+`steps.gate` builds the declaration inside the gate, after the checkout root is
+entered, so choices that depend on the host or the environment, such as whether
+prepush takes the shared Nix verdicts or a given `JAUNDER_CSR_BUNDLE_DIR`, are
+made there. Every other `dev` workflow runs as a declaration of one step.
+
+Values a step produces for later steps live in the run's environment (`Env`),
+which `steps.gate` creates for each run. It stays in the `dev` process's memory
+for that run and is never written anywhere; it holds the output path of each
+tool package the run has built, which is still built lazily on its first use. A
+step that holds a resource across others wraps a sub-declaration: test-local
+runs its steps through the same loop inside the `host-artifacts-lock` it holds,
+and each Cargo step resolves the bundle root as it starts. Among the gates'
+steps, three catch `StepFailed` on purpose: precommit records a failed check and
+still reconciles staging, index custody (precommit's `static-docs` request and
+prepush's checks) still runs its post-check, and the e2e server-fn inventory
+turns a failed listing into an evidence refusal. Custody, like test-local, runs
+the declaration it is given through the same loop. Each re-raises a signal.
+Steps keep raising rather than returning a result, because a returned status,
+once discarded, is invisible to mypy and ruff.
 
 Work a gate performs is a visible `dev` step, not hidden inside a tool
 ([#1962](https://github.com/jaunder-org/jaunder/issues/1962)):

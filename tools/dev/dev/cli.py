@@ -4,6 +4,7 @@ import dataclasses
 import os
 import re
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +33,16 @@ from dev import (
 from dev.static import Mode
 
 
-def _gate(body: Callable[[], None], sandbox: bool = False) -> None:
-    """Runs a workflow from the checkout root, or in place inside a Nix sandbox."""
+def _gate(declare: Callable[[], steps.Declaration], sandbox: bool = False) -> None:
+    """Runs a declared workflow from the checkout root, or in place inside a
+    Nix sandbox."""
     context = click.get_current_context()
-    context.exit(steps.gate(checkout.enter(sandbox), context.command_path, body))
+    context.exit(steps.gate(checkout.enter(sandbox), context.command_path, declare))
+
+
+def _body(body: steps.Step, sandbox: bool = False) -> None:
+    """Runs a workflow that is one step of its own, as `_gate` does."""
+    _gate(lambda: (body,), sandbox)
 
 
 @click.group()
@@ -51,10 +58,12 @@ mode_argument = click.argument(
 )
 
 
-def _workflow(name: str, body: Callable[[], None], summary: str) -> None:
+def _workflow(
+    name: str, declare: Callable[[], steps.Declaration], summary: str
+) -> None:
     @cli.command(name, help=summary)
     def command() -> None:
-        _gate(body)
+        _gate(declare)
 
 
 _workflow(
@@ -117,7 +126,7 @@ _workflow(
 
 _workflow(
     "advisory-scan",
-    advisories.scan,
+    lambda: (advisories.scan,),
     "Daily scan of main: cargo-deny advisories, one issue per failing advisory.",
 )
 _workflow("coverage", gates.coverage, "Clean tree, then Rust coverage and CRAP policy.")
@@ -146,7 +155,7 @@ _workflow(
 @click.argument("check")
 def nix_check(check: str) -> None:
     """Build the flake check CHECK as one traced step with its cache state."""
-    _gate(lambda: steps.nix_check(check))
+    _body(lambda: steps.nix_check(check))
 
 
 @cli.command("format")
@@ -181,7 +190,7 @@ def source_contract(name: str) -> None:
 @mode_argument
 def static_all(mode: Mode) -> None:
     """Every host static leaf in order, each prepared from this checkout."""
-    _gate(lambda: static.run_all(mode))
+    _body(lambda: static.run_all(mode))
 
 
 @cli.command("adr-format")
@@ -207,13 +216,20 @@ class _Forwarding(click.Command):
 
 def _forwarding(
     name: str,
-    body: Callable[[tuple[str, ...]], None],
+    declare: Callable[[tuple[str, ...]], steps.Declaration],
     summary: str,
 ) -> None:
     def command(args: tuple[str, ...]) -> None:
-        _gate(lambda: body(args))
+        _gate(lambda: declare(args))
 
     cli.add_command(_Forwarding(name, callback=command, help=summary))
+
+
+def _one_step(
+    body: Callable[[tuple[str, ...]], None],
+) -> Callable[[tuple[str, ...]], steps.Declaration]:
+    """A forwarding workflow that is one step of its own."""
+    return lambda args: (partial(body, args),)
 
 
 _forwarding(
@@ -223,17 +239,19 @@ _forwarding(
     "(none: the workspace).",
 )
 _forwarding(
-    "sandbox", forwarding.sandbox, "Run the UX sandbox with ARGS, kept as argv."
+    "sandbox",
+    _one_step(forwarding.sandbox),
+    "Run the UX sandbox with ARGS, kept as argv.",
 )
 _forwarding(
     "pg-run",
-    forwarding.pg_run,
+    _one_step(forwarding.pg_run),
     "Run a command against a throwaway PostgreSQL cluster "
     "(JAUNDER_PG_TEST_URL exported).",
 )
 _forwarding(
     "coverage-check",
-    forwarding.coverage_check,
+    _one_step(forwarding.coverage_check),
     "Manual coverage evidence tools: probe-source | wasm-probe | wasm-measure.",
 )
 
@@ -262,9 +280,9 @@ def wasm_audit_report(site_path: str | None, breakdown: bool, wasm: str | None) 
     if site_path is not None and breakdown:
         raise click.UsageError("--site-path is the shipped bundle; --breakdown is not")
     if breakdown:
-        _gate(lambda: wasm_audit.breakdown(wasm or wasm_audit.csr_wasm()))
+        _body(lambda: wasm_audit.breakdown(wasm or wasm_audit.csr_wasm()))
     else:
-        _gate(lambda: wasm_audit.report(site_path or gates.csr_bundle()))
+        _body(lambda: wasm_audit.report(site_path or gates.csr_bundle()))
 
 
 @cli.command("upgrade-test")
@@ -278,7 +296,7 @@ def upgrade_test(revision: str | None, tag: str | None, backend: str) -> None:
     """
     if revision is not None and tag is not None:
         raise click.UsageError("--from and --tag are exclusive")
-    _gate(lambda: upgrade.run(revision, tag, backend))
+    _body(lambda: upgrade.run(revision, tag, backend))
 
 
 @cli.command("upgrade-dispatch")
@@ -290,14 +308,14 @@ def upgrade_test(revision: str | None, tag: str | None, backend: str) -> None:
 )
 def upgrade_dispatch(revision: str | None, ref: str) -> None:
     """Start the CI upgrade workflow."""
-    _gate(lambda: upgrade.dispatch(revision, ref))
+    _body(lambda: upgrade.dispatch(revision, ref))
 
 
 @cli.command("build-csr")
 @click.argument("profile", type=click.Choice(["debug", "release"]), default="debug")
 def build_csr(profile: str) -> None:
     """Build the checkout's CSR bundle into target/site."""
-    _gate(lambda: csr.build(profile))
+    _body(lambda: csr.build(profile))
 
 
 @cli.command("perf")
@@ -310,28 +328,28 @@ def build_csr(profile: str) -> None:
 @click.argument("revisions", default="")
 def perf_command(**request: str) -> None:
     """Measure the selected performance producers, keeping each one's evidence."""
-    _gate(lambda: perf.measure(perf.Request(**request)))
+    _body(lambda: perf.measure(perf.Request(**request)))
 
 
 @cli.command("perf-compare")
 @click.argument("result")
 def perf_compare(result: str) -> None:
     """Compare RESULT with the committed baseline; advisory only."""
-    _gate(lambda: perf.compare(result))
+    _body(lambda: perf.compare(result))
 
 
 @cli.command("perf-import-baseline")
 @click.argument("run_id", type=click.IntRange(min=1))
 def perf_import_baseline(run_id: int) -> None:
     """Replace the baseline from an authenticated CI run RUN_ID."""
-    _gate(lambda: perf.import_baseline(run_id))
+    _body(lambda: perf.import_baseline(run_id))
 
 
 @cli.command("e2e")
 @click.argument("jobs", default="")
 def e2e_command(jobs: str) -> None:
     """Every E2E producer, at most JOBS at once, then every reconciliation."""
-    _gate(lambda: e2e.run_all(jobs))
+    _body(lambda: e2e.run_all(jobs))
 
 
 @cli.command("e2e-local")
@@ -368,20 +386,20 @@ def e2e_local_command(
         raise click.UsageError("--update-visual-snapshots conflicts with --browser")
     if update_visual_snapshots and test is not None:
         raise click.UsageError("--update-visual-snapshots conflicts with TEST")
-    _gate(lambda: e2e_local.run(browser, test, update_visual_snapshots))
+    _body(lambda: e2e_local.run(browser, test, update_visual_snapshots))
 
 
 @cli.command("e2e-producer")
 @click.argument("lane")
 def e2e_producer(lane: str) -> None:
     """One isolated E2E producer LANE, as CI runs it."""
-    _gate(lambda: e2e.producer(lane))
+    _body(lambda: e2e.producer(lane))
 
 
 @cli.command("e2e-regenerate-coverage")
 def e2e_regenerate_coverage() -> None:
     """Regenerate the server-function coverage snapshot from fresh SQLite/Chromium lanes."""
-    _gate(e2e.regenerate_coverage)
+    _body(e2e.regenerate_coverage)
 
 
 @cli.command("e2e-reconcile")
@@ -390,14 +408,14 @@ def e2e_regenerate_coverage() -> None:
 @click.argument("artifacts", default=".xtask/diagnostics")
 def e2e_reconcile(backend: str, browser: str, artifacts: str) -> None:
     """Reconcile BACKEND/BROWSER producer ARTIFACTS without building any producer."""
-    _gate(lambda: e2e.reconcile(backend, browser, artifacts))
+    _body(lambda: e2e.reconcile(backend, browser, artifacts))
 
 
 @cli.command("issue-discover")
 @click.argument("milestone")
 def issue_discover(milestone: str) -> None:
     """Exhaustive read-only candidates in MILESTONE; never claims work."""
-    _gate(lambda: issues.discover(milestone))
+    _body(lambda: issues.discover(milestone))
 
 
 def _issue_decisions(command: Callable[..., None]) -> Callable[..., None]:
@@ -412,7 +430,7 @@ def _issue_decisions(command: Callable[..., None]) -> Callable[..., None]:
 @_issue_decisions
 def issue_create(blockers: tuple[str, ...], **decisions: str) -> None:
     """Create an issue from explicit decisions; gh mutates, readback verifies."""
-    _gate(lambda: issues.create(issues.Decisions(**decisions), blockers))
+    _body(lambda: issues.create(issues.Decisions(**decisions), blockers))
 
 
 @cli.command("issue-edit")
@@ -420,7 +438,7 @@ def issue_create(blockers: tuple[str, ...], **decisions: str) -> None:
 @_issue_decisions
 def issue_edit(number: str, blockers: tuple[str, ...], **decisions: str) -> None:
     """Replace issue NUMBER's metadata with explicit decisions; readback verifies."""
-    _gate(lambda: issues.edit(number, issues.Decisions(**decisions), blockers))
+    _body(lambda: issues.edit(number, issues.Decisions(**decisions), blockers))
 
 
 _SHA = re.compile("[0-9a-f]{40}")
@@ -501,7 +519,7 @@ def pr_watch_command(**options: Any) -> None:
     # Queue history is evidence about one head only.
     if watch.observed_queued_head not in (None, watch.expected_head):
         raise click.UsageError("observed queued head must equal expected head")
-    _gate(lambda: pr_watch.run(watch))
+    _body(lambda: pr_watch.run(watch))
 
 
 @cli.command("pr-land")
@@ -518,7 +536,7 @@ def pr_land_command(number: int, expected_head: str, reenqueue: bool) -> None:
 
     Prior recorded exact PR/head human approval is mandatory, not inferred here.
     """
-    _gate(lambda: pr_land.run(pr_land.Land(number, expected_head, reenqueue)))
+    _body(lambda: pr_land.run(pr_land.Land(number, expected_head, reenqueue)))
 
 
 @cli.command("pr-cleanup")
@@ -527,7 +545,7 @@ def pr_land_command(number: int, expected_head: str, reenqueue: bool) -> None:
 @click.argument("ownership")
 def pr_cleanup(number: str, expected_head: str, ownership: str) -> None:
     """Clean up after a merged PR; the caller must verify unmanaged OWNERSHIP."""
-    _gate(lambda: forwarding.pr_cleanup(number, expected_head, ownership))
+    _body(lambda: forwarding.pr_cleanup(number, expected_head, ownership))
 
 
 @cli.group("static")
@@ -553,7 +571,7 @@ def _static_command(name: str, summary: str) -> None:
         if sandbox and static.missing_home(name):
             raise click.ClickException("sandbox Cargo home is missing")
         mode = Mode.FIX if fix else Mode.VERIFY
-        _gate(lambda: static.run(name, mode, sandbox), sandbox)
+        _body(lambda: static.run(name, mode, sandbox), sandbox)
 
 
 for _name, _leaf in static.LEAVES.items():
@@ -649,7 +667,7 @@ def trace_analysis_analyze(
     dev trace-analysis analyze --top 40 --project firefox a.jsonl b.jsonl
     dev trace-analysis analyze --playwright-report report.json traces.jsonl
     """
-    _gate(
+    _body(
         lambda: trace_analysis.analyze_command(
             top, trace, project, playwright_reports, files
         )
@@ -675,7 +693,7 @@ def trace_analysis_run(
 ) -> None:
     """Build every enabled e2e lane check (or the single-worker packages) for
     both backends, then analyze their captures."""
-    _gate(lambda: trace_analysis.run_command(top, trace, single_worker, browser))
+    _body(lambda: trace_analysis.run_command(top, trace, single_worker, browser))
 
 
 @trace_analysis_group.command("boot-phases")
@@ -688,4 +706,4 @@ def trace_analysis_boot_phases(files: tuple[Path, ...]) -> None:
     `mount_done.startTime`; the Node-side `commitToMountMs` and the skew between
     the two frames are reported, never decomposed.
     """
-    _gate(lambda: trace_analysis.boot_phases_command(files))
+    _body(lambda: trace_analysis.boot_phases_command(files))
