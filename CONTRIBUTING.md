@@ -1408,8 +1408,6 @@ records:
   build, and the step judges the one output its `build.json` selected;
 - `jaunder.nix.output` and `jaunder.nix.fetched_bytes`, for the Nix build steps
   `dev` itself builds (not `e2e-producer`);
-- `jaunder.nix.retried`, on a `build` step whose `nix build` exited 1 and ran
-  once more;
 - `jaunder.kache.hits`, `jaunder.kache.misses` and
   `jaunder.kache.avoided_compile_ms`, for the host Cargo steps that compile: the
   Clippy leaves, `tools-tests-build`, `tools-tests`, `image-worker`,
@@ -1441,28 +1439,29 @@ A Nix build step of a flake installable has two child steps: `eval`
 `build` (`nix build`) builds it from that cache, so the flake is evaluated once
 and the evaluation is timed. A derivation-path installable has only `build`.
 `jaunder.nix.output` is the one output path the build prints, and
-`jaunder.cache` describes only that path. A `build` whose `nix build` exits 1,
-which Nix does when no builder failed (a dropped substitute download, #2135),
-runs it once more within the same step and records `jaunder.nix.retried`, unless
-a signal arrived while it ran. Exits 100 to 104, builder failures, are not
-retried. `scripts/nix-retry` retries the same way for the `e2e-producer` build
-in `scripts/e2e-workflow` and in CI, where each job enters its dev shell through
-it before any other `nix develop` step and runs any direct `nix build` through
-it. `nix path-info` reports when the local store registered it: `reused` if
-before the second the build started (after `eval`), otherwise `built` if it is
-`ultimate` and `substituted` if not. Unless it is `reused`,
-`jaunder.nix.fetched_bytes` sums the unpacked size of the paths in the build's
-closure (`nix-store --query --requisites --include-outputs`) that are not
-derivations, were registered from the start second on and are not `ultimate`:
-what substituters supplied. A path the previous step registered in that same
-second counts too; fixed-output downloads are `ultimate` and do not. A path
-registered within the start second, a build printing several paths, or a failed
-query records less, never more, and never changes the step. This assumes the
-registration time is local, as for local builds and binary-cache substitution:
-Nix keeps a source store's registration time when copying a path in, so an
-output from a remote builder, an `ssh-ng://` or `local://` substituter or
-`nix copy` may read as `reused`. It says nothing about the output's
+`jaunder.cache` describes only that path. `nix path-info` reports when the local
+store registered it: `reused` if before the second the build started (after
+`eval`), otherwise `built` if it is `ultimate` and `substituted` if not. Unless
+it is `reused`, `jaunder.nix.fetched_bytes` sums the unpacked size of the paths
+in the build's closure (`nix-store --query --requisites --include-outputs`) that
+are not derivations, were registered from the start second on and are not
+`ultimate`: what substituters supplied. A path the previous step registered in
+that same second counts too; fixed-output downloads are `ultimate` and do not. A
+path registered within the start second, a build printing several paths, or a
+failed query records less, never more, and never changes the step. This assumes
+the registration time is local, as for local builds and binary-cache
+substitution: Nix keeps a source store's registration time when copying a path
+in, so an output from a remote builder, an `ssh-ng://` or `local://` substituter
+or `nix copy` may read as `reused`. It says nothing about the output's
 dependencies, and no other step records a cache value.
+
+`scripts/nix-retry` runs `nix "$@"`, and once more if it exits 1. A dropped
+substitute download exits 1 (#2135, NixOS/nix#16722), and the second attempt
+fetches afresh. A builder failure exits 1 as well, through the daemon or
+`nix build`, so it fails twice. It wraps only commands that rarely build: the
+`e2e-producer` build in `scripts/e2e-workflow`, and CI's dev-shell entry, which
+each job runs before any other `nix develop` step. `dev`'s own builds do not
+retry.
 
 Once the `coverage` step's `build` ends, `dev` reads `status.json` through the
 `coverage` GC root. Every stage that started records `started_unix_ms` (wall

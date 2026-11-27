@@ -280,8 +280,8 @@ jobs:
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build UX sandbox helper for Cachix
         run:
-          scripts/nix-retry build --no-update-lock-file --no-write-lock-file
-          --no-link .#ux-sandbox
+          nix build --no-update-lock-file --no-write-lock-file --no-link
+          .#ux-sandbox
       - name: Enter the ci-nix shell
         run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate test checks lane (via dev)
@@ -289,7 +289,7 @@ jobs:
           nix develop .#ci-nix --accept-flake-config -c dev ci-validate-test-checks
       - name: Build Emacs package for Cachix
         run:
-          scripts/nix-retry build --accept-flake-config --no-link
+          nix build --accept-flake-config --no-link
           .#emacsPackages.x86_64-linux.jaunder
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary

@@ -1,9 +1,8 @@
 """`scripts/nix-retry`, and the workflow jobs that enter their shell with it.
 
-Nix exits 1 when no builder failed, as when a substitute download fails
-(#2135): the script runs such a command once more. Each job enters its dev
-shell through it before any other `nix develop` step, so those steps find the
-shell already realised; a direct `nix build` step goes through it too.
+Nix exits 1 when a substitute download fails (#2135): the script runs such a
+command once more. Each job enters its dev shell through it before any other
+`nix develop` step, so those steps find the shell already realised.
 """
 
 import os
@@ -24,8 +23,6 @@ WORKFLOWS = [
     for name in ("advisories.yml", "ci.yml", "mutants.yml", "upgrade.yml")
 ]
 SHELL = re.compile(r"nix develop (\.#[\w-]+)")
-# `nix build` as a command, not inside `scripts/nix-retry build`.
-BUILD = re.compile(r"(?:^|[\s;&|(])nix build")
 
 # Records its arguments, then exits with the next of NIX_BUILD_CODE, a
 # comma-separated status per attempt (the last repeats), as conftest's fake does.
@@ -98,7 +95,6 @@ def test_each_job_enters_its_dev_shell_through_nix_retry_first() -> None:
             runs = [step.get("run", "") for step in steps(job)]
             shells = {shell for run in runs for shell in SHELL.findall(run)}
             assert len(shells) <= 1, where
-            assert not [run for run in runs if BUILD.search(run)], where
             if not shells:
                 continue
             (shell,) = shells
