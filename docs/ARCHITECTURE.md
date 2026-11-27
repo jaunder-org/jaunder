@@ -4678,9 +4678,9 @@ from its lifted OTLP capture: every span below the parent injected into
 Playwright, with plain-valued attributes, `otel.status_code` and no
 `jaunder.status`. It writes the whole tree only when every top-level span fits
 inside the phase, and otherwise none of it
-([e2e capture spans](adr/drafts/dev-trace-shows-e2e-capture-spans.md)). Rust
-host tools come from their flake packages, each built as its own
-`<package>-build` Nix step and run from its output
+([e2e capture spans](adr/0271-dev-trace-shows-e2e-capture-spans.md)). Rust host
+tools come from their flake packages, each built as its own `<package>-build`
+Nix step and run from its output
 ([`dev` runs Nix-built host tools](adr/0258-dev-runs-nix-built-host-tools.md)),
 and test runs compile in `--no-run` build steps first, so a tool or test span
 never times the compiler. The root span records its runner (CPU model, usable
