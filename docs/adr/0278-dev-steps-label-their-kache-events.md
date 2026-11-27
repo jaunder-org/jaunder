@@ -1,16 +1,15 @@
-# ADR-DRAFT: Compiling dev steps label their kache events and record its counts
+# ADR-0278: Compiling dev steps label their kache events and record its counts
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Issue: [#2146](https://github.com/jaunder-org/jaunder/issues/2146)
 
 ## Context
 
-[ADR-0254](../0254-dev-trace-step-accounting.md) made each `dev` step span time
-one kind of work. It gave Nix steps a cache source, but Cargo steps recorded
-nothing about the kache compile cache
-([ADR-0256](../0256-kache-compile-cache.md)). A retrospective could not tell how
-much compilation kache spared a Cargo step.
+[ADR-0254](0254-dev-trace-step-accounting.md) made each `dev` step span time one
+kind of work. It gave Nix steps a cache source, but Cargo steps recorded nothing
+about the kache compile cache ([ADR-0256](0256-kache-compile-cache.md)). A
+retrospective could not tell how much compilation kache spared a Cargo step.
 
 kache 2.1.1 labels every compile's event with a build tree, by default the Cargo
 workspace. `kache stats --json --last-build --root <tree>` reports that tree's

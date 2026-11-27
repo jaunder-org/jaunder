@@ -4687,7 +4687,7 @@ Cargo step that compiles labels its kache events with a build tree of its own
 (`KACHE_EVENT_ROOT`, a path never created), then asks `kache stats --last-build`
 for that tree and records `jaunder.kache.hits`, `jaunder.kache.misses` and
 `jaunder.kache.avoided_compile_ms`. A query that does not answer records nothing
-([compiling steps label their kache events](adr/drafts/dev-steps-label-their-kache-events.md)).
+([compiling steps label their kache events](adr/0278-dev-steps-label-their-kache-events.md)).
 When a producer times its own phases where it cannot trace (the Rust coverage
 producer's `status.json` stages, an E2E lane's VM phase manifest), `dev` writes
 them afterwards as children of the step that ran it, at the producer's recorded
@@ -4877,10 +4877,10 @@ CI invokes four independent commands: `dev ci-validate-host`,
 `static-code`'s `clippy-aggregate`), the `csrBundle` build and the wasm budget
 ([CI Clippy verdict from Nix](adr/0255-ci-clippy-verdict-from-nix.md)). `host`
 repeats no verdict a hermetic check owns
-([hermetic verdicts not repeated on host](adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md)):
+([hermetic verdicts not repeated on host](adr/0277-ci-hermetic-verdicts-not-repeated-on-host.md)):
 it runs only the docs-shape and source-contract checks, the platform contract,
 `cargo-deny`'s RustSec advisories on a dependency change
-([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)),
+([CI checks advisories only on a dependency change](adr/0276-ci-checks-advisories-on-dependency-change.md)),
 the tools Cargo tests, and the `dev` tests marked `repository`, which need the
 repository, jq or Nix and which `dev-python` therefore deselects; `test-checks`
 owns wasm tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage
@@ -5019,7 +5019,7 @@ CI, and clears inherited `GIT_*` overrides before calling Git. kache otherwise
 runs on its defaults: one per-user store serves every worktree. The one
 exception is the per-step `KACHE_EVENT_ROOT` of compiling steps above. It costs
 `kache explain` its same-tree baseline for `dev` builds
-([compiling steps label their kache events](adr/drafts/dev-steps-label-their-kache-events.md)).
+([compiling steps label their kache events](adr/0278-dev-steps-label-their-kache-events.md)).
 In CI only `validate-host` persists its store through the Actions cache, saved
 by `main` and restored by pull requests and the merge queue. Dev and test builds
 emit line-table debug info only
@@ -5181,8 +5181,8 @@ unreadable diff counts as a change. A push to `main` never checks advisories.
 The daily `advisories.yml` workflow runs `dev advisory-scan` on both workspaces
 of `main` instead, and comments on or opens one issue per failing advisory.
 Local gates keep the full check on both workspaces
-([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
-[cargo-deny checks every Cargo workspace](adr/drafts/cargo-deny-checks-every-workspace.md)).
+([CI checks advisories only on a dependency change](adr/0276-ci-checks-advisories-on-dependency-change.md),
+[cargo-deny checks every Cargo workspace](adr/0275-cargo-deny-checks-every-workspace.md)).
 
 #### Shared static-check definitions
 
@@ -5616,8 +5616,8 @@ the sole command-capture interface.
   mode. The CI host lane runs it only for a dependency change
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
-  [CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
-  [cargo-deny checks every Cargo workspace](adr/drafts/cargo-deny-checks-every-workspace.md),
+  [CI checks advisories only on a dependency change](adr/0276-ci-checks-advisories-on-dependency-change.md),
+  [cargo-deny checks every Cargo workspace](adr/0275-cargo-deny-checks-every-workspace.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
   [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).

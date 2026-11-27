@@ -1,12 +1,12 @@
-# ADR-DRAFT: CI does not repeat hermetic verdicts in the host lane
+# ADR-0277: CI does not repeat hermetic verdicts in the host lane
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2144](https://github.com/jaunder-org/jaunder/issues/2144)
 
 ## Context
 
-[CI takes its Clippy verdict from Nix](../0255-ci-clippy-verdict-from-nix.md)
+[CI takes its Clippy verdict from Nix](0255-ci-clippy-verdict-from-nix.md)
 removed host Clippy from `dev ci-validate-host` because the hermetic lane's
 `static-code` already decided it. The other host steps with a hermetic twin were
 never revisited, so CI still decided each of them twice:
@@ -42,9 +42,9 @@ host lane. `dev ci-validate-host` runs only what Nix cannot check, or does not:
 - the tools Cargo tests (which also keep the lane as `main`'s kache writer);
 - the `repository` tests: `pytest -m repository tools/dev`;
 - `cargo-deny`, for its RustSec advisories, which the sandboxed copy skips
-  ([ADR-0145](../0145-sandbox-cargo-deny-skips-advisories.md)), only on a
+  ([ADR-0145](0145-sandbox-cargo-deny-skips-advisories.md)), only on a
   dependency change
-  ([CI checks advisories only on a dependency change](../drafts/ci-checks-advisories-on-dependency-change.md)).
+  ([CI checks advisories only on a dependency change](0276-ci-checks-advisories-on-dependency-change.md)).
 
 The `dev` tests are split by a pytest marker, not by skipping. A test that needs
 the repository outside `tools/dev`, jq or Nix is marked `repository`;
@@ -60,7 +60,7 @@ superset of the CI lanes.
 
 This generalises ADR-0255, whose note that the host lane "still runs `tsc` and
 `cargo-deny`" no longer holds for `tsc`, and narrows the `host` lane of
-[distributed CI lane topology](../0203-distribute-ci-validation-and-firefox-e2e-lanes.md)
+[distributed CI lane topology](0203-distribute-ci-validation-and-firefox-e2e-lanes.md)
 further: the hermetic lane owns each verdict it can decide.
 
 ## Consequences
@@ -72,7 +72,7 @@ further: the hermetic lane owns each verdict it can decide.
 - When `tools/dev` is unchanged, `dev-python` is substituted from Cachix, so CI
   does not rerun the non-`repository` tests for that input. That is the same
   verdict for the same derivation
-  ([substitutable static verdicts](../0252-substitutable-static-verdicts.md)).
+  ([substitutable static verdicts](0252-substitutable-static-verdicts.md)).
 - A new host step with a hermetic twin must not be added to `ci-validate-host`;
   `tools/dev/tests/test_gates.py` pins the dropped steps against the owning
   derivations in `nix/checks.nix`.

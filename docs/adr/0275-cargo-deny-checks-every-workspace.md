@@ -1,12 +1,12 @@
-# ADR-DRAFT: cargo-deny checks every Cargo workspace
+# ADR-0275: cargo-deny checks every Cargo workspace
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-27
 - Issue: [#2163](https://github.com/jaunder-org/jaunder/issues/2163)
 
 ## Context
 
-[CI checks advisories only on a dependency change](../drafts/ci-checks-advisories-on-dependency-change.md)
+[CI checks advisories only on a dependency change](0276-ci-checks-advisories-on-dependency-change.md)
 left the `tools/` workspace outside cargo-deny in every lane: the local gates,
 both CI lanes and the daily scan ran `cargo deny check` from the root, which
 resolves the product workspace alone. As of 2026-11-27, `tools/Cargo.lock` held

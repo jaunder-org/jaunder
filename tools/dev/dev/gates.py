@@ -179,7 +179,7 @@ def source_contracts() -> Declaration:
 
 def cargo_deny(mode: Mode) -> Declaration:
     """Both Cargo workspaces' dependency policy
-    (docs/adr/drafts/cargo-deny-checks-every-workspace.md).
+    (docs/adr/0275-cargo-deny-checks-every-workspace.md).
 
     It runs after the other compile checks, and last in the CI host lane: a
     newly published advisory is one the change at hand may have no way to fix,
@@ -521,13 +521,13 @@ def ci_validate_host(advisories: bool) -> Declaration:
 
     Every other host check is a step of a `STATIC_CHECKS` derivation, whose
     verdict CI takes instead
-    (docs/adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md); the
+    (docs/adr/0277-ci-hermetic-verdicts-not-repeated-on-host.md); the
     `repository` tests are those `checks.dev-python` deselects.
 
     cargo-deny runs only with `advisories`, which CI passes for a change to
     either workspace's dependencies (`dev.scope`): the hermetic lane checks
     bans, licenses and sources on every run, so only the advisory check is the
-    host's (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
+    host's (docs/adr/0276-ci-checks-advisories-on-dependency-change.md).
     """
     return (
         clean_tree,

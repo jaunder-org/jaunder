@@ -677,7 +677,7 @@ def _record_cache(span: Span, path: str, start: int) -> Cache | None:
 # tree's Cargo commands until it is idle for five minutes. A compiling step's
 # events carry a tree of their own, under the checkout and never created, so its
 # session is exactly its compiles. kache's own tools then see each step run as
-# its own tree (docs/adr/drafts/dev-steps-label-their-kache-events.md).
+# its own tree (docs/adr/0278-dev-steps-label-their-kache-events.md).
 # A step records the three kinds of hit in its `kache stats --json --last-build`
 # summary as one count, beside the misses and the compile time kache estimates
 # its hits avoided (summed over parallel compiles, so not the step's wall time).

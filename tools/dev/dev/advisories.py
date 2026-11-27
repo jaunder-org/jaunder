@@ -5,7 +5,7 @@ dependencies (`dev.scope`), so an advisory published against a dependency
 already on `main` fails no pull request. This scan reports it instead: it checks
 both workspaces, the product and `tools/`, and keeps one open issue per
 advisory, commented on each day it still fails
-(docs/adr/drafts/ci-checks-advisories-on-dependency-change.md). cargo-deny reads
+(docs/adr/0276-ci-checks-advisories-on-dependency-change.md). cargo-deny reads
 the root `deny.toml` for both, so their ignores and unmaintained scope are the
 gate's.
 """

@@ -1095,7 +1095,7 @@ share is five public groups, run in this order and stopping at the first
 failure. `ci-validate-host` repeats no check whose CI verdict a hermetic-lane
 derivation owns
 ([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md),
-[hermetic verdicts not repeated on host](docs/adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md)).
+[hermetic verdicts not repeated on host](docs/adr/0277-ci-hermetic-verdicts-not-repeated-on-host.md)).
 It runs the docs-shape and source-contract checks, the platform contract, the
 tools Cargo tests and `pytest -m repository tools/dev`, and cargo-deny only with
 `--advisories`. Each group can be run on its own to re-check one kind of
@@ -1186,8 +1186,8 @@ selected consumers, inputs and populations in detail:
   (`dev ci-validate-host --advisories`). The daily `advisories.yml` scan
   (`dev advisory-scan`) checks both workspaces of `main` and files one issue per
   failing advisory
-  ([CI checks advisories only on a dependency change](docs/adr/drafts/ci-checks-advisories-on-dependency-change.md),
-  [cargo-deny checks every Cargo workspace](docs/adr/drafts/cargo-deny-checks-every-workspace.md)).
+  ([CI checks advisories only on a dependency change](docs/adr/0276-ci-checks-advisories-on-dependency-change.md),
+  [cargo-deny checks every Cargo workspace](docs/adr/0275-cargo-deny-checks-every-workspace.md)).
 - **Doctests:** execute the root fence population only in the hermetic producer,
   whose bidirectional reconciliation prevents population loss, plus the
   separate, unreconciled `tools-doctests` run of the tools workspace.
@@ -1434,7 +1434,7 @@ Nothing is recorded in these cases:
 
 Recording never changes the step. The query adds about 0.2-0.6 s per compiling
 step
-([compiling steps label their kache events](docs/adr/drafts/dev-steps-label-their-kache-events.md)).
+([compiling steps label their kache events](docs/adr/0278-dev-steps-label-their-kache-events.md)).
 
 A Nix build step of a flake installable has two child steps: `eval`
 (`nix path-info --derivation`) evaluates it, leaving the evaluation cached, and
