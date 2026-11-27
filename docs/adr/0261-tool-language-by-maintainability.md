@@ -85,12 +85,12 @@ conforms when it:
 Signal forwarding, supervising long-lived children, or data shaping beyond `jq`
 means Python. This amends ADR-0249's "no shell exception is added". ADR-0249
 rejected bash for exactly the capability this rule excludes. Five of the six
-current scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
-`e2e-workflow` and `git-add`. _Amended by #2139:_ `pr-land.sh` became
-`tools/dev/dev/pr_land.py` when its one-re-enqueue rule made landing a state
-machine. `test-theme-repository-release-version.sh` does not: it cuts a regex
-and a `run:` block out of a workflow file with `sed` by fixed indentation, which
-is data shaping beyond `jq`. It moves to Python
+scripts then current conformed: `pr-land.sh`, `pr-cleanup.sh`,
+`build-csr-assets.sh`, `e2e-workflow` and `git-add`. _Amended by #2139:_
+`pr-land.sh` became `tools/dev/dev/pr_land.py` when its one-re-enqueue rule made
+landing a state machine. `test-theme-repository-release-version.sh` does not: it
+cuts a regex and a `run:` block out of a workflow file with `sed` by fixed
+indentation, which is data shaping beyond `jq`. It moves to Python
 ([#2070](https://github.com/jaunder-org/jaunder/issues/2070)).
 
 **Verdicts.**

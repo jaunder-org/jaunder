@@ -493,8 +493,8 @@ def pr_watch_command(**options: Any) -> None:
 @click.option(
     "--reenqueue",
     is_flag=True,
-    help="Re-enqueue an observed ejection of any cause, once; needs separate "
-    "recovery authorization.",
+    help="Re-enqueue the live preflight ejection, of any cause, once; needs "
+    "separate recovery authorization.",
 )
 def pr_land_command(number: int, expected_head: str, reenqueue: bool) -> None:
     """Land an approved PR head, re-enqueueing one infrastructure ejection.

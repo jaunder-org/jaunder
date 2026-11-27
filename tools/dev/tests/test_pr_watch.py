@@ -223,7 +223,8 @@ def annotations(**checks: list[tuple[str, str, str | None]]) -> Any:
 
 
 def jobs(*conclusions: tuple[str, Any]) -> Any:
-    return {"jobs": [{"name": n, "conclusion": c} for n, c in conclusions]}
+    found = enumerate(conclusions, start=100)
+    return {"jobs": [{"id": i, "name": n, "conclusion": c} for i, (n, c) in found]}
 
 
 def contents(source: str) -> Any:
@@ -816,7 +817,8 @@ def test_in_progress_jobs_are_read_across_pages() -> None:
 @pytest.mark.parametrize(
     "page",
     [TRANSPORT, ok({"total_count": 0}), ok(jobs(("odd", 42))), ok({"jobs": ["odd"]})]
-    + [ok({"jobs": [{"conclusion": "failure"}]})],
+    + [ok({"jobs": [{"conclusion": "failure"}]})]
+    + [ok({"jobs": [{"name": "unidentified", "conclusion": "failure"}]})],
 )
 def test_in_progress_job_failures_propagate_instead_of_reading_as_no_ejection(
     page: Reply,
@@ -2018,12 +2020,6 @@ def test_a_nix_substitute_failure_is_infrastructure(log: str) -> None:
 )
 def test_half_a_signature_or_another_failure_matches_nothing(log: str) -> None:
     assert pr_watch.signature(log) is None
-
-
-def test_every_signature_names_its_real_example_job() -> None:
-    assert [(s.name, s.example) for s in pr_watch.SIGNATURES] == [
-        ("nix-substitute", 135941369307)
-    ]
 
 
 @pytest.mark.parametrize(

@@ -1727,7 +1727,7 @@ baseline.
   dev pr-watch 731 --once                   # direct JSON, no --json flag
   dev pr-watch 731 --until merged           # passive external-approval watch
   dev pr-land 731 <approved-head-SHA>        # only after recorded human approval
-  dev pr-land 731 <approved-head-SHA> --reenqueue # authorized recovery, any cause
+  dev pr-land 731 <approved-head-SHA> --reenqueue # authorized recovery
   ```
 
   Outcomes are `ready-to-land`, `merged`, `checks-failed`, `ejected`,
@@ -1792,11 +1792,12 @@ baseline.
   decision, otherwise the Lead within approved scope). Diagnosis alone does not
   authorize it; only a classified infrastructure ejection inside an approved
   land does. Use `dev pr-land <PR> <approved-head-SHA> --reenqueue` only after
-  that authorization and exact-head merge approval; it spends the invocation's
-  one re-enqueue. The failed verdict stays failed; delayed fresh visibility uses
-  the normal deadline, and a distinct fresh failure ends observation. Neither
-  mode retries a no-op. Existing head, check, queue and fail-closed guards
-  remain in force. See
+  that authorization and exact-head merge approval. It requires a live `ejected`
+  preflight, refuses otherwise, and spends the invocation's one re-enqueue on
+  it. The failed verdict stays failed; delayed fresh visibility uses the normal
+  deadline, and a distinct fresh failure ends observation. Neither mode retries
+  a no-op. Existing head, check, queue and fail-closed guards remain in force.
+  See
   [explicit one-shot recovery](docs/adr/0220-explicit-one-shot-pr-reenqueue.md).
 
   **Post-merge ownership:** after `pr land` reports verified `merged`, choose

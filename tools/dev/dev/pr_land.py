@@ -9,8 +9,9 @@ uncertain action.
 
 An ejection is terminal unless this invocation re-enqueues, which it does at
 most once: when the ejection's classification names a known infrastructure
-signature, or when the caller passed `--reenqueue`. Any later ejection ends the
-invocation, whatever its cause. The observer's final report is printed on
+signature, at preflight or after arming; or, for a preflight ejection of any
+cause, when the caller passed `--reenqueue`, which then requires one. Any later
+ejection ends the invocation, whatever its cause. The observer's final report is printed on
 stdout; only a complete `merged` report for the head exits 0.
 """
 
@@ -29,6 +30,11 @@ from dev.pr_watch import GhError, GitHub, Runner, Snapshot, Watch
 
 # The observer infers its repository from origin; landing acts only here.
 REPOSITORY = ("jaunder-org", "jaunder")
+ORIGINS = (
+    "https://github.com/jaunder-org/jaunder.git",
+    "https://github.com/jaunder-org/jaunder",
+    "git@github.com:jaunder-org/jaunder.git",
+)
 _SHA = re.compile(r"[0-9a-f]{40}")
 # A caller's repository redirects, such as a hook's, would point Git elsewhere.
 GIT_REDIRECTS = (
@@ -102,21 +108,28 @@ class _Lander:
         return pr_watch.observe(watch, self.runner, self.now, self.sleep)
 
     def ready(self) -> None:
-        """Requires a one-snapshot `ready-to-land`, re-enqueueing a preflight
-        ejection if this invocation may."""
+        """Requires a one-snapshot `ready-to-land`. A preflight ejection is
+        re-enqueued when it is infrastructure, or with `--reenqueue`, which
+        needs that live ejection."""
         report = self.observe(once=True)
-        if report["outcome"] == "ejected" and self.may_reenqueue(report):
+        ejected = report["outcome"] == "ejected"
+        if self.land.reenqueue and not ejected:
+            _refuse(
+                f"--reenqueue requires a live ejection; observed {report['outcome']}"
+            )
+        if ejected and self.claim_reenqueue(report, explicit=self.land.reenqueue):
             report = self.observe(once=True)
         if report["outcome"] != "ready-to-land":
             detail = report.get("detail")
             suffix = f" ({detail})" if detail else ""
             _refuse(f"not ready to land: {report['outcome']}{suffix}")
 
-    def may_reenqueue(self, report: dict[str, Any]) -> bool:
-        """Whether this ejection is the invocation's one re-enqueue; if so, it
-        is acknowledged."""
+    def claim_reenqueue(self, report: dict[str, Any], explicit: bool = False) -> bool:
+        """Spends the invocation's one re-enqueue on this ejection, if it is
+        unspent and the ejection is infrastructure or `explicit`ly recovered;
+        the ejection is then acknowledged."""
         signature = (report.get("ejection") or {}).get("signature")
-        if self.reenqueued or not (signature or self.land.reenqueue):
+        if self.reenqueued or not (signature or explicit):
             return False
         self.reenqueued, self.acknowledged = True, report["pointer"]
         cause = signature or "--reenqueue"
@@ -154,7 +167,7 @@ class _Lander:
 
     def __call__(self) -> dict[str, Any]:
         code, origin, _ = self.runner(["git", "remote", "get-url", "origin"])
-        if code or pr_watch.parse_remote(origin) != REPOSITORY:
+        if code or origin.strip() not in ORIGINS:
             _refuse("land requires the jaunder-org/jaunder origin")
         live = self.live()
         branch, local = (
@@ -169,7 +182,7 @@ class _Lander:
             # dequeue before its first poll is still reported.
             queued = self.land.head if self.arm() else None
             report = self.observe(until="merged", observed_queued_head=queued)
-            if report["outcome"] != "ejected" or not self.may_reenqueue(report):
+            if report["outcome"] != "ejected" or not self.claim_reenqueue(report):
                 return report
             if (again := self.observe(once=True))["outcome"] != "ready-to-land":
                 return again
@@ -195,5 +208,10 @@ def run(
         traceback.print_exc()
         raise steps.StepFailed(2, signalled=False) from defect
     print(json.dumps(report, separators=(",", ":"), ensure_ascii=False), flush=True)
+    complete = _SHA.fullmatch(report.get("pointer") or "") and report.get("detail")
     if report["outcome"] != "merged":
+        raise steps.StepFailed(1, signalled=False)
+    if not complete:
+        # GitHub said merged without the commit or time: not merge evidence.
+        print("dev: pr-land: merged without a merge commit and time", file=sys.stderr)
         raise steps.StepFailed(1, signalled=False)

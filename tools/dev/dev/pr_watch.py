@@ -2,7 +2,8 @@
 
 It polls until the next caller-actionable outcome and prints one JSON report on
 stdout: `outcome`, `pr`, `head_sha`, `phase` (only for `pending`), `detail`,
-`pointer` and the `events` log; absent optional fields are omitted. Each event
+`pointer`, `ejection` (only for `ejected`) and the `events` log; absent optional
+fields are omitted. Each event
 also reaches stderr as it happens: only changes, plus a heartbeat after ten
 quiet minutes. `ready-to-land` and `merged` exit 0, every other report 1, and a
 refusal, an unknown pull request or an internal defect 2 with no report, so a
@@ -10,9 +11,14 @@ defect can never read as a verdict.
 
 The observer only reads: it never arms, merges, re-enqueues, cleans up or edits
 the tracker; `dev pr-land` (`pr_land`) is the only armer and observes in
-process through this same module. Readiness is not approval to merge. The repository comes from the
-origin remote and the requirements from its live `main` ruleset, read once per
-invocation; no check, job or workflow name is hard-coded.
+process through this same module. Readiness is not approval to merge. The
+repository comes from the origin remote and the requirements from its live
+`main` ruleset, read once per invocation; no check, job or workflow name is
+hard-coded.
+
+An `ejected` report says whether a known infrastructure failure caused it: the
+failed jobs that `need` another failed job are derived, and each other one must
+match a signature in `SIGNATURES`. Classifying only adds to the report.
 
 A failed check the ruleset names ends the watch `checks-failed`. A failed GitHub
 Actions check the ruleset does not name ends it too when its workflow file, read
@@ -35,7 +41,7 @@ import re
 import sys
 import time
 import traceback
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -689,16 +695,14 @@ class Ejection:
 
 def judge(run: str, jobs: Sequence[FailedJob]) -> Ejection:
     """Infrastructure only if every primary job matched a signature."""
-    primary = [job for job in jobs if not job.derived]
-    unmatched = [job for job in primary if job.signature is None]
-    unclassified = (
-        "no failed job to classify"
-        if not primary
-        else f"job '{unmatched[0].name}' matches no infrastructure signature"
-        if unmatched
-        else None
-    )
-    return Ejection(run, tuple(jobs), unclassified)
+    ejection = Ejection(run, tuple(jobs), None)
+    unmatched = [job for job in ejection.primary if job.signature is None]
+    if not ejection.primary:
+        return replace(ejection, unclassified="no failed job to classify")
+    if unmatched:
+        why = f"job '{unmatched[0].name}' matches no infrastructure signature"
+        return replace(ejection, unclassified=why)
+    return ejection
 
 
 # The decision rules: pure functions of parsed evidence.
@@ -918,9 +922,9 @@ class GitHub:
         args += ["-f", f"name={self.repository}", "-f", f"oid={oid}"]
         return parse_pressure(self.call("api", "graphql", *args))
 
-    def _jobs_of(self, run: int) -> Any:
-        """The latest attempt of each job of merge-group run `run`, page by
-        page, each with a valid conclusion."""
+    def _ejecting_jobs(self, run: int) -> Iterator[FailedJob]:
+        """The jobs of merge-group run `run` whose latest attempt failed in a
+        way that ejects, page by page."""
         page = 1
         while True:
             jobs = _get(
@@ -937,7 +941,12 @@ class GitHub:
                 conclusion = job.get("conclusion", 0) if isinstance(job, dict) else 0
                 if not (conclusion is None or isinstance(conclusion, str)):
                     raise _malformed("merge-group job omitted its conclusion")
-                yield job
+                if conclusion in EJECTING_CONCLUSIONS:
+                    if not (
+                        _is_natural(job.get("id")) and isinstance(job.get("name"), str)
+                    ):
+                        raise _malformed("merge-group job omitted its id or name")
+                    yield FailedJob(job["id"], job["name"])
             if len(jobs) < 100:
                 return
             page += 1
@@ -949,23 +958,8 @@ class GitHub:
         run = parse_runs(self.call("api", runs), self.number)
         if run is None or run.conclusion is not None:
             return run
-        for job in self._jobs_of(run.id):
-            if job["conclusion"] in EJECTING_CONCLUSIONS:
-                if not isinstance(job.get("name"), str):
-                    raise _malformed("merge-group job omitted its name")
-                return replace(run, failed_job=job["name"])
-        return run
-
-    def failed_jobs(self, run: int) -> list[FailedJob]:
-        failed = []
-        for job in self._jobs_of(run):
-            if job["conclusion"] in EJECTING_CONCLUSIONS:
-                if not (
-                    _is_natural(job.get("id")) and isinstance(job.get("name"), str)
-                ):
-                    raise _malformed("merge-group job omitted its id or name")
-                failed.append(FailedJob(job["id"], job["name"]))
-        return failed
+        failed = next(self._ejecting_jobs(run.id), None)
+        return run if failed is None else replace(run, failed_job=failed.name)
 
     def job_log(self, job: int) -> str:
         """One job's log, which is text, not JSON; GitHub's escapes included."""
@@ -995,7 +989,7 @@ class GitHub:
         if problem is not None:
             return Ejection(run.url, (), f"workflow {run.workflow}: {problem}")
         try:
-            jobs = derive(self.failed_jobs(run.id), definitions)
+            jobs = derive(list(self._ejecting_jobs(run.id)), definitions)
         except GhError as error:
             return Ejection(run.url, (), f"its jobs are unreadable: {error.detail}")
         if isinstance(jobs, str):
@@ -1213,8 +1207,11 @@ def observe(
         phase: str | None = None,
         ejection: Ejection | None = None,
     ) -> dict[str, Any]:
-        optional: dict[str, Any] = {"phase": phase, "detail": detail}
-        optional["pointer"] = pointer
+        optional: dict[str, Any] = {
+            "phase": phase,
+            "detail": detail,
+            "pointer": pointer,
+        }
         if ejection is not None:
             optional["ejection"] = ejection.report()
         present = {key: value for key, value in optional.items() if value is not None}
