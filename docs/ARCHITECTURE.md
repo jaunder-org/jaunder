@@ -4677,8 +4677,13 @@ describes only the output, which the step records as `jaunder.nix.output`, with
 closure unless the output was reused. A `build` child that exits 1, with no
 builder failed, runs once more and records `jaunder.nix.retried`, so a dropped
 substitute download doesn't fail the step. `scripts/nix-retry` does the same for
-the E2E producer's build and for CI's dev-shell entry and direct builds. When a
-producer times its own phases where it cannot trace (the Rust coverage
+the E2E producer's build and for CI's dev-shell entry and direct builds. A host
+Cargo step that compiles labels its kache events with a build tree of its own
+(`KACHE_EVENT_ROOT`, a path never created), then asks `kache stats --last-build`
+for that tree and records `jaunder.kache.hits`, `jaunder.kache.misses` and
+`jaunder.kache.avoided_compile_ms`. A query that does not answer records nothing
+([compiling steps label their kache events](adr/drafts/dev-steps-label-their-kache-events.md)).
+When a producer times its own phases where it cannot trace (the Rust coverage
 producer's `status.json` stages, an E2E lane's VM phase manifest), `dev` writes
 them afterwards as children of the step that ran it, at the producer's recorded
 start and duration. Only phases inside that step are written, so a reused
@@ -5000,10 +5005,13 @@ from the checkout's `packages.repository-policy` output, first on leptosfmt's
 PATH. Every `dev` call sets `RUSTC_WRAPPER=kache`, `CARGO_INCREMENTAL=0` and
 `KACHE_CACHE_EXECUTABLES=0` for host Cargo compilation, the same locally and in
 CI, and clears inherited `GIT_*` overrides before calling Git. kache otherwise
-runs on its defaults: one per-user store serves every worktree. In CI only
-`validate-host` persists its store through the Actions cache, saved by `main`
-and restored by pull requests and the merge queue. Dev and test builds emit
-line-table debug info only
+runs on its defaults: one per-user store serves every worktree. The one
+exception is the per-step `KACHE_EVENT_ROOT` of compiling steps above. It costs
+`kache explain` its same-tree baseline for `dev` builds
+([compiling steps label their kache events](adr/drafts/dev-steps-label-their-kache-events.md)).
+In CI only `validate-host` persists its store through the Actions cache, saved
+by `main` and restored by pull requests and the merge queue. Dev and test builds
+emit line-table debug info only
 ([kache compile cache](adr/0256-kache-compile-cache.md)).
 
 The host _step_ above runs the listed sub-steps through host-local lanes. The

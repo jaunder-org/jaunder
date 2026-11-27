@@ -27,6 +27,7 @@ def build(profile: str) -> None:
             "wasm32-unknown-unknown",
             *(["--release"] if release else []),
         ],
+        compiles=True,
     )
     shutil.rmtree(checkout / "target" / "site", ignore_errors=True)
     with tempfile.TemporaryDirectory() as temporary:

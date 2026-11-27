@@ -9,7 +9,7 @@ may need before any check starts.
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -38,6 +38,8 @@ class Leaf:
     # Host preparation, run as its own steps first: the environment changes
     # the check then needs.
     prepare: Callable[[], steps.Environment] | None = None
+    # A Cargo leaf that compiles (`steps.run`'s `compiles`).
+    compiles: bool = False
 
 
 def _fixed(summary: str, *argv: str) -> Leaf:
@@ -62,9 +64,10 @@ def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> 
 
 
 def _clippy(summary: str, home: str, *args: str) -> Leaf:
-    return _cargo(
+    leaf = _cargo(
         summary, home, lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"]
     )
+    return replace(leaf, compiles=True)
 
 
 def _link_e2e_node_modules() -> steps.Environment:
@@ -328,7 +331,12 @@ def run(name: str, mode: Mode, sandbox: bool = False) -> None:
                 }
         elif leaf.prepare is not None:
             changes = leaf.prepare()
-        steps.run(member, leaf.argv(mode is Mode.FIX, sandbox), environment=changes)
+        steps.run(
+            member,
+            leaf.argv(mode is Mode.FIX, sandbox),
+            environment=changes,
+            compiles=leaf.compiles,
+        )
 
 
 def run_all(mode: Mode) -> None:

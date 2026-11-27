@@ -38,6 +38,9 @@ from dev.spans import (
     FAILED_REASON,
     FAILED_STEP,
     FETCHED_BYTES,
+    KACHE_AVOIDED_COMPILE_MS,
+    KACHE_HITS,
+    KACHE_MISSES,
     NIX_OUTPUT,
     NIX_RETRIED,
     STATUS,
@@ -66,6 +69,9 @@ WITHOUT_GIT_OVERRIDES: Environment = dict.fromkeys(GIT_OVERRIDES)
 
 # The output-holding GC roots of Nix builds, under the checkout root.
 GCROOTS = ".xtask/gcroots"
+# Where each compiling step's kache build tree is named, under the checkout
+# root; nothing is created there (`_kache_tree`).
+KACHE_TREES = ".xtask/kache"
 # The flags a Nix build takes unless its caller names others.
 NIX_FLAGS = ("--accept-flake-config",)
 # Flake commands that must leave flake.lock exactly as committed.
@@ -366,8 +372,12 @@ def _run(
     finished: Callable[[Span, int], None] | None = None,
     verdict: bool = False,
     nix_retry: bool = False,
+    compiles: bool = False,
 ) -> bytes:
     with _step(name, argv) as span:
+        tree = _kache_tree(span, environment) if compiles else None
+        if tree is not None:
+            environment = {**(environment or {}), "KACHE_EVENT_ROOT": tree}
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
         code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
@@ -412,6 +422,11 @@ def _run(
         if realizes is not None and not code:
             with contextlib.suppress(_QueryFailed):
                 _record_cache(span, realizes(), start)
+        # A failed build's counts still say what it compiled; a signalled
+        # one's are cut short, and querying would only delay the exit.
+        if tree is not None and not signalled:
+            with contextlib.suppress(_QueryFailed):
+                _record_kache(span, tree)
     if code:
         raise StepFailed(code, signalled, why)
     return output
@@ -425,6 +440,7 @@ def run(
     realizes: Callable[[], str] | None = None,
     finished: Callable[[Span, int], None] | None = None,
     verdict: bool = False,
+    compiles: bool = False,
 ) -> None:
     """Runs one step; raises StepFailed so the gate stops at the first failure.
 
@@ -438,6 +454,8 @@ def run(
     step span and the wall-clock nanosecond at which the step started, to add
     what the child left behind. `verdict`, with `realizes`, fails a successful
     step whose output this machine did not build, as for `nix_build`.
+    `compiles` marks a Cargo step that compiles: under kache it records what
+    kache served and compiled for it (`_kache_tree`).
     """
     _run(
         name,
@@ -448,6 +466,7 @@ def run(
         realizes=realizes,
         finished=finished,
         verdict=verdict,
+        compiles=compiles,
     )
 
 
@@ -521,11 +540,12 @@ def text(
 
 
 class _QueryFailed(Exception):
-    """A Nix query failed, so the step's cache source stays unrecorded."""
+    """A query about a step's output (Nix) or compiles (kache) failed, so what
+    it would have recorded stays unrecorded."""
 
 
 def _query(argv: Sequence[str], stdin: bytes | None = None) -> bytes:
-    """A Nix query's stdout. Its streams never reach the user."""
+    """A Nix or kache query's stdout. Its streams never reach the user."""
     try:
         done = subprocess.run(
             argv,
@@ -612,6 +632,60 @@ def _record_cache(span: Span, path: str, start: int) -> Cache | None:
     if cache is not None:
         span.set_attribute(CACHE, cache)
     return cache
+
+
+# kache labels each compile's event with a build tree, and one session covers a
+# tree's Cargo commands until it is idle for five minutes. A compiling step's
+# events carry a tree of their own, under the checkout and never created, so its
+# session is exactly its compiles. kache's own tools then see each step run as
+# its own tree (docs/adr/drafts/dev-steps-label-their-kache-events.md).
+# A step records the three kinds of hit in its `kache stats --json --last-build`
+# summary as one count, beside the misses and the compile time kache estimates
+# its hits avoided (summed over parallel compiles, so not the step's wall time).
+_KACHE_HITS = ("local_hits", "prefetch_hits", "remote_hits")
+
+
+def _kache_tree(span: Span, environment: Environment | None) -> str | None:
+    """The build tree for a compiling step's kache events, or None when kache
+    does not compile for it, as in a sandbox."""
+    if changed(os.environ, environment).get("RUSTC_WRAPPER") != "kache":
+        return None
+    context = span.get_span_context()
+    return str(
+        Path.cwd() / KACHE_TREES / f"{context.trace_id:032x}-{context.span_id:016x}"
+    )
+
+
+def kache_counts(stats: bytes) -> dict[str, int] | None:
+    """A step's kache attributes from its `kache stats --json --last-build`
+    report, or None for a report of any other shape."""
+    try:
+        summary = json.loads(stats)["report"]["summary"]
+        hits = [summary[field] for field in _KACHE_HITS]
+        misses, avoided = summary["misses"], summary["time_saved_ms"]
+    except ValueError, LookupError, TypeError:
+        return None
+    # bool is an int to Python, never to kache.
+    if any(type(value) is not int for value in [*hits, misses, avoided]):
+        return None
+    return {
+        KACHE_HITS: sum(hits),
+        KACHE_MISSES: misses,
+        KACHE_AVOIDED_COMPILE_MS: avoided,
+    }
+
+
+def _record_kache(span: Span, tree: str) -> None:
+    """Records what kache served and compiled for the step whose events carry
+    `tree`, if it can tell; a failed query raises `_QueryFailed`.
+
+    A step that compiled nothing, or ran with KACHE_DISABLED, left no events:
+    kache refuses the empty selection and nothing is recorded.
+    """
+    report = _query(["kache", "stats", "--json", "--last-build", "--root", tree])
+    counts = kache_counts(report)
+    if counts is not None:
+        span.set_attributes(counts)
 
 
 def _reported_not_executed_here(name: str, path: str) -> bool:
