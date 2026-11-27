@@ -4877,11 +4877,12 @@ repeats no verdict a hermetic check owns
 it runs only the docs-shape and source-contract checks, the platform contract,
 `cargo-deny`'s RustSec advisories on a dependency change
 ([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)),
-the tools Cargo tests, and the `dev` tests marked `repository`, which need the repository, jq or Nix and which
-`dev-python` therefore deselects; `test-checks` owns wasm tests, doctests, and
-Elisp coverage; and `coverage` owns Rust coverage plus its gate.
-Producer/consumer pairs never cross jobs. The coverage source-filter probe
-remains a manually callable diagnostic, not an automatic CI step
+the tools Cargo tests, and the `dev` tests marked `repository`, which need the
+repository, jq or Nix and which `dev-python` therefore deselects; `test-checks`
+owns wasm tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage
+plus its gate. Producer/consumer pairs never cross jobs. The coverage
+source-filter probe remains a manually callable diagnostic, not an automatic CI
+step
 ([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
 the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).

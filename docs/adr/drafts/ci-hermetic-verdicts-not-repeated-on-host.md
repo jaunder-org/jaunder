@@ -44,7 +44,7 @@ host lane. `dev ci-validate-host` runs only what Nix cannot check, or does not:
 - `cargo-deny`, for its RustSec advisories, which the sandboxed copy skips
   ([ADR-0145](../0145-sandbox-cargo-deny-skips-advisories.md)), only on a
   dependency change
-  ([CI checks advisories only on a dependency change](ci-checks-advisories-on-dependency-change.md)).
+  ([CI checks advisories only on a dependency change](../drafts/ci-checks-advisories-on-dependency-change.md)).
 
 The `dev` tests are split by a pytest marker, not by skipping. A test that needs
 the repository outside `tools/dev`, jq or Nix is marked `repository`;
