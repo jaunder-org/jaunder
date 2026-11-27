@@ -10,9 +10,9 @@ lists what each `dev` command runs.
 | Layer               | Runs                                                                                                        | Typical cost¹                                    | Leaves to a later layer                                                                            |
 | ------------------- | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
 | 1. Focused tests    | `dev test-local <nextest args>`, `dev e2e-local <spec>`                                                     | Depends on the selection                         | Everything outside the selection                                                                   |
-| 2. Pre-commit       | `dev precommit`: Markdown checks for a Markdown-only change, else `dev check-no-test`                       | Markdown only: 15–60 s. Broad: 6–15 min          | Product Rust tests, doctests, and the Nix checks other than `static-docs`                          |
+| 2. Pre-commit       | `dev precommit`: Markdown checks for a Markdown-only change, else `dev check-no-test`                       | Markdown only: 15–60 s. Broad: 6–15 min          | Product Rust tests, doctests, and every Nix check except a Markdown-only commit's `static-docs`    |
 | 3. Pre-push         | `dev prepush`: host checks in Verify mode, some taken from Nix; `tools` tests; product Rust tests; doctests | 10–15 min; up to 38 min when Nix outputs rebuild | Coverage/CRAP, wasm tests and budget, Elisp coverage, the platform contract, other Nix checks, E2E |
-| 4. Pull-request CI  | [`ci.yml`](../.github/workflows/ci.yml): four validation lanes and the E2E matrix                           | 17 min (10–53). Markdown only: 2.5 min           | The branch combined with the current `main`                                                        |
+| 4. Pull-request CI  | [`ci.yml`](../.github/workflows/ci.yml): four validation lanes and the E2E matrix, or the docs lane alone   | 17 min (10–53). Markdown only: 2.5 min           | The branch combined with the current `main`                                                        |
 | 5. Merge queue      | The same `ci.yml` jobs on `main` plus the entry                                                             | 14 min (11–28). Markdown only: 2.5 min           | Nothing, for the commit that lands                                                                 |
 | 6. Landed and timed | `Validation host` on the push to `main`, and the scheduled workflows below                                  | Push: 5 min (5–6)                                | —                                                                                                  |
 
@@ -26,18 +26,20 @@ traced runs. A heavily loaded machine can push a test past nextest's 30 s
 timeout and fail a local run. Re-measure rather than trust old numbers.
 
 **What each layer is for.** Pre-commit catches formatting and static mistakes on
-every commit; on `x86_64-linux` its Markdown verdict comes from the Nix
-`static-docs` check, which pre-push shares. Pre-push makes sure a branch builds
-and passes its host tests before it leaves the machine. Pull-request CI is the
-authoritative hermetic verdict, and decides each check in one lane: the hermetic
-lanes own every verdict a Nix check can decide, and the host lane runs only what
-Nix does not check. `Validate (no e2e)` joins the host, hermetic, test-checks
-and coverage lanes, and `e2e gate` joins sixteen E2E producers and their four
-reconciliations. A Markdown-only change runs only the `Validation docs` lane,
-though the joining jobs still report. The merge queue reruns the same jobs on
-the commit that will land, so that commit's later push run skips everything
-except `Validation host`, which saves the kache store. When an entry is ejected
-by a known infrastructure failure, a running `dev pr-land` re-enqueues it once
+every commit; on `x86_64-linux` a Markdown-only commit is also verified by the
+Nix `static-docs` check, which pre-push shares. Pre-push makes sure a branch
+builds and passes its host tests before it leaves the machine. Pull-request CI
+is the authoritative hermetic verdict, and decides each check in one lane: the
+hermetic lanes own every verdict a Nix check can decide, and the host lane runs
+only what Nix does not check. `Validate (no e2e)` joins the host, hermetic,
+test-checks and coverage lanes, and `e2e gate` joins sixteen E2E producers and
+their four reconciliations. A Markdown-only change runs only the
+`Validation docs` lane, which `Validate (no e2e)` then requires instead, and
+`e2e gate` passes with the E2E jobs skipped. The merge queue reruns the same
+jobs on the commit that will land, so that commit's later push run skips
+everything except `Validation host`, which saves the kache store; any other push
+to `main` validates in full. When an entry is ejected by a known infrastructure
+failure, a running `dev pr-land` re-enqueues it once
 ([ADR-0220](adr/0220-explicit-one-shot-pr-reenqueue.md)).
 
 **Workflows outside the merge path** block nobody and report what they find:
@@ -49,7 +51,8 @@ monthly (full) because each mutant costs a build and a test run;
 opts in by label; [upgrade](../.github/workflows/upgrade.yml) runs weekly and on
 `v*` tags; and the
 [theme repository fixture](../.github/workflows/theme-repository-fixture.yml)
-runs on PRs that touch its paths. All five can also be started by hand.
+runs on PRs that touch its paths and on its fixture tags. All five can also be
+started by hand.
 
 The local broad gates sit beside the layers rather than in them. `dev check` is
 pre-commit's broad surface plus `test-local`, the wasm tests and doctests.
@@ -59,9 +62,9 @@ question; CI remains the authoritative integration proof.
 
 ## Which layer owns each verdict
 
-- **Coverage and CRAP** run only in CI, `dev validate-no-e2e` and
-  `dev validate`. Instrumentation and SQLite/PostgreSQL parity are part of the
-  verdict
+- **Coverage and CRAP** run only in CI, `dev coverage`, `dev validate-no-e2e`
+  and `dev validate`. Instrumentation and SQLite/PostgreSQL parity are part of
+  the verdict
   ([Coverage and dependency policy](../CONTRIBUTING.md#coverage-and-dependency-policy)).
 - **The full, reconciled E2E matrix** runs only in CI and `dev validate`
   ([ADR-0034](adr/0034-ci-e2e-matrix-distribution.md),
@@ -71,7 +74,8 @@ question; CI remains the authoritative integration proof.
   warning, which `dev pr-watch` reports
   ([ADR-0272](adr/0272-e2e-duration-pressure-is-a-signal.md)).
 - **Root-workspace doctests** run only as the Nix `doctests` producer and gate,
-  from pre-push onward; there is no host doctest run
+  requested by pre-push, `dev check`, `dev doctests`, validation and CI; there
+  is no host doctest run
   ([ADR-0095](adr/0095-doctest-gate-enumerates-the-fence-population.md)). The
   `tools-doctests` check runs only in validation and CI.
 - **CI's static verdicts** each come from one lane. A check a hermetic Nix
@@ -91,7 +95,8 @@ question; CI remains the authoritative integration proof.
   ([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
   [cargo-deny checks every Cargo workspace](adr/drafts/cargo-deny-checks-every-workspace.md)).
 - **A Markdown-only change** gets only the documentation checks, by the same
-  rule in pre-commit and CI
+  rule in pre-commit and in pull-request and merge-queue CI; a push to `main`
+  has no base, so it is never Markdown-only
   ([ADR-0266](adr/0266-ci-documentation-only-scope.md)).
 - **A landed commit** is covered by its merge-queue run
   ([ADR-0260](adr/0260-merge-queue-verdict-covers-landed-commit.md),
