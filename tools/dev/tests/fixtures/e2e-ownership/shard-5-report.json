@@ -13,7 +13,7 @@
               "projectId": "firefox",
               "projectName": "firefox",
               "status": "expected",
-              "results": [{ "retry": 0, "duration": 12 }]
+              "results": [{ "retry": 0, "duration": 12, "status": "passed" }]
             }
           ]
         }

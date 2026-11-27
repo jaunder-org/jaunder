@@ -20,7 +20,10 @@ at the PR head, defines a job whose literal name (or key, when unnamed) is a
 ruleset context; that is the early stop on a failed lane before its `always()`
 aggregate settles. Any other failure, including one whose workflow file cannot
 be read, is an optional warning. Misjudging toward optional only delays
-`checks-failed` until the aggregate itself fails. Every `gh` call is a traced
+`checks-failed` until the aggregate itself fails. A successful watch reads,
+once, the `Duration pressure` warning annotations on the head's check runs and,
+once merged, the merge commit's (the merge-group run's), and logs each as a
+`warning` event; they never change the outcome. Every `gh` call is a traced
 step whose status and streams `classify` turns into data or a typed error; the
 decision rules are pure functions of parsed snapshots, and the clock is
 injected.
@@ -40,6 +43,7 @@ from typing import Any, NamedTuple
 import yaml
 
 from dev import steps
+from dev.e2e_evidence import PRESSURE_TITLE
 
 # Runs one command (`gh` or `git`): its status, stdout and stderr.
 Runner = Callable[[Sequence[str]], tuple[int, str, str]]
@@ -74,6 +78,24 @@ query($owner:String!,$name:String!,$number:Int!,$after:String){
             ... on StatusContext{context state targetUrl createdAt}
           }
           pageInfo{hasNextPage endCursor}
+        }
+      }
+    }
+  }
+}"""
+# The latest check runs of one commit and their annotations, read once when a
+# watch succeeds (50 x 100 x 50 stays under GitHub's node limit).
+ANNOTATIONS_QUERY = """\
+query($owner:String!,$name:String!,$oid:GitObjectID!){
+  repository(owner:$owner,name:$name){
+    object(oid:$oid){
+      ... on Commit{
+        checkSuites(first:50){
+          nodes{
+            checkRuns(first:100,filterBy:{checkType:LATEST}){
+              nodes{name annotations(first:50){nodes{annotationLevel title message}}}
+            }
+          }
         }
       }
     }
@@ -452,6 +474,35 @@ def parse_runs(value: Any, number: int) -> Run | None:
     return newest
 
 
+def _nodes(value: Any, *keys: str) -> list[Any]:
+    nodes = _get(value, *keys, "nodes")
+    if not isinstance(nodes, list):
+        raise _malformed(f"response omitted array {'.'.join([*keys, 'nodes'])}")
+    return nodes
+
+
+def parse_pressure(value: Any) -> list[str]:
+    """Each duration-pressure warning annotation on one commit's check runs,
+    as `<check>: <message>`; a commit GitHub does not know has none."""
+    commit = _get(value, "data", "repository", "object")
+    if commit is None:
+        return []
+    found = []
+    for suite in _nodes(commit, "checkSuites"):
+        for run in _nodes(suite, "checkRuns"):
+            for annotation in _nodes(run, "annotations"):
+                if (
+                    _get(annotation, "annotationLevel") != "WARNING"
+                    or _get(annotation, "title") != PRESSURE_TITLE
+                ):
+                    continue
+                name, message = _text(run, "name"), _text(annotation, "message")
+                if name is None or message is None:
+                    raise _malformed("duration-pressure annotation is incomplete")
+                found.append(f"{name}: {message}")
+    return found
+
+
 def job_names(source: str) -> frozenset[str] | None:
     """What a ruleset context can match in one workflow file: each job's
     literal `name`, or its key when it has none; None if it is no workflow."""
@@ -675,6 +726,12 @@ class GitHub:
         checks = tuple(check for page in pages for check in page.checks)
         return replace(pages[0], checks=checks)
 
+    def pressure(self, oid: str) -> list[str]:
+        """The duration-pressure warnings on commit `oid`'s latest check runs."""
+        args = ["-f", f"query={ANNOTATIONS_QUERY}", "-f", f"owner={self.owner}"]
+        args += ["-f", f"name={self.repository}", "-f", f"oid={oid}"]
+        return parse_pressure(self.call("api", "graphql", *args))
+
     def ejection(self) -> Run | None:
         """The newest merge-group run, with its first ejecting job while it
         is still in progress."""
@@ -855,6 +912,27 @@ def _poll(
     return snapshot, step, warnings
 
 
+def _pressure(log: _Log, github: GitHub, snapshot: Snapshot) -> None:
+    """Logs each duration-pressure warning of a successful watch: on the PR
+    head and, once merged, on the merge commit, which is the merge-group
+    run's commit. The warnings never change the outcome, and neither does a
+    failure to read them, which is itself a warning."""
+    commits = [snapshot.head]
+    if snapshot.merge_commit is not None and snapshot.merge_commit != snapshot.head:
+        commits.append(snapshot.merge_commit)
+    for oid in commits:
+        try:
+            warnings = github.pressure(oid)
+        except GhError as error:
+            log(
+                "warning",
+                f"duration-pressure annotations of {oid} unread: {error.detail}",
+            )
+            continue
+        for detail in warnings:
+            log("warning", detail)
+
+
 def _watch(
     watch: Watch,
     runner: Runner,
@@ -950,6 +1028,8 @@ def _watch(
         if snapshot.queued:
             queued_head = snapshot.head
         if terminal is not None:
+            if terminal[0] in SUCCESSFUL:
+                _pressure(log, github, snapshot)
             log("terminal", terminal[0])
             return end(*terminal)
         if watch.once:

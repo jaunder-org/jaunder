@@ -133,6 +133,7 @@ def decode[T](raw: str, decoder: Callable[[dict[str, Any]], T], context: str) ->
 class ReportAttempt:
     retry: int | None
     duration: float | None
+    status: str | None
 
 
 @dataclass(frozen=True)
@@ -166,6 +167,7 @@ def _report_specs(report: dict[str, Any]) -> list[ReportSpec]:
                         ReportAttempt(
                             optional(attempt, "retry", COUNT),
                             optional(attempt, "duration", NUMBER),
+                            optional(attempt, "status", STRING),
                         )
                         for attempt in objects(test, "results", absent=True)
                     ],

@@ -707,15 +707,33 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   are not parallel workflow entrypoints. Existing unsplit Firefox
   workers=2/workers=4 measurement installables remain available through ordinary
   `nix build`; workers=4 remains rejected for production.
-- **Duration-pressure gate** — After an otherwise-successful VM lane has
-  captured diagnostics, it reconciles `playwright-report-<lane>.json` and
-  `duration-budget-manifest-<lane>.json` in `.xtask/diagnostics/e2e-<lane>/`.
-  Missing, malformed, incomplete, or mismatched inputs fail closed. Every
-  reported attempt is checked, including retries: an attempt using **80% or
-  more** of its effective whole-test timeout fails the lane even when a later
-  retry passes. This detects insufficient headroom; it does not right-size
-  timeout budgets. Keep deriving an exceptional whole-test budget from its
-  polling deadline rather than from observed duration.
+- **Duration budget: timeouts fail, pressure is reported** — After a VM lane
+  succeeds otherwise and has captured diagnostics, it reconciles
+  `playwright-report-<lane>.json` against `duration-budget-manifest-<lane>.json`
+  in `.xtask/diagnostics/e2e-<lane>/`
+  (docs/adr/drafts/e2e-duration-pressure-is-a-signal.md). Missing, malformed,
+  incomplete or mismatched inputs fail closed, including an attempt with no
+  known Playwright `status`. Every reported attempt is checked, retries
+  included:
+  - **A `timedOut` attempt fails the lane**, even when a later retry passes.
+  - **An attempt using 80% or more** of its effective whole-test timeout passes
+    the lane and is reported as **duration pressure**. This covers a passing
+    attempt over 100% too. It appears:
+    - in the `e2e-evidence` step output;
+    - in CI, as one `Duration pressure` warning annotation per lane and as every
+      attempt in the job's step summary;
+    - in the `warning` events of the `dev pr-watch` / `dev pr-land`
+      `ready-to-land` and `merged` reports, from both the PR head and the
+      merge-group commit.
+
+  **Whoever reads a duration-pressure warning in a handoff follows it up.**
+  Search the open issues for the test's title or file. If an issue exists,
+  comment the run link and the percentage on it. If not, file one labelled
+  `test-infra` (`test(e2e): <test> near its timeout`). A warning never blocks
+  landing, but it belongs in the merge-approval request. This detects
+  insufficient headroom; it does not right-size timeout budgets. Keep deriving
+  an exceptional whole-test budget from its polling deadline rather than from
+  observed duration.
 
 - **Boot-decomposition coverage gate** — After the same successful VM lane lifts
   diagnostics, it reconciles the executed browser-project set in

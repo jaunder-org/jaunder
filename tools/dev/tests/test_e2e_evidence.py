@@ -9,6 +9,7 @@ from typing import Any
 import pytest
 from conftest import FIXTURES, lift_lanes, write_capture, write_lane_capture
 
+from dev import e2e
 from dev.e2e_evidence import (
     LaneEvidence,
     reconcile,
@@ -59,6 +60,26 @@ def edit(path: Path, change: Any) -> None:
 def test_the_complete_five_lane_fixture_reconciles(tmp_path: Path) -> None:
     detail = reconcile("sqlite", "firefox", read_catalog(CATALOG), fixture(tmp_path))
     assert detail == "sqlite/firefox: reconciled 5 lane-qualified evidence sets"
+
+
+def slow(lane: LaneEvidence) -> None:
+    """Makes `lane`'s one passing attempt take 90% of its timeout."""
+    edit(
+        lane.report,
+        lambda report: report["suites"][0]["specs"][0]["tests"][0]["results"][0].update(
+            duration=90
+        ),
+    )
+
+
+def test_reconciliation_names_pressure_its_producers_reported(tmp_path: Path) -> None:
+    evidence = fixture(tmp_path)
+    slow(evidence[4])
+    detail = reconcile("sqlite", "firefox", read_catalog(CATALOG), evidence)
+    assert detail == (
+        "sqlite/firefox: reconciled 5 lane-qualified evidence sets; 1 attempt(s) "
+        "under duration pressure, reported by their lane producers"
+    )
 
 
 def test_lifted_lanes_reconcile_only_for_their_own_browser(tmp_path: Path) -> None:
@@ -431,16 +452,29 @@ def test_a_lifted_lane_verifies_its_population_duration_and_boot_evidence(
 ) -> None:
     fixture(tmp_path)
     root = tmp_path / "e2e-sqlite-firefox-1-of-5"
-    detail = verify_lane("sqlite-firefox-1-of-5", CATALOG, root)
+    detail, duration = verify_lane("sqlite-firefox-1-of-5", CATALOG, root)
     assert detail == (
         "sqlite-firefox-1-of-5: population, retry-duration and boot evidence verified"
     )
+    assert duration.pressured == []
     for identity in ["sqlite-firefox-unsplit", "unknown"]:
         with pytest.raises(EvidenceError, match="unknown or disabled lane"):
             verify_lane(identity, CATALOG, root)
     (root / "playwright-report-sqlite-firefox-1-of-5.json").unlink()
     with pytest.raises(EvidenceError, match="reading report"):
         verify_lane("sqlite-firefox-1-of-5", CATALOG, root)
+
+
+def test_a_verified_lane_under_pressure_lists_it(tmp_path: Path) -> None:
+    evidence = fixture(tmp_path)
+    slow(evidence[4])
+    root = tmp_path / "e2e-sqlite-firefox-5-of-5"
+    detail, duration = verify_lane("sqlite-firefox-5-of-5", CATALOG, root)
+    assert detail == (
+        "sqlite-firefox-5-of-5: population, retry-duration and boot evidence "
+        f"verified\n{duration.detail()}"
+    )
+    assert len(duration.pressured) == 1
 
 
 # The duration budget.
@@ -462,7 +496,9 @@ REPORT = json.dumps(
                             {
                                 "projectId": "chromium",
                                 "projectName": "chromium",
-                                "results": [{"retry": 0, "duration": 100}],
+                                "results": [
+                                    {"retry": 0, "duration": 100, "status": "passed"}
+                                ],
                             }
                         ],
                     }
@@ -492,19 +528,61 @@ MANIFEST = json.dumps(
 )
 
 
-def test_an_attempt_below_the_pressure_threshold_passes() -> None:
-    assert validate_duration_json(REPORT, MANIFEST) == (
-        "maximum duration pressure 10.00%: test_id=id-1 project_id=chromium "
-        "project_name=chromium tests/works.spec.ts:7 title=works; retry 0; "
+ATTEMPT = '{"retry":0,"duration":100,"status":"passed"}'
+TWO_ATTEMPTS = MANIFEST.replace(
+    '[{"retry":0,"effective_timeout_ms":1000}]',
+    '[{"retry":0,"effective_timeout_ms":1000},{"retry":1,"effective_timeout_ms":1000}]',
+)
+WORKS = (
+    "test_id=id-1 project_id=chromium project_name=chromium "
+    "tests/works.spec.ts:7 title=works"
+)
+
+
+def attempts(*results: tuple[int, str]) -> str:
+    """REPORT with one attempt per (duration, status), retries in order."""
+    return REPORT.replace(
+        ATTEMPT,
+        ",".join(
+            json.dumps(
+                {"retry": retry, "duration": duration, "status": status},
+                separators=(",", ":"),
+            )
+            for retry, (duration, status) in enumerate(results)
+        ),
+    )
+
+
+def test_an_attempt_below_the_pressure_threshold_passes_unremarked() -> None:
+    duration = validate_duration_json(REPORT, MANIFEST)
+    assert duration.pressured == []
+    assert duration.detail() == (
+        f"maximum duration pressure 10.00%: {WORKS}; retry 0; "
         "duration 100.000 ms / effective timeout 1000.000 ms"
     )
 
 
-@pytest.mark.parametrize(("duration", "shown"), [(800, "80.00%"), (801, "80.10%")])
-def test_an_attempt_at_or_above_the_threshold_fails(duration: int, shown: str) -> None:
-    report = REPORT.replace('"duration":100', f'"duration":{duration}')
-    with pytest.raises(EvidenceError, match=f"duration pressure {shown}"):
-        validate_duration_json(report, MANIFEST)
+@pytest.mark.parametrize(
+    ("used", "shown"), [(800, "80.00%"), (850, "85.00%"), (1020, "102.00%")]
+)
+def test_a_passing_attempt_at_or_above_the_threshold_passes_with_a_warning(
+    used: int, shown: str
+) -> None:
+    duration = validate_duration_json(attempts((used, "passed")), MANIFEST)
+    assert [pressure.retry for pressure in duration.pressured] == [0]
+    assert duration.detail() == (
+        "duration pressure: 1 attempt(s) at or above 80% of their timeout\n"
+        f"  {shown}: {WORKS}; retry 0; duration {used}.000 ms / effective "
+        "timeout 1000.000 ms"
+    )
+
+
+def test_every_pressured_attempt_is_listed_worst_first() -> None:
+    duration = validate_duration_json(
+        attempts((850, "failed"), (900, "passed")), TWO_ATTEMPTS
+    )
+    assert [pressure.retry for pressure in duration.pressured] == [1, 0]
+    assert duration.maximum == duration.pressured[0]
 
 
 @pytest.mark.parametrize("timeout", [1_000, 3_000, 12_345])
@@ -512,18 +590,18 @@ def test_every_effective_timeout_mode_is_accepted(timeout: int) -> None:
     validate_duration_json(REPORT, MANIFEST.replace("1000", str(timeout)))
 
 
-def test_a_slow_first_retry_fails_even_when_a_later_retry_passes() -> None:
-    report = REPORT.replace(
-        '{"retry":0,"duration":100}',
-        '{"retry":0,"duration":900},{"retry":1,"duration":100}',
+def test_a_timed_out_attempt_fails_even_when_its_retry_passes() -> None:
+    report = attempts((1000, "timedOut"), (100, "passed"))
+    with pytest.raises(EvidenceError, match="attempt timed out at 100.00%: .*retry 0"):
+        validate_duration_json(report, TWO_ATTEMPTS)
+
+
+@pytest.mark.parametrize("status", ["failed", "skipped", "interrupted"])
+def test_a_failed_or_skipped_attempt_is_playwrights_verdict(status: str) -> None:
+    duration = validate_duration_json(
+        attempts((100, status), (100, "passed")), TWO_ATTEMPTS
     )
-    manifest = MANIFEST.replace(
-        '[{"retry":0,"effective_timeout_ms":1000}]',
-        '[{"retry":0,"effective_timeout_ms":1000},'
-        '{"retry":1,"effective_timeout_ms":1000}]',
-    )
-    with pytest.raises(EvidenceError, match="retry 0"):
-        validate_duration_json(report, manifest)
+    assert duration.pressured == []
 
 
 def with_manifest_test(change: Any) -> str:
@@ -584,10 +662,7 @@ def with_report_test(change: Any) -> str:
             "report retries must start at zero and be contiguous",
         ),
         (
-            REPORT.replace(
-                '{"retry":0,"duration":100}',
-                '{"retry":0,"duration":100},{"retry":1,"duration":100}',
-            ),
+            attempts((100, "failed"), (100, "passed")),
             MANIFEST,
             "retry reconciliation mismatch",
         ),
@@ -656,15 +731,22 @@ def with_report_test(change: Any) -> str:
             "report retry 0 has no duration",
         ),
         (
+            REPORT.replace(',"status":"passed"', ""),
+            MANIFEST,
+            "report retry 0 has a missing or unknown status null",
+        ),
+        (
+            REPORT.replace('"passed"', '"flaky"'),
+            MANIFEST,
+            'report retry 0 has a missing or unknown status "flaky"',
+        ),
+        (
             REPORT.replace('"duration":100', '"duration":-1'),
             MANIFEST,
             "non-finite or negative duration",
         ),
         (
-            REPORT.replace(
-                '{"retry":0,"duration":100}',
-                '{"retry":0,"duration":100},{"retry":0,"duration":100}',
-            ),
+            REPORT.replace(ATTEMPT, f"{ATTEMPT},{ATTEMPT}"),
             MANIFEST,
             "report has duplicate retry 0",
         ),
@@ -688,6 +770,34 @@ def test_both_missing_and_unexpected_tests_are_named() -> None:
         validate_duration_json(report, MANIFEST)
     assert "missing test_id=id-1" in str(refused.value)
     assert "unexpected test_id=other" in str(refused.value)
+
+
+def test_pressure_without_a_step_summary_is_still_annotated(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
+    e2e._report_pressure(
+        "lane", validate_duration_json(attempts((900, "passed")), MANIFEST)
+    )
+    assert capsys.readouterr().out.startswith(
+        "::warning title=Duration pressure::lane: "
+    )
+
+
+def test_an_unwritable_step_summary_is_said_never_failed(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path))
+    e2e._report_pressure(
+        "lane", validate_duration_json(attempts((900, "passed")), MANIFEST)
+    )
+    captured = capsys.readouterr()
+    assert captured.out.startswith("::warning title=Duration pressure::")
+    assert captured.err.startswith(f"dev: {tmp_path}: no pressure summary: ")
 
 
 def test_duration_files_name_what_could_not_be_read(tmp_path: Path) -> None:

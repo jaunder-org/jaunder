@@ -14,8 +14,8 @@
               "projectName": "firefox",
               "status": "flaky",
               "results": [
-                { "retry": 0, "duration": 10 },
-                { "retry": 1, "duration": 20 }
+                { "retry": 0, "duration": 10, "status": "failed" },
+                { "retry": 1, "duration": 20, "status": "passed" }
               ]
             }
           ]
