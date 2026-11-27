@@ -10,6 +10,7 @@ instead of duplicating project policy.
 - `docs/ARCHITECTURE.md`: the authoritative statement of the current
   architecture — the materialized view of the ADR log, covering the workspace
   layout and every subsystem
+- `docs/TESTING.md`: how the testing layers fit together
 - `docs/codebase-audits.md`: the durable method for finding and remediating
   accumulated design and maintenance cruft
 - `docs/ROADMAP.md`: project roadmap
@@ -1086,7 +1087,7 @@ CI/`dev validate-no-e2e` when hermetic confidence is the question. Focused
 | `dev precommit`       | Git/index custody selects Markdown or broad Fix checks, reconciles once, and conditionally verifies shared docs                                                                                                             | auto-fixes    |
 | `dev prepush`         | clean tree; Verify host/static + auxiliary tests + `test-local` + Nix `doctests`/`doctests-gate`; x86_64-linux takes shared Rust-format, Markdown, `tsc` and Elisp verdicts in place of their host leaves                   | never mutates |
 | `dev validate-no-e2e` | clean tree; Verify host/static, the platform contract, Nix static proof (with `tools-doctests`), the `csrBundle` build and wasm budget, wasm tests, Rust coverage/CRAP, doctests, and authoritative Elisp producer/consumer | never mutates |
-| `dev validate`        | adds six Chromium and six Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                                                      | never mutates |
+| `dev validate`        | adds six Chromium and ten Firefox E2E lanes, reconciliation, and final authoritative SQLite/Chromium server-function flow verification                                                                                      | never mutates |
 
 The host check surface that `check-no-test`, `prepush` and `validate-no-e2e`
 share is five public groups, run in this order and stopping at the first
@@ -1264,7 +1265,7 @@ are never cancelled
 E2E uses one catalog-derived matrix of sixteen isolated producers
 (`dev e2e-producer <identity>`): five shards for each backend on Firefox and
 three for each on Chromium. A `!cancelled()` reconciliation job per pair waits
-for the complete producer matrix, downloads that pair's four artifacts and runs
+for the complete producer matrix, downloads that pair's artifacts and runs
 `dev e2e-reconcile` even if downloads fail; the SQLite/Chromium job also
 verifies server-function coverage. Stable `e2e gate` requires the
 `Merge-queue verdict` job, which also projects the matrices from the catalog,

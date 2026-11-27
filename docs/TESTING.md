@@ -4,25 +4,45 @@ Jaunder checks a change in six layers. Each one runs a different set of checks,
 costs a different amount, and leaves some verdicts to a later layer. This page
 shows how they fit together. The detailed sections of
 [CONTRIBUTING](../CONTRIBUTING.md) and the linked ADRs remain the reference for
-how each check works.
+how each check works; [Local checks: `dev`](../CONTRIBUTING.md#local-checks-dev)
+lists what each `dev` command runs.
 
-| Layer                                                        | Runs                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Typical cost¹                                                          | For                                                                         | Leaves to a later layer                                                                                             |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| 1. Focused tests                                             | `dev test-local <nextest args>`, `dev e2e-local <spec>`                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Depends on the selection; not measured                                 | Feedback on the code you are editing                                        | Everything outside the selection                                                                                    |
-| 2. Pre-commit ([`dev precommit`](../tools/dev/dev/gates.py)) | Markdown-only staged change: Prettier, the docs-shape checks and the Nix `static-docs` check. Anything else: `dev check-no-test` in Fix mode — the host format, docs-shape, source-contract, `tsc`, cargo-deny, Clippy and Elisp checks, plus the `tools` tests and `tools/dev` lint and tests                                                                                                                                                                                                          | Markdown only: 53 s. Broad: 14.7 min, first run in a new worktree      | Formatting and static mistakes, caught on every commit                      | Product Rust tests, doctests, all Nix and VM checks                                                                 |
-| 3. Pre-push ([`dev prepush`](../tools/dev/dev/gates.py))     | Clean-tree refusal, the same host surface in Verify mode, the `tools` tests, the whole product Rust suite (`test-local`), and the Nix doctest producer and gate                                                                                                                                                                                                                                                                                                                                         | 10.5–14.6 min; 37.6 min when the doctests and CSR bundle rebuild (n=4) | A branch that builds and passes its host tests before it leaves the machine | Coverage/CRAP, wasm browser tests, the wasm budget, Elisp coverage, other Nix static checks, platform contract, E2E |
-| 4. Pull-request CI ([`ci.yml`](../.github/workflows/ci.yml)) | Four non-E2E lanes (`dev ci-validate-host`, `ci-validate-hermetic`, `ci-validate-test-checks`, `coverage`) joined by `Validate (no e2e)`; sixteen E2E producers and four reconciliations joined by `e2e gate`. A Markdown-only change runs only `Validation docs`                                                                                                                                                                                                                                       | Full: median 16.8 min (10.6–52.7, n=28). Markdown only: 2.4 min (n=3)  | The authoritative hermetic verdict on the branch                            | The branch combined with the current `main`                                                                         |
-| 5. Merge queue (`merge_group` run of `ci.yml`)               | The same jobs on the queue's combination of `main` and the entry                                                                                                                                                                                                                                                                                                                                                                                                                                        | Full: median 13.8 min (10.6–27.8, n=24). Markdown only: 2.6 min (n=2)  | The verdict for the exact commit that lands                                 | Nothing for that commit                                                                                             |
-| 6. After landing and on a schedule                           | Push to `main`: only `Validation host`, which saves the kache store, when the queue already passed the commit; any other push validates in full. [Mutants](../.github/workflows/mutants.yml) weekly (incremental) and monthly (full); [performance](../.github/workflows/performance.yml) weekly or on an opted-in PR; [upgrade](../.github/workflows/upgrade.yml) weekly and on `v*` tags; the [theme repository fixture](../.github/workflows/theme-repository-fixture.yml) on PRs touching its paths | Push: median 8.7 min (6.8–10.9, n=23). Mutants: about 42 s per mutant  | Cache upkeep, and checks too slow or too unpredictable to gate a merge      | —                                                                                                                   |
+| Layer               | Runs                                                                                      | Typical cost¹                                    | Leaves to a later layer                                                     |
+| ------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------ | --------------------------------------------------------------------------- |
+| 1. Focused tests    | `dev test-local <nextest args>`, `dev e2e-local <spec>`                                   | Depends on the selection                         | Everything outside the selection                                            |
+| 2. Pre-commit       | `dev precommit`: Markdown checks for a Markdown-only change, else `dev check-no-test`     | Markdown only: 53 s. Broad: 15 min               | Product Rust tests, doctests, and the Nix checks other than `static-docs`   |
+| 3. Pre-push         | `dev prepush`: host checks and `tools` tests in Verify mode, product Rust tests, doctests | 10–15 min; up to 38 min when Nix outputs rebuild | Coverage/CRAP, wasm tests and budget, Elisp coverage, other Nix checks, E2E |
+| 4. Pull-request CI  | [`ci.yml`](../.github/workflows/ci.yml): four validation lanes and the E2E matrix         | 17 min (10–53). Markdown only: 2.5 min           | The branch combined with the current `main`                                 |
+| 5. Merge queue      | The same `ci.yml` jobs on `main` plus the entry                                           | 14 min (11–28). Markdown only: 2.5 min           | Nothing, for the commit that lands                                          |
+| 6. Landed and timed | `Validation host` on the push to `main`, and the scheduled workflows below                | Push: 9 min (7–11)                               | —                                                                           |
 
-¹ Local figures come from `dev trace summary` on a 16-core workstation with the
-shared kache store. Pre-commit: one run of each route on 2026-11-26 at commit
-`7668185b4`. Pre-push: four successful traced runs from 2026-11-24 to
-2026-11-26. Under heavy contention from other worktrees, nextest's 30 s per-test
-timeout can fail a pre-push run (#2143). CI figures: the successful `ci.yml`
-runs 45529722684–45924894020 (2026-11-25 to 2026-11-27, wall-clock from creation
-to completion), split by event and by whether `Validation docs` ran. Re-measure
-rather than trust old numbers.
+¹ Measured between 2026-11-24 and 2026-11-27 on a 16-core workstation with a
+shared kache store (local) and on GitHub's `ubuntu-24.04` runners (CI). CI
+figures are medians and ranges of wall-clock time over about 25 successful runs
+per event, with Markdown-only runs counted separately. Local pre-commit figures
+are single runs; the broad one was the first in a new worktree. Pre-push is four
+traced runs. A heavily loaded machine can push a test past nextest's 30 s
+timeout and fail a local run. Re-measure rather than trust old numbers.
+
+**What each layer is for.** Pre-commit catches formatting and static mistakes on
+every commit; on `x86_64-linux` its Markdown verdict comes from the Nix
+`static-docs` check, which pre-push shares. Pre-push makes sure a branch builds
+and passes its host tests before it leaves the machine. Pull-request CI is the
+authoritative hermetic verdict: `Validate (no e2e)` joins the host, hermetic,
+test-checks and coverage lanes, and `e2e gate` joins sixteen E2E producers and
+their four reconciliations. A Markdown-only change runs only the
+`Validation docs` lane, though the joining jobs still report. The merge queue
+reruns the same jobs on the commit that will land, so that commit's later push
+run skips everything except `Validation host`, which saves the kache store.
+
+**Workflows outside the merge path** block nobody and report what they find:
+[mutants](../.github/workflows/mutants.yml) runs weekly (incremental) and
+monthly (full) because each mutant costs a build and a test run;
+[performance](../.github/workflows/performance.yml) runs weekly or on a PR that
+opts in by label; [upgrade](../.github/workflows/upgrade.yml) runs weekly and on
+`v*` tags; and the
+[theme repository fixture](../.github/workflows/theme-repository-fixture.yml)
+runs on PRs that touch its paths. All four can also be started by hand.
 
 The local broad gates sit beside the layers rather than in them. `dev check` is
 pre-commit's broad surface plus `test-local`, the wasm tests and doctests.
