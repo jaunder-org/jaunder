@@ -411,11 +411,13 @@ App arms auto-merge; ordinary pull-request and merge-group checks run, and only
 the merge queue writes the result to `main`.
 
 An open promoter's head SHA and generated diff never change. Drafts merged later
-wait for its merge and the next promotion pass. The ordinary promoter CI/queue
-interval is a healthy **proposed-decision lag**, not a violation of the
-acceptance model. A draft that remains proposed because the promoter failed to
-create, check, or merge is failed-automation lag and requires diagnosis; it is
-not a reason to promote from the feature branch.
+wait for its merge and the next promotion pass. The exception is when `main`
+later cites a draft that the open promoter promotes. The open attempt is then
+stale, so the controller retires it and regenerates from fresh `main`. The
+ordinary promoter CI/queue interval is a healthy **proposed-decision lag**, not
+a violation of the acceptance model. A draft that remains proposed because the
+promoter failed to create, check, or merge is failed-automation lag and requires
+diagnosis; it is not a reason to promote from the feature branch.
 
 When promoter automation fails, diagnose the visible PR, ref, check, or workflow
 state and rerun the authorized controller with

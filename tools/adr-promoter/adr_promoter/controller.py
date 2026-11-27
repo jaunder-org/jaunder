@@ -2,13 +2,13 @@
 
 from dataclasses import dataclass
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from github import GithubException
 from requests import RequestException
 
 from . import git, github
-from .promotion import promote
+from .promotion import DRAFTS, promote
 
 
 BRANCH = "automation/adr-promoter"
@@ -126,26 +126,46 @@ def _delete(repo, api, expected):
     _postcondition(actual is None, error, "promoter branch remained after leased deletion")
 
 
+def _same(pr, expected):
+    return (
+        pr is not None and pr.number == expected.number and pr.owner == expected.owner
+        and pr.author == expected.author and pr.head_sha == expected.head_sha
+        and pr.head_ref == expected.head_ref and pr.base_ref == expected.base_ref and MARKER in pr.body
+    )
+
+
 def _close(api, expected):
     current = api.get_pr(expected.number)
-    if (current is None or not _identity(current, api.owner) or current.number != expected.number
-        or current.head_sha != expected.head_sha or current.head_ref != expected.head_ref
-        or current.base_ref != expected.base_ref or api.ref_head(BRANCH) is not None):
+    if not _same(current, expected) or api.ref_head(BRANCH) is not None:
         raise RuntimeError("promoter PR changed or disappeared before close")
-    error = _attempt(api.close, expected.number)
+    # GitHub may already have closed the PR when its head ref was deleted.
+    error = _attempt(api.close, expected.number) if current.open else None
     closed = api.get_pr(expected.number)
-    verified = (
-        closed is not None and not closed.open and closed.number == expected.number
-        and closed.owner == expected.owner and closed.author == expected.author
-        and closed.head_sha == expected.head_sha and closed.head_ref == expected.head_ref
-        and closed.base_ref == expected.base_ref and MARKER in closed.body
-    )
-    _postcondition(verified, error, "promoter PR close was not verified")
+    _postcondition(_same(closed, expected) and not closed.open, error, "promoter PR close was not verified")
 
 
 def _queue_required(rules):
     if not rules.queue or not rules.contexts:
         raise RuntimeError("ADR promoter requires a merge queue with required contexts")
+
+
+def _stale(repo, head):
+    """Whether merging the attempt into fresh main would not land a complete promotion.
+
+    Promotion rewrites every `drafts/<slug>` citation of the drafts it moves, so
+    a clean merge that still contains one means main cited the draft later.
+    """
+    git.fetch(repo, head)
+    main = git.refresh_main(repo, BASE)
+    parent = git.sole_parent(repo, head)
+    if parent is None or not git.strict_ancestor(repo, parent, main):
+        return False
+    tree = git.merged_tree(repo, main, head)
+    if tree is None:
+        return True
+    slugs = [PurePosixPath(path).name.removesuffix(".md")
+             for path in git.deleted_paths(repo, parent, head, DRAFTS + "/")]
+    return git.tree_contains(repo, tree, [f"drafts/{slug}" for slug in slugs])
 
 
 def _existing_or_retire(repo, api):
@@ -164,15 +184,9 @@ def _existing_or_retire(repo, api):
     if (snapshot is None or snapshot.number != pr.number or snapshot.state != "OPEN"
         or snapshot.head_ref != BRANCH or snapshot.head_sha != head):
         raise RuntimeError("promoter snapshot differs from the stable branch")
-    if snapshot.mergeable == "CONFLICTING" and snapshot.merge_state == "DIRTY":
-        git.fetch(repo, head)
-        main = git.refresh_main(repo, BASE)
-        if snapshot.base_sha == main:
-            parent = git.sole_parent(repo, head)
-            if parent is not None and git.strict_ancestor(repo, parent, main) and git.merge_conflicts(repo, main, head):
-                _delete(repo, api, head)
-                _close(api, pr)
-        # Insufficient local proof preserves the immutable attempt, without arming.
+    if _stale(repo, head):
+        _delete(repo, api, head)
+        _close(api, pr)
         return pr.number
     if snapshot.armed or snapshot.queued:
         return pr.number

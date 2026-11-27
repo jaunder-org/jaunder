@@ -62,19 +62,38 @@ def sole_parent(repo, commit):
 
 
 def _binary_result(repo, arguments):
+    # Exit 1 is a documented negative answer for these commands; anything else fails.
     result = process(repo, *arguments)
     if result.returncode not in (0, 1):
         raise RuntimeError(f"git {arguments!r} failed ({result.returncode}): " + result.stderr.decode(errors="replace"))
-    return result.returncode
+    return result
 
 
 def strict_ancestor(repo, ancestor, descendant):
-    return ancestor != descendant and _binary_result(repo, ("merge-base", "--is-ancestor", ancestor, descendant)) == 0
+    return ancestor != descendant and _binary_result(
+        repo, ("merge-base", "--is-ancestor", ancestor, descendant)).returncode == 0
 
 
-def merge_conflicts(repo, main, head):
-    # Only Git's documented conflict exit is authorization; not process failure.
-    return _binary_result(repo, ("merge-tree", "--write-tree", main, head)) == 1
+def merged_tree(repo, main, head):
+    """The clean merge's tree OID, or None on Git's documented conflict exit."""
+    result = _binary_result(repo, ("merge-tree", "--write-tree", main, head))
+    if result.returncode == 1:
+        return None
+    tree = result.stdout.split(b"\n", 1)[0].decode().strip()
+    if not tree:
+        raise RuntimeError("git merge-tree reported no tree")
+    return tree
+
+
+def deleted_paths(repo, old, new, directory):
+    return paths(repo, "diff", "--no-renames", "--diff-filter=D", "--name-only", "-z", old, new, "--", directory)
+
+
+def tree_contains(repo, tree, needles):
+    if not needles:
+        return False
+    patterns = [argument for needle in needles for argument in ("-e", needle)]
+    return _binary_result(repo, ("grep", "-q", "--fixed-strings", *patterns, tree)).returncode == 0
 
 
 def delete_remote(repo, branch, expected):
