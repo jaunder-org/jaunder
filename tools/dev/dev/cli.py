@@ -97,8 +97,8 @@ _workflow("validate", gates.validate, "validate-no-e2e, then the full E2E workfl
 @click.option(
     "--advisories",
     is_flag=True,
-    help="Run cargo-deny, advisories included; CI passes it when the change "
-    "touches the product dependencies.",
+    help="Run cargo-deny on both workspaces, advisories included; CI passes it "
+    "when the change touches either workspace's dependencies.",
 )
 def ci_validate_host(advisories: bool) -> None:
     """CI host lane: clean tree, Verify host checks, the platform contract

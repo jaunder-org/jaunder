@@ -20,6 +20,10 @@ SANDBOX_CARGO = {
     "fmt": ("fmt --check", "product"),
     "tools-fmt": ("fmt --manifest-path tools/Cargo.toml --all --check", "tools"),
     "cargo-deny": ("deny check bans licenses sources", "product"),
+    "tools-cargo-deny": (
+        "deny --manifest-path tools/Cargo.toml check bans licenses sources",
+        "tools",
+    ),
     **{
         name: (line, "tools" if name.startswith("tools-") else "product")
         for name, line in CLIPPY.items()
@@ -166,6 +170,7 @@ LEAVES = {
         "leptosfmt -x .direnv -x .git -x target web/src csr/src",
     ),
     "cargo-deny": ("cargo deny check",) * 2,
+    "tools-cargo-deny": ("cargo deny --manifest-path tools/Cargo.toml check",) * 2,
     "fmt": ("cargo fmt --check", "cargo fmt"),
     "tools-fmt": (
         "cargo fmt --manifest-path tools/Cargo.toml --all --check",

@@ -1,11 +1,13 @@
 """The daily RustSec advisory scan of `main` (`.github/workflows/advisories.yml`).
 
-CI checks advisories only for a change to the product dependencies
-(`dev.scope`), so an advisory published against a dependency already on `main`
-fails no pull request. This scan reports it instead, as one open issue per
+CI checks advisories only for a change to either Cargo workspace's
+dependencies (`dev.scope`), so an advisory published against a dependency
+already on `main` fails no pull request. This scan reports it instead: it checks
+both workspaces, the product and `tools/`, and keeps one open issue per
 advisory, commented on each day it still fails
 (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md). cargo-deny reads
-`deny.toml`, so its ignores and unmaintained scope are the gate's.
+the root `deny.toml` for both, so their ignores and unmaintained scope are the
+gate's.
 """
 
 import json
@@ -18,22 +20,29 @@ from dev import steps
 from dev.issues import REPO
 
 LABELS = "security,dependencies,needs-triage"
+# Each Cargo workspace, by name, with the arguments that select it.
+WORKSPACES = {
+    "product": [],
+    "tools": ["--manifest-path", "tools/Cargo.toml"],
+}
 
 
 @dataclass(frozen=True)
 class Advisory:
     id: str
     crate: str
-    version: str
     summary: str
+    # Where it was found: each crate version, with its workspace.
+    found: tuple[str, ...]
 
     @property
     def title(self) -> str:
         return f"fix(deps): {self.id} {self.crate}: {self.summary}"
 
 
-def findings(report: bytes) -> list[Advisory]:
-    """The advisories that fail cargo-deny's JSON `report`, once each, in order.
+def findings(report: bytes, workspace: str) -> list[Advisory]:
+    """The advisories that fail cargo-deny's JSON `report` on `workspace`, once
+    each, in order.
 
     Any other failure files nothing; the scan's status still reports it.
     """
@@ -51,13 +60,28 @@ def findings(report: bytes) -> list[Advisory]:
         ):
             continue
         crate = fields["graphs"][0]["Krate"]
+        place = f"`{crate['name']}` {crate['version']} in the {workspace} workspace"
         found.setdefault(
             advisory["id"],
-            Advisory(
-                advisory["id"], crate["name"], crate["version"], advisory["title"]
-            ),
+            Advisory(advisory["id"], crate["name"], advisory["title"], (place,)),
         )
     return list(found.values())
+
+
+def merged(reports: list[list[Advisory]]) -> list[Advisory]:
+    """One advisory per ID across the workspaces' findings, found wherever any
+    workspace found it."""
+    advisories: dict[str, Advisory] = {}
+    for advisory in (advisory for report in reports for advisory in report):
+        known = advisories.get(advisory.id)
+        advisories[advisory.id] = (
+            advisory
+            if known is None
+            else Advisory(
+                known.id, known.crate, known.summary, known.found + advisory.found
+            )
+        )
+    return list(advisories.values())
 
 
 def _run_link() -> str:
@@ -72,10 +96,11 @@ def _run_link() -> str:
 
 
 def _body(advisory: Advisory, today: str, link: str) -> str:
+    places = "".join(f"- {place}\n" for place in advisory.found)
     return (
         f"cargo-deny reports [{advisory.id}]"
-        f"(https://rustsec.org/advisories/{advisory.id}.html) against "
-        f"`{advisory.crate}` {advisory.version} on `main`.\n\n"
+        f"(https://rustsec.org/advisories/{advisory.id}.html) on `main`:\n\n"
+        f"{places}\n"
         f"Found on {today} by {link}. The daily advisory scan "
         "(`.github/workflows/advisories.yml`) comments here each day it still "
         "fails. Resolve it by updating the dependency, or by ignoring the "
@@ -131,18 +156,27 @@ def _report(advisory: Advisory, today: str, link: str) -> None:
 
 
 def scan() -> None:
-    """Checks the checkout's advisories and reports each failing one; fails
-    whenever cargo-deny does."""
-    code, _, report = steps.captured(
-        "cargo-deny-advisories",
-        ["cargo", "deny", "--format", "json", "check", "advisories"],
-    )
+    """Checks both workspaces' advisories and reports each failing one; fails
+    whenever cargo-deny does on either."""
+    checked = [
+        (
+            workspace,
+            *steps.captured(
+                f"cargo-deny-advisories-{workspace}",
+                ["cargo", "deny", *args, "--format", "json", "check", "advisories"],
+            ),
+        )
+        for workspace, args in WORKSPACES.items()
+    ]
     today, link = datetime.now(UTC).date().isoformat(), _run_link()
-    for advisory in findings(report):
+    found = merged([findings(report, workspace) for workspace, _, _, report in checked])
+    for advisory in found:
         _report(advisory, today, link)
-    if code:
-        # The report is the failure's only account, such as a database that
-        # could not be fetched, so it reaches the run's log.
-        sys.stderr.buffer.write(report)
+    failed = [(code, report) for _, code, _, report in checked if code]
+    if failed:
+        # A report is a failure's only account, such as a database that could
+        # not be fetched, so each failing one reaches the run's log.
+        for _, report in failed:
+            sys.stderr.buffer.write(report)
         sys.stderr.flush()
-        raise steps.StepFailed(code, False)
+        raise steps.StepFailed(failed[0][0], False)

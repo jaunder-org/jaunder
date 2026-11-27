@@ -1,34 +1,44 @@
-"""The daily advisory scan: its reading of cargo-deny's report, and what it
+"""The daily advisory scan: its reading of cargo-deny's reports, and what it
 asks `gh` to do with each finding.
 
-`fixtures/cargo-deny/url-2.5.8-advisories.jsonl` is the pinned cargo-deny's
-stderr for `--format json check advisories` on this workspace with `url` held
-at 2.5.8 (RUSTSEC-2026-0592). `dev advisory-scan` runs for real against fake
-`cargo` and `gh`, which replay that report and record their arguments; a live
-run against the tracker proved the filing and commenting themselves (#2147).
+The fixtures are the pinned cargo-deny's stderr for
+`--format json check advisories`: `url-2.5.8-advisories.jsonl` on the product
+workspace with `url` held at 2.5.8 (RUSTSEC-2026-0592), and
+`zip-9.0.4-tools-advisories.jsonl` on the tools workspace as `main` had it
+(RUSTSEC-2026-0548). `dev advisory-scan` runs for real against fake `cargo` and
+`gh`, which replay those reports and record their arguments; live runs against
+the tracker proved the filing and commenting themselves (#2147, #2163).
 """
 
 import json
 from collections.abc import Sequence
 from pathlib import Path
 
+import pytest
 from conftest import Checkout
 
-from dev.advisories import Advisory, findings
+from dev.advisories import Advisory, findings, merged
 
-REPORT = (
-    Path(__file__).parent / "fixtures" / "cargo-deny" / "url-2.5.8-advisories.jsonl"
-).read_bytes()
+FIXTURES = Path(__file__).parent / "fixtures" / "cargo-deny"
+REPORT = (FIXTURES / "url-2.5.8-advisories.jsonl").read_bytes()
+TOOLS_REPORT = (FIXTURES / "zip-9.0.4-tools-advisories.jsonl").read_bytes()
+# A report with nothing to find: its summary record alone.
+CLEAN = REPORT.splitlines()[1] + b"\n"
 URL = Advisory(
     "RUSTSEC-2026-0592",
     "url",
-    "2.5.8",
     "Stack overflow in `Url::origin()` on nested `blob:` URLs",
+    ("`url` 2.5.8 in the product workspace",),
 )
 
 
-def test_a_vulnerability_is_one_finding() -> None:
-    assert findings(REPORT) == [URL]
+def test_a_vulnerability_is_one_finding_in_its_workspace() -> None:
+    assert findings(REPORT, "product") == [URL]
+    (zip_advisory,) = findings(TOOLS_REPORT, "tools")
+    assert (zip_advisory.id, zip_advisory.found) == (
+        "RUSTSEC-2026-0548",
+        ("`zip` 9.0.4 in the tools workspace",),
+    )
 
 
 def test_the_title_names_the_advisory_crate_and_summary() -> None:
@@ -45,7 +55,7 @@ def test_each_advisory_is_one_finding_however_often_it_is_reported() -> None:
     other = json.loads(diagnostic)
     other["fields"]["advisory"]["id"] = "RUSTSEC-2026-9999"
     report = b"\n".join([diagnostic, b"", diagnostic, json.dumps(other).encode()])
-    assert [finding.id for finding in findings(report)] == [
+    assert [finding.id for finding in findings(report, "product")] == [
         "RUSTSEC-2026-0592",
         "RUSTSEC-2026-9999",
     ]
@@ -62,11 +72,21 @@ def test_only_errors_with_an_advisory_are_findings() -> None:
     report = b"\n".join(
         json.dumps(record).encode() for record in [warning, unrelated, diagnostic]
     )
-    assert findings(report + b"\n" + REPORT.splitlines()[1]) == []
+    assert findings(report + b"\n" + CLEAN, "product") == []
+
+
+def test_an_advisory_in_both_workspaces_is_one_found_in_each() -> None:
+    tools = findings(REPORT.replace(b'"2.5.8"', b'"2.5.7"'), "tools")
+    (both,) = merged([findings(REPORT, "product"), tools])
+    assert both.found == (
+        "`url` 2.5.8 in the product workspace",
+        "`url` 2.5.7 in the tools workspace",
+    )
 
 
 # Fakes that record each call's argv as one JSON line in `calls`. cargo replays
-# DENY_REPORT on stderr and exits DENY_STATUS; gh answers `issue list` with
+# the product or tools workspace's report (DENY_<WORKSPACE>_REPORT) on stderr
+# and exits its status (DENY_<WORKSPACE>_STATUS); gh answers `issue list` with
 # GH_OPEN.
 RECORD = """
 with open("calls", "a") as calls:
@@ -74,8 +94,10 @@ with open("calls", "a") as calls:
 """
 CARGO = f"""import json
 {RECORD}
-sys.stderr.buffer.write(pathlib.Path(os.environ["DENY_REPORT"]).read_bytes())
-sys.exit(int(os.environ["DENY_STATUS"]))
+workspace = "TOOLS" if "--manifest-path" in sys.argv else "PRODUCT"
+report = os.environ[f"DENY_{{workspace}}_REPORT"]
+sys.stderr.buffer.write(pathlib.Path(report).read_bytes())
+sys.exit(int(os.environ[f"DENY_{{workspace}}_STATUS"]))
 """
 GH = f"""import json
 {RECORD}
@@ -83,34 +105,41 @@ if sys.argv[1:3] == ["issue", "list"]:
     print(os.environ["GH_OPEN"])
 """
 DENY = ["deny", "--format", "json", "check", "advisories"]
-SEARCH = [
-    "issue",
-    "list",
-    "--repo",
-    "jaunder-org/jaunder",
-    "--state",
-    "open",
-    "--search",
-    "RUSTSEC-2026-0592 in:title",
-    "--json",
-    "number,title",
-]
+TOOLS_DENY = ["deny", "--manifest-path", "tools/Cargo.toml", *DENY[1:]]
+
+
+def search(advisory: str) -> list[str]:
+    return [
+        "issue",
+        "list",
+        "--repo",
+        "jaunder-org/jaunder",
+        "--state",
+        "open",
+        "--search",
+        f"{advisory} in:title",
+        "--json",
+        "number,title",
+    ]
 
 
 def scan(
     checkout: Checkout,
-    report: bytes,
-    status: int,
+    product: tuple[bytes, int] = (CLEAN, 0),
+    tools: tuple[bytes, int] = (CLEAN, 0),
     open_issues: Sequence[dict[str, object]] = (),
     run_id: str = "42",
 ) -> tuple[int, bytes, list[list[str]]]:
     checkout.tool("cargo", CARGO)
     checkout.tool("gh", GH)
-    (checkout.root / "report").write_bytes(report)
+    (checkout.root / "product-report").write_bytes(product[0])
+    (checkout.root / "tools-report").write_bytes(tools[0])
     result = checkout.dev(
         "advisory-scan",
-        DENY_REPORT=str(checkout.root / "report"),
-        DENY_STATUS=str(status),
+        DENY_PRODUCT_REPORT=str(checkout.root / "product-report"),
+        DENY_PRODUCT_STATUS=str(product[1]),
+        DENY_TOOLS_REPORT=str(checkout.root / "tools-report"),
+        DENY_TOOLS_STATUS=str(tools[1]),
         GH_OPEN=json.dumps(list(open_issues)),
         GITHUB_SERVER_URL="https://github.com",
         GITHUB_REPOSITORY="jaunder-org/jaunder",
@@ -124,10 +153,10 @@ RUN = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 
 
 def test_a_new_advisory_opens_one_labelled_issue(checkout: Checkout) -> None:
-    code, _, calls = scan(checkout, REPORT, 1)
+    code, _, calls = scan(checkout, product=(REPORT, 1))
     assert code == 1
-    assert calls[:2] == [DENY, SEARCH]
-    (create,) = calls[2:]
+    assert calls[:3] == [DENY, TOOLS_DENY, search("RUSTSEC-2026-0592")]
+    (create,) = calls[3:]
     assert create[:9] == [
         "issue",
         "create",
@@ -141,8 +170,30 @@ def test_a_new_advisory_opens_one_labelled_issue(checkout: Checkout) -> None:
     ]
     body = create[9]
     assert "[RUSTSEC-2026-0592](https://rustsec.org/advisories/" in body
-    assert "`url` 2.5.8 on `main`" in body
+    assert "- `url` 2.5.8 in the product workspace\n" in body
     assert f"by {RUN}." in body
+
+
+def test_a_tools_advisory_is_reported_like_a_product_one(
+    checkout: Checkout,
+) -> None:
+    code, _, calls = scan(checkout, tools=(TOOLS_REPORT, 1))
+    assert code == 1
+    assert calls[:3] == [DENY, TOOLS_DENY, search("RUSTSEC-2026-0548")]
+    (create,) = calls[3:]
+    assert create[5].startswith("fix(deps): RUSTSEC-2026-0548 zip: ")
+    assert "- `zip` 9.0.4 in the tools workspace\n" in create[9]
+
+
+def test_an_advisory_in_both_workspaces_is_one_issue(checkout: Checkout) -> None:
+    tools = REPORT.replace(b'"2.5.8"', b'"2.5.7"')
+    code, _, calls = scan(checkout, product=(REPORT, 1), tools=(tools, 1))
+    assert code == 1
+    assert calls[:3] == [DENY, TOOLS_DENY, search("RUSTSEC-2026-0592")]
+    (create,) = calls[3:]
+    assert (
+        "- `url` 2.5.8 in the product workspace\n- `url` 2.5.7 in the tools workspace\n"
+    ) in create[9]
 
 
 def test_an_open_issue_for_the_advisory_gets_a_comment_instead(
@@ -155,10 +206,9 @@ def test_an_open_issue_for_the_advisory_gets_a_comment_instead(
         {"number": 7, "title": "fix(deps): RUSTSEC-2026-0592 url: older"},
         {"number": 8, "title": "fix(deps): RUSTSEC-2026-0592 url: newer"},
     ]
-    code, _, calls = scan(checkout, REPORT, 1, open_issues)
+    code, _, calls = scan(checkout, product=(REPORT, 1), open_issues=open_issues)
     assert code == 1
-    assert calls[:2] == [DENY, SEARCH]
-    (comment,) = calls[2:]
+    (comment,) = calls[3:]
     assert comment[:6] == [
         "issue",
         "comment",
@@ -172,21 +222,28 @@ def test_an_open_issue_for_the_advisory_gets_a_comment_instead(
 
 
 def test_a_clean_scan_files_nothing(checkout: Checkout) -> None:
-    assert scan(checkout, REPORT.splitlines()[1] + b"\n", 0)[::2] == (0, [DENY])
+    assert scan(checkout)[::2] == (0, [DENY, TOOLS_DENY])
 
 
-def test_a_failure_without_advisories_is_red_and_shows_its_report(
-    checkout: Checkout,
+FETCH_FAILED = b'{"type":"log","fields":{"level":"ERROR","message":"fetch failed"}}\n'
+
+
+@pytest.mark.parametrize(
+    ("product", "tools"),
+    [((FETCH_FAILED, 1), (CLEAN, 0)), ((CLEAN, 0), (FETCH_FAILED, 1))],
+    ids=["product", "tools"],
+)
+def test_a_failure_in_either_workspace_is_red_and_shows_its_report(
+    checkout: Checkout, product: tuple[bytes, int], tools: tuple[bytes, int]
 ) -> None:
-    report = b'{"type":"log","fields":{"level":"ERROR","message":"fetch failed"}}\n'
-    code, stderr, calls = scan(checkout, report, 1)
-    assert (code, calls) == (1, [DENY])
-    assert report in stderr
+    code, stderr, calls = scan(checkout, product=product, tools=tools)
+    assert (code, calls) == (1, [DENY, TOOLS_DENY])
+    assert FETCH_FAILED in stderr
 
 
 def test_a_local_run_says_so(checkout: Checkout) -> None:
     """Outside Actions there is no run to link; an empty run ID counts as none,
     which also keeps a CI job's own ID out of this test."""
-    body = scan(checkout, REPORT, 1, run_id="")[2][-1][9]
+    body = scan(checkout, product=(REPORT, 1), run_id="")[2][-1][9]
     assert "Found on " in body
     assert " by a local run." in body

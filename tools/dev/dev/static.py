@@ -63,6 +63,10 @@ def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> 
     )
 
 
+def _offline_policies(sandbox: bool) -> list[str]:
+    return ["bans", "licenses", "sources"] if sandbox else []
+
+
 def _clippy(summary: str, home: str, *args: str) -> Leaf:
     leaf = _cargo(
         summary, home, lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"]
@@ -190,13 +194,22 @@ LEAVES = {
         ],
     ),
     # The sandbox has no advisory database, so it checks the offline policies.
+    # Both workspaces are checked under the one root `deny.toml`, which
+    # cargo-deny reads from the checkout root it runs in.
     "cargo-deny": _cargo(
-        "Check the dependency policy.",
+        "Check the product workspace's dependency policy.",
         PRODUCT_HOME,
+        lambda _fix, sandbox: ["deny", "check", *_offline_policies(sandbox)],
+    ),
+    "tools-cargo-deny": _cargo(
+        "Check the tools workspace's dependency policy.",
+        TOOLS_HOME,
         lambda _fix, sandbox: [
             "deny",
+            "--manifest-path",
+            "tools/Cargo.toml",
             "check",
-            *(["bans", "licenses", "sources"] if sandbox else []),
+            *_offline_policies(sandbox),
         ],
     ),
     "product-core-clippy": _clippy(

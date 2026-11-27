@@ -516,16 +516,24 @@ def ci_validate_host(advisories: bool) -> Declaration:
     (docs/adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md); the
     `repository` tests are those `checks.dev-python` deselects.
 
-    cargo-deny runs only with `advisories`, which CI passes for a change to the
-    product dependencies (`dev.scope`): the hermetic lane checks bans, licenses
-    and sources on every run, so only the advisory check is the host's
+    cargo-deny runs, on both workspaces, only with `advisories`, which CI
+    passes for a change to either workspace's dependencies (`dev.scope`): the
+    hermetic lane checks bans, licenses and sources on every run, so only the
+    advisory check is the host's
     (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
     """
     return (
         clean_tree,
         *docs_shape(),
         *source_contract_checks(),
-        *((_static("cargo-deny", Mode.VERIFY),) if advisories else ()),
+        *(
+            (
+                _static("cargo-deny", Mode.VERIFY),
+                _static("tools-cargo-deny", Mode.VERIFY),
+            )
+            if advisories
+            else ()
+        ),
         *platform_contract(),
         *tools_tests(),
         _run("pytest-repository", "pytest", "-m", "repository", "tools/dev"),

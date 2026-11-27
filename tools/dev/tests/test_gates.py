@@ -167,6 +167,9 @@ TSC = [
 ]
 
 
+TOOLS_CARGO_DENY = "cargo deny --manifest-path tools/Cargo.toml check"
+
+
 def tsc_and_cargo_deny() -> Commands:
     return [*TSC, *commands("cargo deny check")]
 
@@ -326,7 +329,7 @@ def ci_host_lane(advisories: bool) -> Commands:
         *CLEAN,
         *docs_shape(),
         *map(source_contract, SOURCE_CONTRACTS),
-        *(commands("cargo deny check") if advisories else []),
+        *(commands("cargo deny check", TOOLS_CARGO_DENY) if advisories else []),
         PLATFORM,
         *tools_tests(),
         *commands("pytest -m repository tools/dev"),
