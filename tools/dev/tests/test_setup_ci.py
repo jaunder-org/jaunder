@@ -2,12 +2,14 @@
 
 install-nix-action writes `always-allow-substitutes = true`, which would let CI
 fetch the Rust coverage and e2e verdicts `nonSubstitutable` marks. It needs the
-repository's `.github/`, so only the filtered `checks.dev-python` source may
-skip it.
+repository's `.github/`, so CI's host lane runs it, not `checks.dev-python`.
 """
 
+import pytest
 import yaml
 from conftest import REPOSITORY, require
+
+pytestmark = pytest.mark.repository
 
 ACTION = REPOSITORY / ".github" / "actions" / "setup-ci" / "action.yml"
 

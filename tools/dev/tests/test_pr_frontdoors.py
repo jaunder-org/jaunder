@@ -3,8 +3,8 @@ scripted gh, git and cargo: never a real PR, merge or checkout cleanup. One
 cleanup also runs against real Git in disposable repositories, never this
 checkout. `test_pr_land.py` proves landing's decisions in process.
 
-They run the repository's scripts and jq, so only the filtered
-`checks.dev-python` source may skip them.
+They run the repository's scripts and jq, so CI's host lane runs them, not
+`checks.dev-python`.
 """
 
 import copy
@@ -21,6 +21,8 @@ from conftest import REAL_GIT, REPOSITORY, Checkout, require
 from test_pr_watch import PRESSURE, E, V, annotations, green, merged, rules, runs
 
 from dev import pr_watch
+
+pytestmark = pytest.mark.repository
 
 HEAD = "a" * 40
 MERGE = "b" * 40

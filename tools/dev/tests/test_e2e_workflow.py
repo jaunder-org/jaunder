@@ -4,7 +4,7 @@
 reconciles every backend/browser pair; SQLite/Chromium also verifies coverage.
 `dev` decides each verdict in-process. It needs the repository's script, lane
 catalog and jq programs, a real Nix store for immutable outputs, and jq, so
-only the filtered `checks.dev-python` source may skip it.
+CI's host lane runs it, not `checks.dev-python`.
 """
 
 import json
@@ -207,6 +207,7 @@ def verdicts(result: subprocess.CompletedProcess[bytes], mark: str, name: str) -
     return result.stdout.decode().count(f"{mark} {name} ")
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize(
     ("jobs", "failure"),
     [
@@ -250,6 +251,7 @@ def most_at_once(lines: list[str]) -> int:
     return peak
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize(("jobs", "capped"), [("", True), ("8", False)])
 def test_local_e2e_runs_at_most_three_vms_unless_told_otherwise(
     e2e: E2E, jobs: str, capped: bool
@@ -258,6 +260,7 @@ def test_local_e2e_runs_at_most_three_vms_unless_told_otherwise(
     assert (most_at_once(e2e.events().splitlines()) <= 3) == capped
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("identity", ["unknown", "sqlite-firefox-unsplit", "all"])
 def test_a_producer_refuses_unknown_disabled_and_internal_names_without_building(
     e2e: E2E, identity: str
@@ -266,6 +269,7 @@ def test_a_producer_refuses_unknown_disabled_and_internal_names_without_building
     assert e2e.events() == ""
 
 
+@pytest.mark.repository
 def test_every_built_lane_is_verified_and_every_pair_reconciled(e2e: E2E) -> None:
     result = e2e.run("e2e", output=capture_only(), status="0")
     assert result.returncode != 0
@@ -279,6 +283,7 @@ def test_every_built_lane_is_verified_and_every_pair_reconciled(e2e: E2E) -> Non
     assert "tool repository-policy" not in lines
 
 
+@pytest.mark.repository
 def test_a_successful_producer_keeps_its_root_and_lifts_the_selected_output(
     e2e: E2E,
 ) -> None:
@@ -320,6 +325,7 @@ def pressured_output() -> Path:
         return immutable(artifacts(slow_first_lane(Path(directory))))
 
 
+@pytest.mark.repository
 def test_a_pressured_lane_passes_and_is_annotated_and_summarized(e2e: E2E) -> None:
     result = e2e.run(
         "e2e-producer",
@@ -395,6 +401,7 @@ def test_pressure_is_annotated_only_when_github_runs_a_pressured_lane(
     assert not summary.exists()
 
 
+@pytest.mark.repository
 def test_reconciliation_names_pressure_but_never_annotates_it(e2e: E2E) -> None:
     slow_first_lane(e2e.root / "lanes")
     result = e2e.run(
@@ -413,6 +420,7 @@ def test_reconciliation_names_pressure_but_never_annotates_it(e2e: E2E) -> None:
     assert not (e2e.root / "summary.md").exists()
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("status", ["0", "23"])
 def test_regeneration_freshly_produces_the_coverage_lanes_and_needs_their_success(
     e2e: E2E, status: str
@@ -438,6 +446,7 @@ def test_regeneration_freshly_produces_the_coverage_lanes_and_needs_their_succes
     assert b"server-fn-coverage-verify" not in result.stdout
 
 
+@pytest.mark.repository
 def test_a_producer_records_its_output_cache_then_verifies_in_process(
     e2e: E2E,
 ) -> None:
@@ -456,6 +465,7 @@ def test_a_producer_records_its_output_cache_then_verifies_in_process(
     assert "tool repository-policy" not in e2e.events(), "verification builds nothing"
 
 
+@pytest.mark.repository
 def test_the_verifier_reads_this_builds_selected_output_never_the_gc_root(
     e2e: E2E,
 ) -> None:
@@ -471,6 +481,7 @@ def test_the_verifier_reads_this_builds_selected_output_never_the_gc_root(
     assert verdicts(result, "[ ok ]", "e2e-evidence") == 1
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("store", ["substituted", "unreadable"])
 def test_a_lane_not_built_here_fails_naming_it_and_is_not_verified(
     e2e: E2E, store: str
@@ -485,6 +496,7 @@ def test_a_lane_not_built_here_fails_naming_it_and_is_not_verified(
     assert "e2e-evidence" not in spans
 
 
+@pytest.mark.repository
 def test_a_failed_producer_records_no_cache_and_runs_no_verifier(e2e: E2E) -> None:
     result = e2e.run("e2e-producer", LANE, status="23")
     assert result.returncode == 23
@@ -525,6 +537,7 @@ def phase_children(e2e: E2E) -> dict[str, dict[str, Any]]:
     }
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize(("status", "gate"), [("0", "success"), ("23", "failed")])
 def test_a_producer_shows_this_runs_measured_phases_as_its_children(
     e2e: E2E, status: str, gate: str
@@ -565,6 +578,7 @@ def test_a_producer_shows_this_runs_measured_phases_as_its_children(
     assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("status", ["0", "23"])
 @pytest.mark.parametrize(
     ("lifted", "warned"),
@@ -669,6 +683,7 @@ def capture_events(e2e: E2E) -> dict[str, dict[str, Any]]:
     return {event["name"]: event for event in events if under_gate(event)}
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("status", ["0", "23"])
 def test_a_lanes_test_tree_is_shown_under_its_gate_execution_phase(
     e2e: E2E, status: str
@@ -727,6 +742,7 @@ def test_a_lanes_test_tree_is_shown_under_its_gate_execution_phase(
     assert step["args"]["jaunder.status"] == ("ok" if status == "0" else "failed")
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize(
     ("phases", "capture", "warned"),
     [
@@ -921,6 +937,7 @@ def test_a_capture_is_placed_under_its_gate_whole_or_not_at_all(
     assert (warning in stderr) if warning else stderr == ""
 
 
+@pytest.mark.repository
 def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:
     argv = ["bash", "scripts/e2e-workflow", "producer", LANE, "regenerate"]
     result = e2e.checkout.run(argv, e2e.checkout.environment())
@@ -928,6 +945,7 @@ def test_the_script_takes_no_coverage_action(e2e: E2E) -> None:
     assert e2e.events() == ""
 
 
+@pytest.mark.repository
 def test_an_optional_provenance_copy_failure_only_warns(e2e: E2E) -> None:
     artifacts = passing_lanes()
     selected = immutable({**artifacts, MARKER: b"attribution only"})
@@ -948,6 +966,7 @@ REQUIRED = [
 ]
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize(
     ("status", "artifact"),
     [("0", name) for name in REQUIRED] + [("23", MARKER), ("23", REQUIRED[0])],
@@ -974,6 +993,7 @@ def test_a_required_copy_failure_blocks_success_but_keeps_a_producer_failure(
     assert (e2e.diagnostics / retained).is_file()
 
 
+@pytest.mark.repository
 def test_a_failed_producer_lifts_available_evidence_but_never_verifies_it(
     e2e: E2E,
 ) -> None:
@@ -984,6 +1004,7 @@ def test_a_failed_producer_lifts_available_evidence_but_never_verifies_it(
     assert b"e2e-evidence" not in result.stdout
 
 
+@pytest.mark.repository
 def test_a_producer_build_that_exits_1_runs_once_more(e2e: E2E) -> None:
     # Nix exits 1 when no builder failed, as when a substitute download fails.
     result = e2e.run("e2e-producer", LANE, output=capture_only(), status="1")
@@ -992,6 +1013,7 @@ def test_a_producer_build_that_exits_1_runs_once_more(e2e: E2E) -> None:
     assert b"running it once more" in result.stderr
 
 
+@pytest.mark.repository
 @pytest.mark.parametrize("output", ["unevaluable", "missing", "empty"])
 def test_a_failed_producer_that_lifts_nothing_says_so_and_keeps_its_status(
     e2e: E2E, output: str
@@ -1009,6 +1031,7 @@ def test_a_failed_producer_that_lifts_nothing_says_so_and_keeps_its_status(
     assert b"e2e-evidence" not in result.stdout
 
 
+@pytest.mark.repository
 def test_missing_successful_evidence_fails_lane_verification(e2e: E2E) -> None:
     result = e2e.run("e2e-producer", LANE, output=capture_only(), status="0")
     assert result.returncode == 1
@@ -1016,6 +1039,7 @@ def test_missing_successful_evidence_fails_lane_verification(e2e: E2E) -> None:
     assert b"reading report" in result.stdout
 
 
+@pytest.mark.repository
 def test_regeneration_never_reaches_unverified_lanes(e2e: E2E) -> None:
     # Lane verification rejects the evidence-less producers, so the pair fails
     # before regeneration, which would itself refuse unreconciled lanes.

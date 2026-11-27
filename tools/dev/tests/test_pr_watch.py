@@ -2041,7 +2041,9 @@ def test_a_name_expression_stands_for_any_text(
     assert pr_watch.defines(definition, name) is matches
 
 
-@pytest.mark.parametrize("source", ["shape", "repository"])
+@pytest.mark.parametrize(
+    "source", ["shape", pytest.param("repository", marks=pytest.mark.repository)]
+)
 def test_the_ci_workflow_drops_aggregates_and_keeps_lanes(source: str) -> None:
     if source == "repository":
         path = REPOSITORY / WORKFLOW

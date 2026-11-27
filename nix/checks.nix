@@ -3737,9 +3737,6 @@ dev-python = pkgs.runCommand "dev-python"
       # `dev wasm-audit`'s crate rollup is tested against real twiggy output.
       pkgs.twiggy
     ];
-    # Only here may tests skip for the repository scripts, jq or Nix that
-    # this filtered source and sandbox lack; elsewhere their absence fails.
-    JAUNDER_DEV_PYTHON_CHECK = "1";
   }
   ''
     cp --no-preserve=mode -r ${devCheckSrc} src
@@ -3747,7 +3744,9 @@ dev-python = pkgs.runCommand "dev-python"
     ruff format --check .
     ruff check .
     mypy --strict .
-    coverage run -m pytest -q
+    # `repository` tests need the repository, jq or Nix, which this filtered
+    # source and sandbox lack; CI's host lane runs exactly those.
+    coverage run -m pytest -q -m "not repository"
     coverage combine
     coverage report
     touch $out

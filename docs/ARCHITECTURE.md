@@ -4659,9 +4659,10 @@ On the host the devShells' `dev` shim runs the checkout's own `tools/dev/` with
 working tree's code; Nix checks run a `dev` package built from a filtered
 `tools/dev/` source, so an edit there rebuilds them. A `checks.dev-python`
 static check runs ruff, `mypy --strict` and pytest under coverage.py
-(`fail_under = 100`, branch coverage on) over `tools/dev/`. Just is in no Nix
-input, so the gates passing proves that nothing needs it; no source check guards
-against its return.
+(`fail_under = 100`, branch coverage on) over `tools/dev/`, deselecting the
+tests marked `repository`, which need files, jq or Nix its sandbox lacks; CI's
+host lane runs exactly those. Just is in no Nix input, so the gates passing
+proves that nothing needs it; no source check guards against its return.
 
 Each gate and each step is an OpenTelemetry span. A step span carries its
 `jaunder.status` (`ok`, `failed`, `signalled`), `process.exit.code`, its command
@@ -4868,14 +4869,20 @@ The explicit local workflows are:
 
 CI invokes four independent commands: `dev ci-validate-host`,
 `dev ci-validate-hermetic`, `dev ci-validate-test-checks`, and `dev coverage`.
-`host` owns the verify-only host/static gate except Clippy, and auxiliary host
-tests; `hermetic` owns Nix static checks (including CI's only Clippy verdict,
-through `static-code`'s `clippy-aggregate`), the `csrBundle` build and the wasm
-budget ([CI Clippy verdict from Nix](adr/0255-ci-clippy-verdict-from-nix.md));
-`test-checks` owns wasm tests, doctests, and Elisp coverage; and `coverage` owns
-Rust coverage plus its gate. Producer/consumer pairs never cross jobs. The
-coverage source-filter probe remains a manually callable diagnostic, not an
-automatic CI step
+`hermetic` owns Nix static checks (including CI's only Clippy verdict, through
+`static-code`'s `clippy-aggregate`), the `csrBundle` build and the wasm budget
+([CI Clippy verdict from Nix](adr/0255-ci-clippy-verdict-from-nix.md)). `host`
+repeats no verdict a hermetic check owns
+([hermetic verdicts not repeated on host](adr/drafts/ci-hermetic-verdicts-not-repeated-on-host.md)):
+it runs only the docs-shape and source-contract checks, the platform contract,
+`cargo-deny`'s RustSec advisories on a dependency change
+([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)),
+the tools Cargo tests, and the `dev` tests marked `repository`, which need the
+repository, jq or Nix and which `dev-python` therefore deselects; `test-checks`
+owns wasm tests, doctests, and Elisp coverage; and `coverage` owns Rust coverage
+plus its gate. Producer/consumer pairs never cross jobs. The coverage
+source-filter probe remains a manually callable diagnostic, not an automatic CI
+step
 ([on-demand source probes](adr/0227-on-demand-source-invalidation-probes.md));
 the Nix derivation-identity matrix probe is retired
 ([retired matrix probe](adr/0248-retire-nix-source-invalidation-matrix-probe.md)).

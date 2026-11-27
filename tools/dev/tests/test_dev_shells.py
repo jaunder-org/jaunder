@@ -4,8 +4,8 @@ Without this, host-tool temporary files would quietly land in `/tmp` again.
 Each shell's `shellHook` comes from `nix eval` of the repository's flake and
 runs in a child Bash, without realizing the shell's tools. Provisioning is
 intercepted only to observe its startup environment; Git, Bash, Node and the
-filesystem run for real. It needs Nix and the repository, so only the
-filtered `checks.dev-python` source may skip it.
+filesystem run for real. It needs Nix and the repository, so CI's host lane
+runs it, not `checks.dev-python`.
 """
 
 import json
@@ -17,6 +17,8 @@ from pathlib import Path
 
 import pytest
 from conftest import REPOSITORY, require
+
+pytestmark = pytest.mark.repository
 
 SHELLS = ["ci", "ci-nix", "default", "mutants"]
 # ci-nix is Linux-only.

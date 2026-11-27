@@ -5,8 +5,8 @@ hook that loses `dev`'s exit status, a required aggregate that is skipped
 (which branch protection accepts) or that passes a failed lane, and a
 measurement step whose failure is continued. The hooks and the aggregates'
 verdict scripts run for real under bash. It needs the repository's
-`.githooks/` and `.github/`, so only the filtered `checks.dev-python` source
-may skip it.
+`.githooks/` and `.github/`, so CI's host lane runs it, not
+`checks.dev-python`.
 """
 
 import os
@@ -15,6 +15,8 @@ from pathlib import Path
 
 import pytest
 from conftest import REPOSITORY, load_workflow, require
+
+pytestmark = pytest.mark.repository
 
 
 @pytest.mark.parametrize(

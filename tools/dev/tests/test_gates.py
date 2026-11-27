@@ -5,9 +5,12 @@ not derived from `dev`'s own tables.
 """
 
 import platform
+import re
 
 import pytest
-from conftest import REAL_GIT, Workflow, launch, write_bundle
+from conftest import REAL_GIT, REPOSITORY, Workflow, launch, require, write_bundle
+
+from dev import static
 
 PREPUSH_SHARES = (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
@@ -209,11 +212,20 @@ TOOLS_TESTS = (
 )
 
 
-def host_tests() -> Commands:
+def tools_tests() -> Commands:
     return commands(
         # The tests compile with exactly their run's arguments.
         f"cargo test --no-run {TOOLS_TESTS}",
         f"cargo test {TOOLS_TESTS}",
+    )
+
+
+def host_tests() -> Commands:
+    return [*tools_tests(), *python_checks()]
+
+
+def python_checks() -> Commands:
+    return commands(
         "ruff format --check tools/dev",
         "ruff check tools/dev",
         "mypy --strict tools/dev",
@@ -305,17 +317,16 @@ HOST_LANE = [*host("verify"), PLATFORM]
 
 
 def ci_host_lane(advisories: bool) -> Commands:
-    """CI's host lane. Its Clippy verdict is the hermetic lane's `static-code`,
-    and it runs cargo-deny only when asked to check advisories."""
+    """CI's host lane: only the host checks the hermetic lane does not own
+    (HERMETIC_OWNED), and cargo-deny only when asked to check advisories."""
     return [
         *CLEAN,
-        *format_checks("verify"),
-        *docs_shape(policy_built=True),
-        *source_contracts(policy_built=True),
-        *(tsc_and_cargo_deny() if advisories else TSC),
-        *elisp_checks(),
+        *docs_shape(),
+        *map(source_contract, SOURCE_CONTRACTS),
+        *(commands("cargo deny check") if advisories else []),
         PLATFORM,
-        *host_tests(),
+        *tools_tests(),
+        *commands("pytest -m repository tools/dev"),
     ]
 
 
@@ -371,6 +382,56 @@ def test_the_ci_host_lane_runs_cargo_deny_only_to_check_advisories(
     result = workflow.dev("ci-validate-host", "--advisories")
     assert result.returncode == 0, result
     assert workflow.commands() == ci_host_lane(advisories=True)
+
+
+# Each host step whose CI verdict a hermetic-lane check owns: that check, and
+# the command in its derivation's builder that runs the step.
+HERMETIC_OWNED = {
+    "fmt": ("rust-format", "dev static rust-format --sandbox"),
+    "leptosfmt": ("rust-format", "dev static rust-format --sandbox"),
+    "tools-fmt": ("rust-format", "dev static rust-format --sandbox"),
+    "prettier-markdown": ("static-docs", "dev static prettier-markdown --sandbox"),
+    "prettier-end2end": ("static-code", "dev static prettier-end2end --sandbox"),
+    "prettier-css": ("static-code", "dev static prettier-css --sandbox"),
+    "ast-grep-tests": ("static-code", "dev static ast-grep-tests --sandbox"),
+    "no-full-reload": ("static-code", "dev static no-full-reload --sandbox"),
+    "tsc": ("static-typescript", "dev static tsc --sandbox"),
+    "elisp-fmt": ("static-elisp", "dev static elisp-fmt --sandbox"),
+    "byte-compile": ("static-elisp", "dev static byte-compile --sandbox"),
+    "ert": ("static-ert", "dev static ert --sandbox"),
+    "ruff-format": ("dev-python", "ruff format --check ."),
+    "ruff-check": ("dev-python", "ruff check ."),
+    "mypy": ("dev-python", "mypy --strict ."),
+    "pytest": ("dev-python", 'coverage run -m pytest -q -m "not repository"'),
+}
+
+
+def derivation(nix: str, check: str) -> str:
+    """`check`'s definition in nix/checks.nix: from its top-level binding to
+    the next one."""
+    match = re.search(
+        rf"^{re.escape(check)} =\n?.*?(?=^[\w-]+ =)", nix, re.MULTILINE | re.DOTALL
+    )
+    assert match, check
+    return match[0]
+
+
+@pytest.mark.repository
+def test_the_host_lane_repeats_no_verdict_the_hermetic_lane_owns(
+    workflow: Workflow,
+) -> None:
+    path = REPOSITORY / "nix" / "checks.nix"
+    require(path.is_file(), "the repository's nix/checks.nix")
+    nix = path.read_text(encoding="utf-8")
+    hermetic = {argv[-1].rsplit(".", 1)[-1] for argv in STATIC}
+    for step, (check, command) in HERMETIC_OWNED.items():
+        assert check in hermetic, step
+        assert command in derivation(nix, check), step
+    # The Rust formatting group runs the three formatters.
+    assert static.GROUPS["rust-format"][1] == ["fmt", "leptosfmt", "tools-fmt"]
+    result = workflow.dev("ci-validate-host")
+    assert result.returncode == 0, result
+    assert not HERMETIC_OWNED.keys() & workflow.checkout.merged().keys()
 
 
 GROUPS: list[tuple[list[str], Commands]] = [
@@ -491,7 +552,7 @@ STEP_FAILURES = {
     "run": ("check", host_tests()[-1]),
     "rendered-report": ("validate", COVERAGE[-1]),
     "nix-check": ("ci-validate-hermetic", nix("rust-format")[-1]),
-    "static-preparation": ("ci-validate-host", tsc_and_cargo_deny()[0]),
+    "static-preparation": ("validate-no-e2e", tsc_and_cargo_deny()[0]),
     # nextest-build, while test-local holds its lock; nextest must not run.
     "under-test-local-lock": ("check", TEST_LOCAL[-2]),
 }

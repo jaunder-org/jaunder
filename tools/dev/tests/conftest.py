@@ -121,17 +121,16 @@ def nests(events: list[dict[str, Any]]) -> bool:
 
 
 def require(present: bool, prerequisite: str) -> None:
-    """Skips inside `checks.dev-python` without `prerequisite`; fails elsewhere.
+    """Fails a test whose `prerequisite` is missing.
 
-    That check sets JAUNDER_DEV_PYTHON_CHECK: its filtered source lacks the
-    repository's scripts and its sandbox lacks jq and Nix. Anywhere else a
-    missing prerequisite is a broken environment, not a reason to pass.
+    A test that needs the repository outside `tools/dev`, jq or Nix is marked
+    `repository`: `checks.dev-python`, whose filtered source and sandbox lack
+    them, deselects it, and CI's host lane runs exactly those tests. A missing
+    prerequisite is therefore a broken environment or a missing mark, never a
+    reason to pass.
     """
-    if present:
-        return
-    if os.environ.get("JAUNDER_DEV_PYTHON_CHECK") == "1":
-        pytest.skip(f"needs {prerequisite}")
-    pytest.fail(f"missing prerequisite: {prerequisite}")
+    if not present:
+        pytest.fail(f"missing prerequisite: {prerequisite}")
 
 
 def cells(out: str) -> list[tuple[str, ...]]:

@@ -16,6 +16,8 @@ import pytest
 import yaml
 from conftest import REPOSITORY, require
 
+pytestmark = pytest.mark.repository
+
 SCRIPT = REPOSITORY / "scripts" / "nix-retry"
 WORKFLOWS = [
     REPOSITORY / ".github" / "workflows" / name
