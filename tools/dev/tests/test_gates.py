@@ -156,11 +156,14 @@ def source_contracts(policy_built: bool = False) -> Commands:
     ]
 
 
+TSC = [
+    ["setup-e2e-node-modules", "", ""],
+    *commands("tsc --noEmit -p end2end/tsconfig.json"),
+]
+
+
 def tsc_and_cargo_deny() -> Commands:
-    return [
-        ["setup-e2e-node-modules", "", ""],
-        *commands("tsc --noEmit -p end2end/tsconfig.json", "cargo deny check"),
-    ]
+    return [*TSC, *commands("cargo deny check")]
 
 
 def compile_checks() -> Commands:
@@ -284,6 +287,23 @@ PREPUSH = [
     *DOCTESTS,
 ]
 HOST_LANE = [*host("verify"), PLATFORM]
+
+
+def ci_host_lane(advisories: bool) -> Commands:
+    """CI's host lane. Its Clippy verdict is the hermetic lane's `static-code`,
+    and it runs cargo-deny only when asked to check advisories."""
+    return [
+        *CLEAN,
+        *format_checks("verify"),
+        *docs_shape(policy_built=True),
+        *source_contracts(policy_built=True),
+        *(tsc_and_cargo_deny() if advisories else TSC),
+        *elisp_checks(),
+        PLATFORM,
+        *host_tests(),
+    ]
+
+
 HERMETIC = [*STATIC, *WASM_BUDGET]
 VALIDATE_NO_E2E = [
     *CLEAN,
@@ -301,17 +321,7 @@ GATES: dict[str, Commands] = {
     "prepush": PREPUSH,
     "validate-no-e2e": VALIDATE_NO_E2E,
     "validate": [*VALIDATE_NO_E2E, *E2E],
-    # CI's Clippy verdict is the hermetic lane's `static-code`.
-    "ci-validate-host": [
-        *CLEAN,
-        *format_checks("verify"),
-        *docs_shape(policy_built=True),
-        *source_contracts(policy_built=True),
-        *tsc_and_cargo_deny(),
-        *elisp_checks(),
-        PLATFORM,
-        *host_tests(),
-    ],
+    "ci-validate-host": ci_host_lane(advisories=False),
     "ci-validate-docs": [
         *CLEAN,
         ["prettier", "--check", "**/*.md"],
@@ -338,6 +348,14 @@ def test_each_gate_runs_its_complete_population_in_order(
     )
     assert not (workflow.root / ".xtask" / "last-result.json").exists()
     assert f"dev {gate}" in workflow.checkout.merged()
+
+
+def test_the_ci_host_lane_runs_cargo_deny_only_to_check_advisories(
+    workflow: Workflow,
+) -> None:
+    result = workflow.dev("ci-validate-host", "--advisories")
+    assert result.returncode == 0, result
+    assert workflow.commands() == ci_host_lane(advisories=True)
 
 
 GROUPS: list[tuple[list[str], Commands]] = [

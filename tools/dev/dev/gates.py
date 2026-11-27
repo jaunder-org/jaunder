@@ -405,14 +405,22 @@ def validate() -> None:
     e2e.run_all("")
 
 
-def ci_validate_host() -> None:
+def ci_validate_host(advisories: bool) -> None:
     """The host check groups without Clippy, whose CI verdict is the hermetic
-    lane's `static-code` (docs/adr/0255-ci-clippy-verdict-from-nix.md)."""
+    lane's `static-code` (docs/adr/0255-ci-clippy-verdict-from-nix.md).
+
+    cargo-deny runs only with `advisories`, which CI passes for a change to the
+    product dependencies (`dev.scope`): the hermetic lane checks bans, licenses
+    and sources on every run, so only the advisory check is the host's
+    (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
+    """
     clean_tree()
     format_checks(Mode.VERIFY, Docs.HOST)
     docs_shape()
     source_contracts()
-    tsc_and_cargo_deny(Mode.VERIFY)
+    static.run("tsc", Mode.VERIFY)
+    if advisories:
+        static.run("cargo-deny", Mode.VERIFY)
     elisp_checks(Mode.VERIFY)
     platform_contract()
     host_tests()
