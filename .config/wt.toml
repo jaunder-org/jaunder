@@ -1,0 +1,7 @@
+# Worktrunk project hooks (https://worktrunk.dev). Approve them once per
+# machine with `wt config approvals add`.
+
+# Keep the worktree's traces and run summaries in the per-user store before
+# `wt remove` deletes it (CONTRIBUTING, "Observation and traces"). `dev` comes
+# from this worktree's own devShell. A failure warns but never blocks removal.
+pre-remove = "direnv exec . dev keep-runs || true"

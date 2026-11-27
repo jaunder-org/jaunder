@@ -148,6 +148,16 @@ def test_a_broad_change_runs_check_no_test_and_stages_nothing_new(repo: Repo) ->
         slices["fmt"]["args"]["parent_id"]
         == (slices["precommit-broad-host"]["args"]["span_id"])
     )
+    root = slices["dev precommit"]["args"]
+    assert root["jaunder.precommit.route"] == "broad"
+    assert root["jaunder.precommit.route_reason"] == "non-markdown-path"
+    assert root["jaunder.precommit.restaged"] == 0
+    # The commit being made will be HEAD's child.
+    head = repo.git("rev-parse", "HEAD").decode().strip()
+    branch = repo.git("symbolic-ref", "--short", "HEAD").decode().strip()
+    assert root["vcs.ref.head.revision"] == head
+    assert root["vcs.ref.head.name"] == branch
+    assert "jaunder.failed_step" not in root
 
 
 def test_a_failed_host_check_stops_the_checks_but_staging_still_runs(
@@ -166,7 +176,16 @@ def test_a_failed_host_check_stops_the_checks_but_staging_still_runs(
     slices = repo.workflow.checkout.merged()
     assert slices["precommit-broad-host"]["args"]["jaunder.status"] == "failed"
     assert slices["staging"]["args"]["jaunder.status"] == "ok"
-    assert slices["dev precommit"]["args"]["process.exit.code"] == 1
+    root = slices["dev precommit"]["args"]
+    assert root["process.exit.code"] == 1
+    # The gate names the innermost step that failed first, not its phase.
+    failed = root["jaunder.failed_step"]
+    assert slices[failed]["args"]["process.exit.code"] == 17
+    assert (
+        slices[failed]["args"]["parent_id"]
+        == (slices["precommit-broad-host"]["args"]["span_id"])
+    )
+    assert root["jaunder.failed_reason"] == "exited 17"
 
 
 def test_precommit_reconciles_staged_fixes_even_after_a_host_failure(
@@ -184,7 +203,9 @@ def test_precommit_reconciles_staged_fixes_even_after_a_host_failure(
     assert "precommit-host: precommit-broad-host exited 23" in stderr(result)
     assert repo.git("show", ":guide.txt") == b"formatted\n"
     assert repo.status() == b"M  guide.txt\n"
-    assert "static-docs" not in repo.workflow.checkout.merged()
+    slices = repo.workflow.checkout.merged()
+    assert "static-docs" not in slices
+    assert slices["dev precommit"]["args"]["jaunder.precommit.restaged"] == 1
 
 
 def test_precommit_preserves_the_host_failure_when_the_after_snapshot_fails(
@@ -619,6 +640,11 @@ def test_a_converting_prepush_checkout_is_refused_before_any_request(
         "raw worktree bytes differ from staged index blob: notes.txt\n"
     )
     assert repo.workflow.commands() == []
+    gate = repo.workflow.checkout.merged()["dev prepush"]["args"]
+    assert gate["jaunder.failed_step"] == "prepush-admission"
+    assert gate["jaunder.failed_reason"] == (
+        "raw worktree bytes differ from staged index blob: notes.txt"
+    )
 
 
 @shared_docs

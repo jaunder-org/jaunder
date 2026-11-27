@@ -35,7 +35,8 @@ from dev.spans import STATUS, Status
 
 TRACE_DIR = "JAUNDER_TRACE_DIR"
 CARRIER_KEYS = ("TRACEPARENT", "TRACESTATE")
-COMMAND_LINE_LIMIT = 1024
+# The longest text attribute, in UTF-8 bytes, unless a caller names less.
+ATTRIBUTE_LIMIT = 1024
 
 
 class Warner:
@@ -136,6 +137,7 @@ class _Run:
         # An empty value tells children that the root disabled tracing, so
         # they stay silent instead of each warning or starting a run of their own.
         self.directory = "" if directory is None else str(directory)
+        self.gate: ApiSpan | None = None
 
 
 _current = _Run(NoOpTracer(), None)
@@ -143,6 +145,12 @@ _current = _Run(NoOpTracer(), None)
 
 def tracer() -> Tracer:
     return _current.tracer
+
+
+def annotate(attributes: Mapping[str, str | int]) -> None:
+    """Records what the gate learned about its own run on this process's gate span."""
+    if _current.gate is not None:
+        _current.gate.set_attributes(attributes)
 
 
 def child_environment() -> dict[str, str]:
@@ -231,8 +239,8 @@ def record_phases(
     return list(zip(inside, written, strict=True))
 
 
-def cap_command_line(command_line: str) -> str:
-    return command_line.encode()[:COMMAND_LINE_LIMIT].decode(errors="ignore")
+def cap(text: str, limit: int = ATTRIBUTE_LIMIT) -> str:
+    return text.encode()[:limit].decode(errors="ignore")
 
 
 @contextmanager
@@ -266,10 +274,13 @@ def run(root: Path, name: str) -> Iterator[ApiSpan]:
     _current = _Run(provider.get_tracer("dev"), directory)
     try:
         with _current.tracer.start_as_current_span(name, context=parent) as span:
+            _current.gate = span
             if inherited is None:
                 span.set_attributes(runner.attributes(os.environ))
+                span.set_attributes(runner.head(root))
             yield span
     finally:
+        _current.gate = None
         provider.shutdown()
         if merge is not None:
             # The merged file is written even for a failed or partial run. The

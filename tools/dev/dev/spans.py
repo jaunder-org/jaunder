@@ -14,6 +14,10 @@ CACHE = "jaunder.cache"
 NIX_OUTPUT = "jaunder.nix.output"
 FETCHED_BYTES = "jaunder.nix.fetched_bytes"
 NIX_RETRIED = "jaunder.nix.retried"
+# On a gate span that did not end `ok`: the first span to end unsuccessfully
+# in that process, and why.
+FAILED_STEP = "jaunder.failed_step"
+FAILED_REASON = "jaunder.failed_reason"
 
 
 class Status(StrEnum):

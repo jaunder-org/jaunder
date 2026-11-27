@@ -1481,13 +1481,45 @@ without changing the workload verdict; required producer evidence and aggregate
 checks remain authoritative, and optional diagnostics do not certify
 completeness. Native CI logs keep their existing 14-day policy.
 
+The root span records the checkout's branch and HEAD as `vcs.ref.head.name`
+(left out when detached) and `vcs.ref.head.revision`. In a pre-commit hook HEAD
+is the parent of the commit being made. Each `dev` process's gate span that does
+not end `ok` records `jaunder.failed_step`, the first span in that process to
+end `failed` or `signalled`, and `jaunder.failed_reason`, the first line of its
+refusal message capped at 256 bytes, or `exited <code>`/`signalled <n>`. A
+refusal outside every step gives only the reason. A failed step whose status its
+caller judges as an answer (`steps.captured`) is not the gate's failure. The
+`dev precommit` gate adds `jaunder.precommit.route` (`staged-markdown-only` or
+`broad`), `jaunder.precommit.route_reason` and `jaunder.precommit.restaged` (the
+number of paths it auto-staged). The `dev pr-watch` gate adds its final report's
+`pr`, `head_sha`, `outcome`, `pointer` and `detail` as `jaunder.pr.number`,
+`.head_sha`, `.outcome`, `.pointer` and `.detail`, each capped at 1 KiB, so a
+`dev pr-land` trace holds its verdict in its last pr-watch span. When
+`pr-land.sh` refuses on its own, its reason is only `exited <code>`.
+
 `traced-run -- PROGRAM` is a separate output-parking runner: it records no
 spans, parks stdout/stderr in `.xtask/run/<id>.{out,err}` and prints a JSON
-summary. Checkout-local parked output and traces are not pruned: they remain for
-the worktree lifetime, with growing disk usage accepted. Monitor storage
-explicitly. To keep a run beyond the worktree, copy its `<run_id>.trace.d/` and
-`<run_id>.trace.json` to a destination you choose; copying grants no authority
-to remove the source.
+summary, which it also parks as `<id>.run.json`. Checkout-local parked output
+and traces are not pruned: they remain for the worktree lifetime, with growing
+disk usage accepted. Monitor storage explicitly.
+
+Removing a worktree with `wt remove` keeps its runs
+([keep dev runs at worktree removal](docs/adr/drafts/keep-dev-runs-at-worktree-removal.md)).
+The Worktrunk `pre-remove` hook in `.config/wt.toml` runs
+`direnv exec . dev keep-runs || true` in the worktree being removed. That copies
+every `.xtask/run/<run_id>.trace.d/`, `<run_id>.trace.json` and `<id>.run.json`,
+but never the `.out`/`.err` bodies, to
+`${XDG_STATE_HOME:-~/.local/state}/jaunder/runs/<checkout directory name>/`.
+Read a kept run with `dev trace summary <that directory>/<run_id>.trace.d`.
+After copying, it deletes whole kept checkout directories, least recently kept
+first, until the store is at most 20 GiB. It never deletes the one it has just
+written. A failed copy warns and exits 1, and the hook still lets the removal
+proceed. Approve the project hook once per machine with
+`wt config approvals add`: a non-interactive removal before that approval, or
+`wt remove --no-hooks`, skips it. `dev keep-runs` also runs by hand from a
+checkout, and running it again replaces the copies. Only the checkout root's
+`.xtask/run/` is kept, so output that `traced-run` parked under a subdirectory
+is not. Kache and Cargo cache hits are not recorded.
 
 #### Repeatable performance harness
 
@@ -1836,6 +1868,8 @@ baseline.
   Physical checkout removal is separate: it requires an explicit removal request
   and the runtime's interactive confirmation. Use the supported runtime route,
   never a direct CLI bypass, force, branch recreation, or external process kill.
+  `wt remove` first keeps the worktree's traces and run summaries in the
+  per-user store ("Observation and traces"); `--no-hooks` skips that copy.
 
   Set Status to **Done** manually only after verified eligible cleanup. Managed
   work hands remaining cleanup and tracker responsibility to Manager with an

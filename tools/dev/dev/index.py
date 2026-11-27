@@ -24,7 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import NoReturn
 
-from dev import steps
+from dev import steps, trace
 from dev.rawdiff import (
     REGULAR,
     Change,
@@ -34,6 +34,11 @@ from dev.rawdiff import (
     raw_changes,
     utf8,
 )
+
+# What the precommit gate span records about its route and its staging.
+PRECOMMIT_ROUTE = "jaunder.precommit.route"
+PRECOMMIT_ROUTE_REASON = "jaunder.precommit.route_reason"
+PRECOMMIT_RESTAGED = "jaunder.precommit.restaged"
 
 
 class Refused(Exception):
@@ -245,10 +250,14 @@ def classify(taken: Snapshot) -> Reason:
     return markdown_only(taken.staged_changes)
 
 
+def route(reason: Reason) -> str:
+    return (
+        "staged-markdown-only" if reason is Reason.ISOLATED_STAGED_MARKDOWN else "broad"
+    )
+
+
 def routing(reason: Reason) -> str:
-    if reason is Reason.ISOLATED_STAGED_MARKDOWN:
-        return f"class=staged-markdown-only reason={reason}"
-    return f"class=broad reason={reason}"
+    return f"class={route(reason)} reason={reason}"
 
 
 # Staging reconciliation.
@@ -325,12 +334,16 @@ def stage_plan(before: Snapshot, after: Snapshot) -> StagePlan:
 def apply(plan: StagePlan) -> str:
     """Stages the plan's safe paths, even beside refusals; returns the detail."""
     failures = list(plan.failures)
+    restaged = 0
     for path in plan.stage:
         added = _git("add", "--", path)
         if added.returncode:
             failures.append(
                 f"git {_debug(['add', '--', path])} failed: {_stderr(added)}"
             )
+        else:
+            restaged += 1
+    trace.annotate({PRECOMMIT_RESTAGED: restaged})
     if failures:
         raise Refused("\n".join(sorted(set(failures))))
     if not plan.stage:
@@ -481,7 +494,7 @@ def custody(
 
 def _fail(operation: str, message: str) -> NoReturn:
     print(f"[FAIL] {operation} — {message}", file=sys.stderr, flush=True)
-    raise steps.StepFailed(1, signalled=False)
+    raise steps.StepFailed(1, signalled=False, reason=message)
 
 
 def precommit(checks: Callable[[bool], None]) -> None:
@@ -503,6 +516,12 @@ def precommit(checks: Callable[[bool], None]) -> None:
     reason = classify(before)
     print(f"precommit-routing: {routing(reason)}", flush=True)
     markdown = reason is Reason.ISOLATED_STAGED_MARKDOWN
+    trace.annotate(
+        {
+            PRECOMMIT_ROUTE: route(reason),
+            PRECOMMIT_ROUTE_REASON: str(reason),
+        }
+    )
     host = "precommit-markdown-host" if markdown else "precommit-broad-host"
     failures: list[str] = []
     try:

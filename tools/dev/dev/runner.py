@@ -1,13 +1,17 @@
-"""What a run's root span records about its machine and its CI job.
+"""What a run's root span records about its machine, its CI job and its commit.
 
 Each attribute is read where the machine exposes it and left out silently
 where it does not: tracing never changes a run.
 """
 
 import os
+import subprocess
 from collections.abc import Mapping
 from pathlib import Path
 
+BRANCH = "vcs.ref.head.name"
+REVISION = "vcs.ref.head.revision"
+BRANCH_PREFIX = "refs/heads/"
 CPU_MODEL = "host.cpu.model.name"
 NPROC = "jaunder.host.nproc"
 CLOUD = "cloud.provider"
@@ -58,3 +62,28 @@ def attributes(
     if start.isascii() and start.isdigit():
         found[JOB_START] = int(start)
     return found
+
+
+def head(root: Path) -> dict[str, str]:
+    """The commit `root` has checked out, and its branch unless HEAD is detached.
+
+    In a pre-commit hook this is the parent of the commit being made.
+    """
+    try:
+        found = subprocess.run(
+            ["git", "rev-parse", "HEAD", "--symbolic-full-name", "HEAD"],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return {}
+    lines = found.stdout.split()
+    if found.returncode or len(lines) != 2:
+        return {}
+    revision, ref = lines
+    checked_out = {REVISION: revision}
+    if ref.startswith(BRANCH_PREFIX):
+        checked_out[BRANCH] = ref.removeprefix(BRANCH_PREFIX)
+    return checked_out

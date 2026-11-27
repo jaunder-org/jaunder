@@ -40,7 +40,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, NamedTuple
 
-from dev import annotations, steps
+from dev import annotations, steps, trace
 
 # Runs one command (`gh` or `git`): its status, stdout and stderr.
 Runner = Callable[[Sequence[str]], tuple[int, str, str]]
@@ -48,6 +48,14 @@ Runner = Callable[[Sequence[str]], tuple[int, str, str]]
 MAX_STRIKES = 5
 HEARTBEAT_SECONDS = 600
 SUCCESSFUL = ("ready-to-land", "merged")
+# The final report's fields the gate span keeps, each capped at 1 KiB.
+REPORT_ATTRIBUTES = {
+    "pr": "jaunder.pr.number",
+    "head_sha": "jaunder.pr.head_sha",
+    "outcome": "jaunder.pr.outcome",
+    "pointer": "jaunder.pr.pointer",
+    "detail": "jaunder.pr.detail",
+}
 PENDING, SUCCESS, FAILURE = "pending", "success", "failure"
 # A completed CheckRun with any other conclusion failed.
 PASSING_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
@@ -1081,11 +1089,23 @@ def run(
         raise
     except NoSubject as refusal:
         print(f"dev: pr-watch: {refusal}", file=sys.stderr, flush=True)
-        raise steps.StepFailed(2, signalled=False) from None
+        raise steps.StepFailed(2, signalled=False, reason=str(refusal)) from None
     except Exception as defect:
         # A defect, not a verdict: exit 2, which `pr-land.sh` never reads as one.
         traceback.print_exc()
-        raise steps.StepFailed(2, signalled=False) from defect
+        raise steps.StepFailed(
+            2, signalled=False, reason=steps.describe(defect)
+        ) from defect
     print(json.dumps(report, separators=(",", ":"), ensure_ascii=False), flush=True)
+    # The verdict outlives this terminal in the kept trace.
+    trace.annotate(
+        {
+            attribute: trace.cap(str(report[key]))
+            for key, attribute in REPORT_ATTRIBUTES.items()
+            if report.get(key) is not None
+        }
+    )
     if report["outcome"] not in SUCCESSFUL:
-        raise steps.StepFailed(1, signalled=False)
+        raise steps.StepFailed(
+            1, signalled=False, reason=f"outcome {report['outcome']}"
+        )

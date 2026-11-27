@@ -35,6 +35,8 @@ from dev.spans import (
     CACHE,
     COMMAND_LINE,
     EXIT_CODE,
+    FAILED_REASON,
+    FAILED_STEP,
     FETCHED_BYTES,
     NIX_OUTPUT,
     NIX_RETRIED,
@@ -82,16 +84,19 @@ def changed(base: Mapping[str, str], changes: Environment | None) -> dict[str, s
 
 
 class StepFailed(Exception):
-    def __init__(self, code: int, signalled: bool) -> None:
+    """A step's failure; `reason`, when given, says why better than its status."""
+
+    def __init__(self, code: int, signalled: bool, reason: str | None = None) -> None:
         super().__init__(code)
         self.code = code
         self.signalled = signalled
+        self.reason = reason
 
 
 def refuse(message: str) -> NoReturn:
     """Fails the current step or phase with status 1, saying why on stderr."""
     print(message, file=sys.stderr)
-    raise StepFailed(1, signalled=False)
+    raise StepFailed(1, signalled=False, reason=message)
 
 
 class _Interrupted(StepFailed):
@@ -140,36 +145,88 @@ class _Signals:
 _signals = _Signals()
 
 
-def _record_outcome(span: Span, code: int, signalled: bool) -> None:
+REASON_LIMIT = 256
+
+
+def describe(error: BaseException) -> str:
+    """An exception as a failure reason: its message, or its type without one."""
+    return str(error) or type(error).__name__
+
+
+# The first span of this process's gate to end unsuccessfully, and why: the
+# gate span names it, so a kept trace says where a failed gate stopped.
+_failure: tuple[str | None, str] | None = None
+
+
+def _note_failure(
+    name: str | None, code: int, signalled: bool, reason: str | None
+) -> tuple[str | None, str]:
+    """Remembers the gate's first failure, if it has none yet; returns that one."""
+    global _failure
+    if _failure is None:
+        if reason is None:
+            reason = f"signalled {code - 128}" if signalled else f"exited {code}"
+        _failure = (name, trace.cap(reason.strip().partition("\n")[0], REASON_LIMIT))
+    return _failure
+
+
+def _set_outcome(span: Span, code: int, signalled: bool) -> bool:
+    """Records how `span` ended; returns whether it succeeded."""
     span.set_attribute(EXIT_CODE, code)
     status = Status.SIGNALLED if signalled else Status.FAILED if code else Status.OK
     span.set_attribute(STATUS, status)
+    return status is Status.OK
+
+
+def _record_outcome(
+    span: Span, name: str, code: int, signalled: bool, reason: str | None = None
+) -> None:
+    if not _set_outcome(span, code, signalled):
+        _note_failure(name, code, signalled, reason)
+
+
+def _record_gate_outcome(
+    span: Span, code: int, signalled: bool, reason: str | None
+) -> None:
+    if _set_outcome(span, code, signalled):
+        return
+    # A failure no span recorded, such as a refusal between steps, still
+    # gives its reason.
+    step, why = _note_failure(None, code, signalled, reason)
+    if step is not None:
+        span.set_attribute(FAILED_STEP, step)
+    span.set_attribute(FAILED_REASON, why)
 
 
 def gate(root: Path, name: str, body: Callable[[], None]) -> int:
     """Runs `body`'s steps under the gate span `name`; returns the exit status."""
-    global _signals
+    global _signals, _failure
     _signals = _Signals()
+    _failure = None
     previous = {number: signal.signal(number, _signals.handle) for number in _HANDLED}
     try:
         with trace.run(root, name) as span:
-            code, signalled = 0, False
+            code, signalled, reason = 0, False, None
             try:
                 if _signals.deferred:
                     raise _Interrupted(_signals.deferred[0])
                 _signals.armed = True
                 body()
             except StepFailed as failure:
-                code, signalled = failure.code, failure.signalled
-            except Exception:
+                code, signalled, reason = (
+                    failure.code,
+                    failure.signalled,
+                    failure.reason,
+                )
+            except Exception as defect:
                 # A defect, not a verdict: the gate still ends failed in the
                 # trace, and the traceback and Python's status 1 reach the
                 # caller unchanged.
-                _record_outcome(span, 1, False)
+                _record_gate_outcome(span, 1, False, describe(defect))
                 raise
             finally:
                 _signals.armed = False
-            _record_outcome(span, code, signalled)
+            _record_gate_outcome(span, code, signalled, reason)
     finally:
         for number, handler in previous.items():
             signal.signal(number, handler)
@@ -235,11 +292,11 @@ def _supervise(
 @contextlib.contextmanager
 def _step(name: str, argv: Sequence[str]) -> Iterator[Span]:
     with trace.tracer().start_as_current_span(name) as span:
-        span.set_attribute(COMMAND_LINE, trace.cap_command_line(shlex.join(argv)))
+        span.set_attribute(COMMAND_LINE, trace.cap(shlex.join(argv)))
         try:
             yield span
         except _Interrupted as interrupted:
-            _record_outcome(span, interrupted.code, True)
+            _record_outcome(span, name, interrupted.code, True)
             raise
 
 
@@ -254,10 +311,11 @@ def phase(name: str) -> Iterator[None]:
         try:
             yield
         except StepFailed as failure:
-            _record_outcome(span, failure.code, failure.signalled)
+            _record_outcome(span, name, failure.code, failure.signalled, failure.reason)
             raise
-        except Exception:
+        except Exception as error:
             span.set_attribute(STATUS, Status.FAILED)
+            _note_failure(name, 1, False, describe(error))
             raise
         span.set_attribute(STATUS, Status.OK)
 
@@ -289,7 +347,7 @@ def verdict(
         sys.stdout.write(render_report({"steps": [step]}))
         sys.stdout.flush()
         if code:
-            raise StepFailed(code, signalled=False)
+            raise StepFailed(code, signalled=False, reason=detail)
 
 
 # Judges a successful step's captured output: the reason to refuse it, or None.
@@ -322,6 +380,7 @@ def _run(
             )
             span.set_attribute(NIX_RETRIED, True)
             code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
+        why: str | None = None
         if render is not None:
             rendered = render(output)
             sys.stdout.buffer.write(output if rendered is None else rendered.encode())
@@ -329,15 +388,16 @@ def _run(
             if rendered is None and not code:
                 # A tool that succeeds without its report has not shown it
                 # passed. A failed tool's own status stays the verdict.
-                print(f"dev: {name}: output is not a step report", file=sys.stderr)
+                why = "output is not a step report"
+                print(f"dev: {name}: {why}", file=sys.stderr)
                 sys.stderr.flush()
                 code = 1
         if refusal is not None and not code:
             # Judged inside the step's span, so the trace shows which step's
             # output stopped the gate.
-            reason = refusal(output)
-            if reason is not None:
-                print(reason, file=sys.stderr, flush=True)
+            why = refusal(output)
+            if why is not None:
+                print(why, file=sys.stderr, flush=True)
                 code = 1
         if (
             verdict
@@ -345,15 +405,15 @@ def _run(
             and not code
             and _reported_not_executed_here(name, realizes())
         ):
-            code = 1
-        _record_outcome(span, code, signalled)
+            why, code = "verdict not executed here", 1
+        _record_outcome(span, name, code, signalled, why)
         if finished is not None:
             finished(span, started_ns)
         if realizes is not None and not code:
             with contextlib.suppress(_QueryFailed):
                 _record_cache(span, realizes(), start)
     if code:
-        raise StepFailed(code, signalled)
+        raise StepFailed(code, signalled, why)
     return output
 
 
@@ -414,7 +474,10 @@ def captured(name: str, argv: Sequence[str]) -> tuple[int, bytes, bytes]:
         code, signalled, output, diagnostics = _supervise(
             argv, True, capture_stderr=True
         )
-        _record_outcome(span, code, signalled)
+        # A failure the caller judges is not the gate's failure unless the
+        # caller says so; a termination request still is.
+        if not _set_outcome(span, code, signalled) and signalled:
+            _note_failure(name, code, signalled, None)
     if signalled:
         raise StepFailed(code, signalled)
     return code, output, diagnostics
@@ -626,8 +689,8 @@ def nix_build(
                 "build", argv, refusal=refusal, finished=finished, nix_retry=True
             )
             if verdict and _reported_not_executed_here(name, paths):
-                raise StepFailed(1, False)
-            _record_outcome(span, 0, False)
+                raise StepFailed(1, False, "verdict not executed here")
+            _record_outcome(span, name, 0, False)
             if len(paths.splitlines()) == 1:
                 span.set_attribute(NIX_OUTPUT, paths)
                 with contextlib.suppress(_QueryFailed):
@@ -635,7 +698,7 @@ def nix_build(
                         fetched = _fetched_bytes(derivation, start)
                         span.set_attribute(FETCHED_BYTES, fetched)
         except StepFailed as failure:
-            _record_outcome(span, failure.code, failure.signalled)
+            _record_outcome(span, name, failure.code, failure.signalled, failure.reason)
             raise
     return paths
 
