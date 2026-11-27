@@ -178,3 +178,16 @@ def test_the_host_lane_checks_advisories_only_for_a_dependency_change(
     )
     assert result.returncode == 0, result
     assert recorded.read_text().splitlines() == arguments
+
+
+def test_the_advisory_scan_cannot_overlap_or_hide_its_failure() -> None:
+    """Overlapping scans could each file the same advisory; a continued scan
+    would hide a failing `main`."""
+    workflow = load_workflow("advisories.yml")
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    (scan,) = [
+        step
+        for step in workflow["jobs"]["scan"]["steps"]
+        if "dev advisory-scan" in step.get("run", "")
+    ]
+    assert "continue-on-error" not in scan, scan
