@@ -1093,7 +1093,9 @@ def run(
     except Exception as defect:
         # A defect, not a verdict: exit 2, which `pr-land.sh` never reads as one.
         traceback.print_exc()
-        raise steps.StepFailed(2, signalled=False, reason=repr(defect)) from defect
+        raise steps.StepFailed(
+            2, signalled=False, reason=steps.describe(defect)
+        ) from defect
     print(json.dumps(report, separators=(",", ":"), ensure_ascii=False), flush=True)
     # The verdict outlives this terminal in the kept trace.
     trace.annotate(

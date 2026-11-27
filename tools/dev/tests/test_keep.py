@@ -55,7 +55,7 @@ def test_a_failed_copy_warns_and_fails(checkout: Checkout) -> None:
     stored(checkout).parent.write_text("")
     result = checkout.dev("keep-runs")
     assert result.returncode == 1
-    assert result.stderr.decode().startswith("dev: keep-runs: warning: runs not kept:")
+    assert result.stderr.decode().startswith("dev: keep-runs: warning: ")
 
 
 def kept(runs: Path, name: str, size: int, mtime: int) -> Path:

@@ -640,6 +640,11 @@ def test_a_converting_prepush_checkout_is_refused_before_any_request(
         "raw worktree bytes differ from staged index blob: notes.txt\n"
     )
     assert repo.workflow.commands() == []
+    gate = repo.workflow.checkout.merged()["dev prepush"]["args"]
+    assert gate["jaunder.failed_step"] == "prepush-admission"
+    assert gate["jaunder.failed_reason"] == (
+        "raw worktree bytes differ from staged index blob: notes.txt"
+    )
 
 
 @shared_docs

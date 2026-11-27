@@ -573,7 +573,7 @@ def keep_runs() -> None:
     try:
         kept = keep.keep(checkout.root(), runs)
     except OSError as error:
-        click.echo(f"dev: keep-runs: warning: runs not kept: {error}", err=True)
+        click.echo(f"dev: keep-runs: warning: {error}", err=True)
         raise SystemExit(1) from error
     click.echo("no runs to keep" if kept is None else f"kept runs in {kept}")
 

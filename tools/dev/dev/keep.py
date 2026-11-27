@@ -27,7 +27,7 @@ def _size(path: Path) -> int:
     return sum(entry.stat().st_size for entry in path.rglob("*") if entry.is_file())
 
 
-def prune(runs: Path, cap: int, spare: Path) -> None:
+def _prune(runs: Path, cap: int, spare: Path) -> None:
     """Deletes kept checkouts, least recently kept first, until `runs` fits `cap`.
 
     `spare`, the checkout just kept, is never deleted, so it alone can leave
@@ -68,5 +68,5 @@ def keep(checkout: Path, runs: Path, cap: int = CAP_BYTES) -> Path | None:
             shutil.copy2(source, target / source.name)
     # Kept now, whenever its directory was created: the cap deletes it last.
     os.utime(target)
-    prune(runs, cap, target)
+    _prune(runs, cap, target)
     return target

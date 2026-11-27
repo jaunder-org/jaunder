@@ -313,8 +313,8 @@ TOOL_PACKAGES = {
 # host tool that reports prints a minimal report with no steps. Fake Git
 # answers index custody's queries (the only Git that honours a hook's
 # overrides) for a clean index, refuses inherited repository overrides
-# anywhere else with 23, answers checkout discovery and the root's HEAD from the real Git, and
-# reports a dirty tree while `dirty-status` exists.
+# anywhere else with 23, answers checkout discovery and the root's HEAD from
+# the real Git, and reports a dirty tree while `dirty-status` exists.
 # An evaluation prints a fake derivation named after the installable's last
 # component, and a check's build prints `$FAKE_STORE/fake-<check>`. A store
 # query reports a path built here (`ultimate`) with no registration time, so Nix

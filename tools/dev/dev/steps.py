@@ -147,6 +147,12 @@ _signals = _Signals()
 
 REASON_LIMIT = 256
 
+
+def describe(error: BaseException) -> str:
+    """An exception as a failure reason: its message, or its type without one."""
+    return str(error) or type(error).__name__
+
+
 # The first span of this process's gate to end unsuccessfully, and why: the
 # gate span names it, so a kept trace says where a failed gate stopped.
 _failure: tuple[str | None, str] | None = None
@@ -216,7 +222,7 @@ def gate(root: Path, name: str, body: Callable[[], None]) -> int:
                 # A defect, not a verdict: the gate still ends failed in the
                 # trace, and the traceback and Python's status 1 reach the
                 # caller unchanged.
-                _record_gate_outcome(span, 1, False, repr(defect))
+                _record_gate_outcome(span, 1, False, describe(defect))
                 raise
             finally:
                 _signals.armed = False
@@ -309,7 +315,7 @@ def phase(name: str) -> Iterator[None]:
             raise
         except Exception as error:
             span.set_attribute(STATUS, Status.FAILED)
-            _note_failure(name, 1, False, str(error) or type(error).__name__)
+            _note_failure(name, 1, False, describe(error))
             raise
         span.set_attribute(STATUS, Status.OK)
 
@@ -468,7 +474,10 @@ def captured(name: str, argv: Sequence[str]) -> tuple[int, bytes, bytes]:
         code, signalled, output, diagnostics = _supervise(
             argv, True, capture_stderr=True
         )
-        _record_outcome(span, name, code, signalled)
+        # A failure the caller judges is not the gate's failure unless the
+        # caller says so; a termination request still is.
+        if not _set_outcome(span, code, signalled) and signalled:
+            _note_failure(name, code, signalled, None)
     if signalled:
         raise StepFailed(code, signalled)
     return code, output, diagnostics

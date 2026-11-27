@@ -4727,8 +4727,9 @@ telemetry is unchanged. The root also records its branch and HEAD
 (`jaunder.failed_step`, `jaunder.failed_reason`). Before `wt remove` deletes a
 worktree, a Worktrunk `pre-remove` hook runs `dev keep-runs`. It copies the span
 records, merged traces and `traced-run` summaries (`<id>.run.json`, never the
-parked output) into a per-user store under `$XDG_STATE_HOME/jaunder/runs/`
-capped at 20 GiB, warning but never blocking removal on failure
+parked output) into a per-user store under
+`${XDG_STATE_HOME:-~/.local/state}/jaunder/runs/` capped at 20 GiB, warning but
+never blocking removal on failure
 ([keep dev runs at worktree removal](adr/drafts/keep-dev-runs-at-worktree-removal.md)).
 
 The auxiliary repository-policy package owns only the fixed documentation

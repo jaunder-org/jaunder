@@ -673,3 +673,21 @@ def test_a_refusal_outside_any_step_still_gives_its_reason(checkout: Checkout) -
     gate = checkout.merged()["dev demo"]["args"]
     assert gate["jaunder.failed_reason"] == "no"
     assert "jaunder.failed_step" not in gate
+
+
+def test_a_failure_the_caller_judged_is_not_the_gate_s_failure(
+    checkout: Checkout,
+) -> None:
+    script = launch(
+        "from pathlib import Path\nfrom dev import steps\n"
+        "def body():\n"
+        '    steps.captured("probe", ["false"])\n'
+        '    steps.refuse("the real reason")\n'
+        'sys.exit(steps.gate(Path.cwd(), "dev demo", body))'
+    )
+    assert checkout.run(script, checkout.environment()).returncode == 1
+    merged = checkout.merged()
+    assert merged["probe"]["args"]["jaunder.status"] == "failed"
+    gate = merged["dev demo"]["args"]
+    assert gate["jaunder.failed_reason"] == "the real reason"
+    assert "jaunder.failed_step" not in gate

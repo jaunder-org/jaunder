@@ -1487,11 +1487,13 @@ is the parent of the commit being made. Each `dev` process's gate span that does
 not end `ok` records `jaunder.failed_step`, the first span in that process to
 end `failed` or `signalled`, and `jaunder.failed_reason`, the first line of its
 refusal message capped at 256 bytes, or `exited <code>`/`signalled <n>`. A
-refusal outside every step gives only the reason. The `dev precommit` gate adds
-`jaunder.precommit.route` (`staged-markdown-only` or `broad`),
-`jaunder.precommit.route_reason` and `jaunder.precommit.restaged` (the paths it
-auto-staged). The `dev pr-watch` gate adds its final report's `pr`, `head_sha`,
-`outcome`, `pointer` and `detail` as `jaunder.pr.*`, each capped at 1 KiB, so a
+refusal outside every step gives only the reason. A failed step whose status its
+caller judges as an answer (`steps.captured`) is not the gate's failure. The
+`dev precommit` gate adds `jaunder.precommit.route` (`staged-markdown-only` or
+`broad`), `jaunder.precommit.route_reason` and `jaunder.precommit.restaged` (the
+number of paths it auto-staged). The `dev pr-watch` gate adds its final report's
+`pr`, `head_sha`, `outcome`, `pointer` and `detail` as `jaunder.pr.number`,
+`.head_sha`, `.outcome`, `.pointer` and `.detail`, each capped at 1 KiB, so a
 `dev pr-land` trace holds its verdict in its last pr-watch span. When
 `pr-land.sh` refuses on its own, its reason is only `exited <code>`.
 

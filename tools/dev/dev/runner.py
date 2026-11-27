@@ -83,7 +83,7 @@ def head(root: Path) -> dict[str, str]:
     if found.returncode or len(lines) != 2:
         return {}
     revision, ref = lines
-    attributes = {REVISION: revision}
+    checked_out = {REVISION: revision}
     if ref.startswith(BRANCH_PREFIX):
-        attributes[BRANCH] = ref.removeprefix(BRANCH_PREFIX)
-    return attributes
+        checked_out[BRANCH] = ref.removeprefix(BRANCH_PREFIX)
+    return checked_out
