@@ -43,8 +43,8 @@ format is internal to kache.
   as for a tree with no events (nothing compiled, or `KACHE_DISABLED=1`), and a
   report of any other shape. The step's outcome never changes.
 
-This amends ADR-0256's "everything else is kache's default" by this one per-step
-variable.
+This extends ADR-0254's step accounting to Cargo steps, and amends ADR-0256's
+"everything else is kache's default" by this one per-step variable.
 
 ## Consequences
 

@@ -9,7 +9,7 @@ may need before any check starts.
 
 import os
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
 
@@ -51,12 +51,7 @@ def _check(fix: bool) -> list[str]:
     return [] if fix else ["--check"]
 
 
-def _cargo(
-    summary: str,
-    home: str,
-    args: Callable[[bool, bool], list[str]],
-    compiles: bool = False,
-) -> Leaf:
+def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> Leaf:
     return Leaf(
         summary,
         lambda fix, sandbox: [
@@ -65,17 +60,14 @@ def _cargo(
             *args(fix, sandbox),
         ],
         home,
-        compiles=compiles,
     )
 
 
 def _clippy(summary: str, home: str, *args: str) -> Leaf:
-    return _cargo(
-        summary,
-        home,
-        lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"],
-        compiles=True,
+    leaf = _cargo(
+        summary, home, lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"]
     )
+    return replace(leaf, compiles=True)
 
 
 def _link_e2e_node_modules() -> steps.Environment:

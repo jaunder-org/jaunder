@@ -69,6 +69,9 @@ WITHOUT_GIT_OVERRIDES: Environment = dict.fromkeys(GIT_OVERRIDES)
 
 # The output-holding GC roots of Nix builds, under the checkout root.
 GCROOTS = ".xtask/gcroots"
+# Where each compiling step's kache build tree is named, under the checkout
+# root; nothing is created there (`_kache_tree`).
+KACHE_TREES = ".xtask/kache"
 # The flags a Nix build takes unless its caller names others.
 NIX_FLAGS = ("--accept-flake-config",)
 # Flake commands that must leave flake.lock exactly as committed.
@@ -374,7 +377,7 @@ def _run(
     with _step(name, argv) as span:
         tree = _kache_tree(span, environment) if compiles else None
         if tree is not None:
-            environment = {**(environment or {}), KACHE_EVENT_ROOT: tree}
+            environment = {**(environment or {}), "KACHE_EVENT_ROOT": tree}
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
         code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
@@ -537,11 +540,12 @@ def text(
 
 
 class _QueryFailed(Exception):
-    """A Nix query failed, so the step's cache source stays unrecorded."""
+    """A query about a step's output (Nix) or compiles (kache) failed, so what
+    it would have recorded stays unrecorded."""
 
 
 def _query(argv: Sequence[str], stdin: bytes | None = None) -> bytes:
-    """A Nix query's stdout. Its streams never reach the user."""
+    """A Nix or kache query's stdout. Its streams never reach the user."""
     try:
         done = subprocess.run(
             argv,
@@ -635,18 +639,10 @@ def _record_cache(span: Span, path: str, start: int) -> Cache | None:
 # events carry a tree of their own, under the checkout and never created, so its
 # session is exactly its compiles. kache's own tools then see each step run as
 # its own tree (docs/adr/drafts/dev-steps-label-their-kache-events.md).
-KACHE_EVENT_ROOT = "KACHE_EVENT_ROOT"
-KACHE_TREES = ".xtask/kache"
-# The `kache stats --json --last-build` summary fields a step records: three
-# kinds of hit, the misses, and the compile time kache estimates its hits
-# avoided (summed over parallel compiles, so not the step's wall time).
-_KACHE_SUMMARY = (
-    "local_hits",
-    "prefetch_hits",
-    "remote_hits",
-    "misses",
-    "time_saved_ms",
-)
+# A step records the three kinds of hit in its `kache stats --json --last-build`
+# summary as one count, beside the misses and the compile time kache estimates
+# its hits avoided (summed over parallel compiles, so not the step's wall time).
+_KACHE_HITS = ("local_hits", "prefetch_hits", "remote_hits")
 
 
 def _kache_tree(span: Span, environment: Environment | None) -> str | None:
@@ -665,15 +661,15 @@ def kache_counts(stats: bytes) -> dict[str, int] | None:
     report, or None for a report of any other shape."""
     try:
         summary = json.loads(stats)["report"]["summary"]
-        values = [summary[field] for field in _KACHE_SUMMARY]
+        hits = [summary[field] for field in _KACHE_HITS]
+        misses, avoided = summary["misses"], summary["time_saved_ms"]
     except ValueError, LookupError, TypeError:
         return None
     # bool is an int to Python, never to kache.
-    if any(type(value) is not int for value in values):
+    if any(type(value) is not int for value in [*hits, misses, avoided]):
         return None
-    local, prefetch, remote, misses, avoided = values
     return {
-        KACHE_HITS: local + prefetch + remote,
+        KACHE_HITS: sum(hits),
         KACHE_MISSES: misses,
         KACHE_AVOIDED_COMPILE_MS: avoided,
     }

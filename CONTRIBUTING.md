@@ -289,11 +289,12 @@ Beyond that environment kache runs on its defaults: one store in the user cache
 directory serves every worktree, its daemon starts on demand, and the store is
 capped at 5 % of its volume (5 GiB floor, 100 GiB ceiling) with automatic GC.
 Nothing runs `kache init` or writes kache, Cargo or shell configuration into
-your files. The one exception: each compiling Cargo step labels its kache events
-with a build tree of its own (`KACHE_EVENT_ROOT`), so its trace can carry its
-hits and misses ([Observation and traces](#observation-and-traces)). kache then
-sees each step run as a separate build. `kache explain` therefore finds no
-earlier build of the same tree to compare a `dev` step's misses against, and
+your files. One addition to the environment departs from kache's defaults: each
+compiling Cargo step labels its kache events with a build tree of its own
+(`KACHE_EVENT_ROOT`), so its trace can carry its hits and misses
+([Observation and traces](#observation-and-traces)). kache then sees each step
+run as a separate build. `kache explain` therefore finds no earlier build of the
+same tree to compare a `dev` step's misses against, and
 `kache stats --last-build --root <checkout>` reports only the latest step.
 
 - **Disk.** kache restores artifacts into each worktree's `target/` as reflinks
