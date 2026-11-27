@@ -25,7 +25,6 @@ from dev import (
     upgrade,
     wasm_audit,
 )
-from dev.gates import Docs
 from dev.static import Mode
 
 
@@ -68,7 +67,8 @@ _workflow(
 _workflow(
     "prepush",
     gates.prepush,
-    "Clean tree; the host check groups in Verify mode, the auxiliary host "
+    "Clean tree; the host check groups in Verify mode (on x86_64-linux with "
+    "shared Nix verdicts for formatting, tsc and Elisp), the auxiliary host "
     "tests, test-local and the doctests producer and gate.",
 )
 _workflow(
@@ -133,21 +133,9 @@ def nix_check(check: str) -> None:
 
 @cli.command("format")
 @mode_argument
-@click.argument(
-    "docs",
-    type=click.Choice([docs.value for docs in Docs]),
-    default=Docs.HOST.value,
-    callback=lambda _context, _parameter, value: Docs(value),
-)
-def format_command(mode: Mode, docs: Docs) -> None:
-    """Formatters, in Fix or Verify MODE.
-
-    DOCS `prepush` takes the shared clean-index Markdown verdict on
-    x86_64-linux; it only verifies.
-    """
-    if docs is Docs.PREPUSH and mode is not Mode.VERIFY:
-        raise click.UsageError("prepush docs require verify")
-    _gate(lambda: gates.format_checks(mode, docs))
+def format_command(mode: Mode) -> None:
+    """Formatters, in Fix or Verify MODE."""
+    _gate(lambda: gates.format_checks(mode))
 
 
 @cli.command("compile-checks")

@@ -2,8 +2,8 @@
 
 ADR-0029: the precommit snapshots the dirty tree, runs the host checks its
 class selects, and then re-stages only provably safe formatter/check fixes,
-also after a failed check. A Markdown-only change and prepush's Markdown slot
-request the shared `static-docs` verdict between an admission and a mandatory
+also after a failed check. A Markdown-only change, and the whole of prepush's
+checks, request shared Nix verdicts between an admission and a mandatory
 post-check. A signal is the one exception: a check or request killed by signal
 n, or a termination request to `dev`, skips the reconciliation and the
 post-check, and `dev` exits 128+n.
@@ -37,11 +37,12 @@ from dev.rawdiff import (
 
 
 class Refused(Exception):
-    """Git evidence, staging or the docs request refused; the message is shown."""
+    """Git evidence, staging or custody refused; the message is shown."""
 
 
-def shares_docs() -> bool:
-    """Whether this host takes the shared `static-docs` verdict: x86_64 Linux."""
+def shares_verdicts() -> bool:
+    """Whether this host takes the shared Nix static verdicts: x86_64 Linux,
+    the only system `dev`'s flake checks name and Cachix holds."""
     return (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
 
@@ -337,27 +338,21 @@ def apply(plan: StagePlan) -> str:
     return "staged: " + ", ".join(plan.stage)
 
 
-# The shared static-docs request.
+# Custody of the shared Nix verdict requests.
 
-
-def _static_docs_input(path: bytes) -> bool:
-    """A tracked file `static-docs` reads: Markdown, Prettier config, `dev`."""
-    if path == b".claude" or path.startswith(b".claude/"):
-        return False
-    return (
-        path.endswith((b".md", b"/.prettierrc.json", b"/.prettierignore"))
-        or path in (b".prettierrc.json", b".prettierignore")
-        # The `dev` build the check runs (`devSrc` in nix/packages.nix).
-        or path == b"tools/dev/pyproject.toml"
-        or (path.startswith(b"tools/dev/dev/") and path.endswith(b".py"))
-    )
+# Index modes whose worktree bytes the Git flake reads as file contents. A
+# symlink is read as a link and a gitlink not at all, so neither is hashed.
+_REGULAR_MODES = ("100644", "100755")
 
 
 def _worktree_matches_index() -> None:
-    """Refuses unless the raw worktree bytes of every docs input are its index blob.
+    """Refuses unless every tracked regular file's raw worktree bytes are its
+    index blob.
 
     The Git flake reads worktree bytes, so a clean but converting checkout
-    (an EOL attribute, say) would otherwise check bytes nobody staged.
+    (an EOL attribute, say) would otherwise check bytes nobody staged. The
+    whole tracked tree is compared, so no list of what each check reads has
+    to mirror its Nix source filter.
     """
     listed = _git("ls-files", "--stage", "-z")
     if listed.returncode:
@@ -367,19 +362,18 @@ def _worktree_matches_index() -> None:
         metadata, tab, path_bytes = record.partition(b"\t")
         if not tab:
             raise Refused("malformed NUL-delimited stage record")
-        if not _static_docs_input(path_bytes):
-            continue
         try:
             path = path_bytes.decode()
         except UnicodeDecodeError as error:
-            raise Refused("non-UTF-8 static-docs input path") from error
+            raise Refused("non-UTF-8 tracked path") from error
         try:
             fields = metadata.decode().split()
         except UnicodeDecodeError as error:
             raise Refused("non-UTF-8 index metadata") from error
         if len(fields) != 3 or fields[2] != "0":
             raise Refused(f"non-stage-0 index entry: {path}")
-        selected.append(_IndexBlob(path, fields[1]))
+        if fields[0] in _REGULAR_MODES:
+            selected.append(_IndexBlob(path, fields[1]))
     if listed.stdout and not listed.stdout.endswith(b"\0"):
         raise Refused("unterminated NUL-delimited index record")
     if not selected:
@@ -404,7 +398,7 @@ def _worktree_matches_index() -> None:
 
 def markdown_admission() -> Snapshot:
     """Admits only a reconciled tree that is clean or still Markdown-only, with
-    byte-identical docs inputs."""
+    byte-identical tracked files."""
     taken = snapshot()
     if taken.uncertainty:
         raise Refused(f"Git status evidence is uncertain: {_debug(taken.uncertainty)}")
@@ -420,7 +414,7 @@ def markdown_admission() -> Snapshot:
 
 
 def clean_admission() -> Snapshot:
-    """Admits only a provably clean tree whose docs inputs match the index."""
+    """Admits only a provably clean tree whose tracked files match the index."""
     taken = snapshot()
     if taken.uncertainty or taken.paths:
         raise Refused(
@@ -430,48 +424,55 @@ def clean_admission() -> Snapshot:
     return taken
 
 
-def _unchanged(before: Snapshot) -> None:
+def _unchanged(before: Snapshot, name: str) -> None:
     if snapshot() != before:
         raise Refused(
-            "tracked, staged, or nonignored untracked Git state changed during "
-            "static-docs request"
+            f"tracked, staged, or nonignored untracked Git state changed during {name}"
         )
     _worktree_matches_index()
 
 
-# The request leaves flake.lock exactly as committed, as the clean-state
+# Shared requests leave flake.lock exactly as committed, as the clean-state
 # admission and post-check assume.
-STATIC_DOCS_FLAGS = (*steps.NIX_FLAGS, *steps.NIX_LOCK_FLAGS)
+SHARED_FLAGS = (*steps.NIX_FLAGS, *steps.NIX_LOCK_FLAGS)
 
 
-def static_docs(admission: Callable[[], Snapshot]) -> None:
-    """Requests `static-docs` between `admission` and the mandatory post-check.
+def custody(
+    name: str, admission: Callable[[], Snapshot], body: Callable[[], None]
+) -> None:
+    """Runs `body`, which requests shared Nix verdicts, between `admission` and
+    the mandatory post-check, both phases named after `name`.
 
-    The post-check runs even when the request fails, and its own failure never
-    hides the request's. A request killed by a signal, or a termination request
-    to `dev`, skips the post-check: the gate stops at once and exits 128+n.
+    The Git flake reads worktree bytes: the admission proves they are the
+    index's, and the post-check that no Git state changed while `body` ran. The
+    post-check runs even when `body` fails. If it passes, `body`'s failure is
+    raised unchanged; if it fails too, the refusal names both. A step killed by
+    a signal, or a termination request to `dev`, skips the post-check: the gate
+    stops at once and exits 128+n.
     """
     try:
-        with steps.phase("static-docs-admission"):
+        with steps.phase(f"{name}-admission"):
             before = admission()
     except Refused as refused:
-        raise Refused(f"shared-static-docs-admission: {refused}") from refused
-    request: str | None = None
+        raise Refused(f"{name}-admission: {refused}") from refused
+    failed: steps.StepFailed | None = None
     try:
-        steps.nix_check("static-docs", STATIC_DOCS_FLAGS)
+        body()
     except steps.StepFailed as failure:
         if failure.signalled:
             raise
-        request = f"the static-docs request exited {failure.code}"
+        failed = failure
     try:
-        with steps.phase("static-docs-post-check"):
-            _unchanged(before)
+        with steps.phase(f"{name}-post-check"):
+            _unchanged(before, name)
     except Refused as refused:
-        post = f"shared-static-docs-state: {refused}"
-        raise Refused(post if request is None else f"{request}\n{post}") from refused
-    print("shared-static-docs-state: unchanged", file=sys.stderr, flush=True)
-    if request is not None:
-        raise Refused(request)
+        post = f"{name}-state: {refused}"
+        if failed is not None:
+            post = f"the checks exited {failed.code}\n{post}"
+        raise Refused(post) from refused
+    print(f"{name}-state: unchanged", file=sys.stderr, flush=True)
+    if failed is not None:
+        raise failed
 
 
 # The custody operations.
@@ -490,7 +491,8 @@ def precommit(checks: Callable[[bool], None]) -> None:
     fail. The exception is a signal: a check killed by signal n, or a
     termination request to `dev`, stops the gate at once, skipping the
     reconciliation and the docs post-check, and `dev` exits 128+n. Host, staging
-    or admission failure skips the docs request.
+    or admission failure skips the docs request; a failed request exits with
+    its own status once the post-check passes.
     """
     try:
         with steps.phase("snapshot-before"):
@@ -525,18 +527,22 @@ def precommit(checks: Callable[[bool], None]) -> None:
         failures.append(str(refused))
     if failures:
         _fail("precommit", "\n".join(failures))
-    if markdown and shares_docs():
+    if markdown and shares_verdicts():
         try:
-            static_docs(markdown_admission)
+            custody(
+                "static-docs",
+                markdown_admission,
+                lambda: steps.nix_check("static-docs", SHARED_FLAGS),
+            )
         except Refused as refused:
             _fail("precommit", str(refused))
     print("[ ok ] precommit", flush=True)
 
 
-def prepush_docs() -> None:
-    """Prepush's Markdown verdict: the shared request on a clean tree."""
+def prepush(checks: Callable[[], None]) -> None:
+    """The pre-push gate's `checks`, which request shared verdicts, in custody
+    on a clean tree."""
     try:
-        static_docs(clean_admission)
+        custody("prepush", clean_admission, checks)
     except Refused as refused:
-        _fail("prepush-docs", str(refused))
-    print("[ ok ] prepush-docs", flush=True)
+        _fail("prepush", str(refused))

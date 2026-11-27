@@ -10,7 +10,6 @@ import fcntl
 import json
 import os
 from collections.abc import Callable
-from enum import StrEnum
 from pathlib import Path
 
 from opentelemetry.trace import Span
@@ -25,17 +24,17 @@ from dev.commands import (
 )
 from dev.static import Mode
 
-
-class Docs(StrEnum):
-    """Where the Markdown verdict comes from.
-
-    `PREPUSH` takes the shared clean-index verdict on x86_64-linux, and only
-    verifies; `HOST` runs host Prettier.
-    """
-
-    HOST = "host"
-    PREPUSH = "prepush"
-
+# The Nix checks prepush takes on x86_64-linux in place of host leaves, each
+# with the leaves it covers. Their filtered sources let a verdict built for
+# another tree, here or in CI, be reused. A check is requested at its first
+# leaf's slot; its other leaves then run nothing.
+SHARED_VERDICTS = {
+    "rust-format": ("fmt", "leptosfmt", "tools-fmt"),
+    "static-docs": ("prettier-markdown",),
+    "static-elisp": ("elisp-fmt", "byte-compile"),
+    "static-typescript": ("tsc",),
+    "static-ert": ("ert",),
+}
 
 DOCS_SHAPE = (
     "sequence-check",
@@ -85,29 +84,39 @@ STATIC_CHECKS = (
 # The host check surface: its named groups in fail-fast order.
 
 
-def host(mode: Mode, docs: Docs) -> None:
-    format_checks(mode, docs)
+def leaf(name: str, mode: Mode, shared: bool) -> None:
+    """The host static leaf `name`, or with `shared` the Nix check covering it.
+
+    `shared` is only ever prepush's: Verify mode, inside its index custody.
+    """
+    for check, leaves in SHARED_VERDICTS.items():
+        if shared and name in leaves:
+            if name == leaves[0]:
+                steps.nix_check(check, index.SHARED_FLAGS)
+            return
+    static.run(name, mode)
+
+
+def host(mode: Mode, shared: bool = False) -> None:
+    format_checks(mode, shared)
     docs_shape()
     source_contracts()
-    compile_checks(mode)
-    elisp_checks(mode)
+    compile_checks(mode, shared)
+    elisp_checks(mode, shared)
 
 
-def format_checks(mode: Mode, docs: Docs) -> None:
-    static.run("fmt", mode)
-    static.run("leptosfmt", mode)
-    markdown(mode, docs)
+def format_checks(mode: Mode, shared: bool = False) -> None:
+    leaf("fmt", mode, shared)
+    leaf("leptosfmt", mode, shared)
+    markdown(mode, shared)
     static.run("prettier-css", mode)
-    static.run("elisp-fmt", mode)
-    static.run("tools-fmt", mode)
+    leaf("elisp-fmt", mode, shared)
+    leaf("tools-fmt", mode, shared)
 
 
-def markdown(mode: Mode, docs: Docs) -> None:
-    """Markdown and end2end Prettier, the Markdown verdict taken as `docs` says."""
-    if docs is Docs.PREPUSH and index.shares_docs():
-        index.prepush_docs()
-    else:
-        static.run("prettier-markdown", mode)
+def markdown(mode: Mode, shared: bool = False) -> None:
+    """Markdown and end2end Prettier."""
+    leaf("prettier-markdown", mode, shared)
     static.run("prettier-end2end", mode)
 
 
@@ -131,20 +140,20 @@ def source_contracts() -> None:
         source_contract(name)
 
 
-def tsc_and_cargo_deny(mode: Mode) -> None:
-    static.run("tsc", mode)
+def tsc_and_cargo_deny(mode: Mode, shared: bool = False) -> None:
+    leaf("tsc", mode, shared)
     static.run("cargo-deny", mode)
 
 
-def compile_checks(mode: Mode) -> None:
-    tsc_and_cargo_deny(mode)
+def compile_checks(mode: Mode, shared: bool = False) -> None:
+    tsc_and_cargo_deny(mode, shared)
     for name in static.CLIPPY:
         static.run(name, mode)
 
 
-def elisp_checks(mode: Mode) -> None:
-    static.run("byte-compile", mode)
-    static.run("ert", mode)
+def elisp_checks(mode: Mode, shared: bool = False) -> None:
+    leaf("byte-compile", mode, shared)
+    leaf("ert", mode, shared)
 
 
 # Shared steps of the gates.
@@ -366,7 +375,7 @@ def elisp_coverage() -> None:
 
 
 def check_no_test() -> None:
-    host(Mode.FIX, Docs.HOST)
+    host(Mode.FIX)
     host_tests()
 
 
@@ -380,16 +389,26 @@ def check() -> None:
 
 
 def prepush() -> None:
+    """On x86_64-linux the shared verdicts replace their host leaves, and every
+    check runs inside index custody; elsewhere the host leaves run."""
     clean_tree()
-    host(Mode.VERIFY, Docs.PREPUSH)
-    host_tests()
-    test_local()
-    doctests_workflow()
+    shared = index.shares_verdicts()
+
+    def checks() -> None:
+        host(Mode.VERIFY, shared)
+        host_tests()
+        test_local()
+        doctests_workflow()
+
+    if shared:
+        index.prepush(checks)
+    else:
+        checks()
 
 
 def validate_no_e2e() -> None:
     clean_tree()
-    host(Mode.VERIFY, Docs.HOST)
+    host(Mode.VERIFY)
     platform_contract()
     static_checks()
     wasm_budget()
@@ -409,7 +428,7 @@ def ci_validate_host() -> None:
     """The host check groups without Clippy, whose CI verdict is the hermetic
     lane's `static-code` (docs/adr/0255-ci-clippy-verdict-from-nix.md)."""
     clean_tree()
-    format_checks(Mode.VERIFY, Docs.HOST)
+    format_checks(Mode.VERIFY)
     docs_shape()
     source_contracts()
     tsc_and_cargo_deny(Mode.VERIFY)
@@ -420,7 +439,7 @@ def ci_validate_host() -> None:
 
 def docs_checks(mode: Mode) -> None:
     """The checks a Markdown-only change needs (`rawdiff.markdown_only`)."""
-    markdown(mode, Docs.HOST)
+    markdown(mode)
     docs_shape()
 
 

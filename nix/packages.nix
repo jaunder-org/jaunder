@@ -818,9 +818,8 @@ let
       ps.pytest-xdist
     ]
   );
-  # The prepush docs admission compares these files' worktree bytes with the
-  # index (`_static_docs_input` in tools/dev/dev/index.py): keep the two
-  # selections in step.
+  # Every shared static verdict takes this build; prepush's admission compares
+  # every tracked file's worktree bytes with the index, these included.
   devPackageFiles = pkgs.lib.fileset.unions [
     ../tools/dev/pyproject.toml
     (pkgs.lib.fileset.fileFilter (file: file.hasExt "py") ../tools/dev/dev)

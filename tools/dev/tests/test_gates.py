@@ -9,7 +9,7 @@ import platform
 import pytest
 from conftest import REAL_GIT, Workflow, launch, write_bundle
 
-PREPUSH_SHARES_DOCS = (platform.system(), platform.machine()) == ("Linux", "x86_64")
+PREPUSH_SHARES = (platform.system(), platform.machine()) == ("Linux", "x86_64")
 
 
 DOCS_SHAPE = [
@@ -69,8 +69,8 @@ def commands(*lines: str) -> Commands:
     return [line.split(" ") for line in lines]
 
 
-# Index custody around prepush's shared docs request: the clean admission's
-# queries, the request, then the post-check's queries.
+# Index custody around prepush's checks: the clean admission's queries before
+# them, the post-check's queries after.
 INDEX_QUERIES = commands(
     "git status --porcelain=v1 -z --untracked-files=all --no-renames",
     "git diff --cached --raw -z --no-abbrev --no-renames",
@@ -100,29 +100,28 @@ POLICY_BUILD = build("repository-policy")
 HOST_TOOL_BUILD = build("host-tool")
 COVERAGE_CHECK_BUILD = build("coverage-check")
 
-# The shared docs request leaves flake.lock as committed.
-STATIC_DOCS = nix_build(
-    ".#checks.x86_64-linux.static-docs",
-    "--out-link .xtask/gcroots/static-docs",
-    "--accept-flake-config --no-update-lock-file --no-write-lock-file",
-)
-PREPUSH_DOCS = [*INDEX_QUERIES, *STATIC_DOCS, *INDEX_QUERIES]
+
+def shared(check: str) -> Commands:
+    """A shared verdict request, which leaves flake.lock as committed."""
+    return nix_build(
+        f".#checks.x86_64-linux.{check}",
+        f"--out-link .xtask/gcroots/{check}",
+        "--accept-flake-config --no-update-lock-file --no-write-lock-file",
+    )
 
 
-def format_checks(mode: str, shared_docs: bool = False) -> Commands:
+STATIC_DOCS = shared("static-docs")
+
+
+def format_checks(mode: str) -> Commands:
     fix = mode == "fix"
     check = "" if fix else " --check"
     write = "-w" if fix else "--check"
-    expected = [
+    return [
         *commands(f"cargo fmt{check}"),
         *POLICY_BUILD,
         *commands(f"scoped-leptosfmt {mode}"),
-    ]
-    if shared_docs:
-        expected += PREPUSH_DOCS
-    else:
-        expected += [["prettier", write, "**/*.md"]]
-    return expected + [
+        ["prettier", write, "**/*.md"],
         ["prettier", write, "end2end"],
         ["prettier", write, "**/*.css"],
         *commands(
@@ -174,15 +173,32 @@ def elisp_checks() -> Commands:
     )
 
 
-def host(mode: str, shared_docs: bool = False) -> Commands:
+def host(mode: str) -> Commands:
     return [
         # The format checks built repository-policy for the scoped adapter.
-        *format_checks(mode, shared_docs),
+        *format_checks(mode),
         *docs_shape(policy_built=True),
         *source_contracts(policy_built=True),
         *compile_checks(),
         *elisp_checks(),
     ]
+
+
+# Prepush's Verify host surface on x86_64-linux: each shared verdict at its
+# first covered leaf's slot, the leaves it covers gone.
+SHARED_HOST = [
+    *shared("rust-format"),
+    *STATIC_DOCS,
+    ["prettier", "--check", "end2end"],
+    ["prettier", "--check", "**/*.css"],
+    *shared("static-elisp"),
+    # No scoped leptosfmt ran, so docs-shape builds repository-policy.
+    *docs_shape(),
+    *source_contracts(policy_built=True),
+    *shared("static-typescript"),
+    *commands("cargo deny check", *CLIPPY),
+    *shared("static-ert"),
+]
 
 
 TOOLS_TESTS = (
@@ -276,13 +292,12 @@ ELISP = [
 ]
 CHECK_NO_TEST = [*host("fix"), *host_tests()]
 CHECK = [*CHECK_NO_TEST, *TEST_LOCAL, *nix("wasm-tests"), *DOCTESTS]
-PREPUSH = [
-    *CLEAN,
-    *host("verify", PREPUSH_SHARES_DOCS),
-    *host_tests(),
-    *TEST_LOCAL,
-    *DOCTESTS,
-]
+PREPUSH_CHECKS = [*host_tests(), *TEST_LOCAL, *DOCTESTS]
+PREPUSH = (
+    [*CLEAN, *INDEX_QUERIES, *SHARED_HOST, *PREPUSH_CHECKS, *INDEX_QUERIES]
+    if PREPUSH_SHARES
+    else [*CLEAN, *host("verify"), *PREPUSH_CHECKS]
+)
 HOST_LANE = [*host("verify"), PLATFORM]
 HERMETIC = [*STATIC, *WASM_BUDGET]
 VALIDATE_NO_E2E = [
@@ -342,7 +357,6 @@ def test_each_gate_runs_its_complete_population_in_order(
 
 GROUPS: list[tuple[list[str], Commands]] = [
     (["format"], format_checks("verify")),
-    (["format", "verify", "prepush"], format_checks("verify", PREPUSH_SHARES_DOCS)),
     (["docs-shape"], docs_shape()),
     (["source-contracts"], source_contracts()),
     (["compile-checks"], compile_checks()),
@@ -384,7 +398,7 @@ def test_a_source_contract_name_stays_one_argument(workflow: Workflow) -> None:
     "args",
     [
         ["format", "verify", "bogus"],
-        ["format", "fix", "prepush"],
+        ["format", "verify", "prepush"],
         ["format", "bogus"],
         ["compile-checks", "--fix"],
         ["source-contract"],
@@ -473,8 +487,9 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
     tested: set[tuple[str, ...]] = set()
     for gate in FAIL_FAST:
         success = GATES[gate]
+        custody = gate == "prepush" and PREPUSH_SHARES
         for index, argv in enumerate(success):
-            if argv in PREPUSH_DOCS:
+            if custody and argv in INDEX_QUERIES:
                 # Index custody combines its failures (test_index.py).
                 continue
             first_time = tuple(argv) not in tested
@@ -483,8 +498,15 @@ def test_every_step_failure_is_its_status_and_stops_subsequent_work(
                 continue
             result = workflow.dev(gate, failure=" ".join(argv))
             assert result.returncode == 17, (gate, argv, result)
-            assert workflow.commands() == success[: index + 1], (gate, argv)
-            assert result.stderr.endswith(f"{argv[0]} failed\n".encode())
+            # Past the clean-tree refusal, a failure inside custody is still
+            # followed by its post-check.
+            post = custody and index > 0
+            expected = [*success[: index + 1], *(INDEX_QUERIES if post else [])]
+            assert workflow.commands() == expected, (gate, argv)
+            tail = f"{argv[0]} failed\n" + (
+                "prepush-state: unchanged\n" if post else ""
+            )
+            assert result.stderr.endswith(tail.encode())
 
 
 def test_a_failing_gate_records_the_failed_step_and_status(
@@ -621,3 +643,25 @@ def test_leptosfmt_runs_the_adapter_this_checkout_built(workflow: Workflow) -> N
         result = workflow.dev("static", "leptosfmt", *args)
         assert result.returncode == 0, result
         assert workflow.commands() == format_checks(mode)[1:4]
+
+
+def test_prepush_runs_the_host_leaves_without_custody_off_x86_64_linux(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dev import gates, index, static, steps
+
+    ran: list[str] = []
+    monkeypatch.setattr(index, "shares_verdicts", lambda: False)
+    monkeypatch.setattr(index, "prepush", lambda _checks: pytest.fail("custody"))
+    monkeypatch.setattr(gates, "clean_tree", lambda: ran.append("clean-tree"))
+    monkeypatch.setattr(gates, "test_local", lambda: ran.append("test-local"))
+    monkeypatch.setattr(static, "run", lambda name, _mode: ran.append(name))
+    monkeypatch.setattr(steps, "tool", lambda name: [name])
+    monkeypatch.setattr(steps, "run", lambda name, *_, **__: ran.append(name))
+    monkeypatch.setattr(steps, "nix_check", lambda name, *_, **__: ran.append(name))
+    gates.prepush()
+    assert ran[0] == "clean-tree"
+    covered = [name for leaves in gates.SHARED_VERDICTS.values() for name in leaves]
+    assert set(covered) <= set(ran)
+    assert not set(gates.SHARED_VERDICTS) & set(ran)
+    assert ran[-3:] == ["test-local", "doctests", "doctests-gate"]
