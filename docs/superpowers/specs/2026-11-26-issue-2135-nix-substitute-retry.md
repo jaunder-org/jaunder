@@ -73,8 +73,10 @@ The rule is written twice: in `dev`'s Python, and as the bash script
    - Before retrying, `dev` says that Nix exited 1 without a builder failing and
      that it is running the build once more.
 2. **The e2e producer's build.** `scripts/e2e-workflow` runs `nix build` through
-   `scripts/nix-retry`. This is where both e2e failures happened. The script
-   exits 130 on an interrupt instead of retrying.
+   `scripts/nix-retry`. This is where both e2e failures happened. Bash traps may
+   only clean up or report (`CONTRIBUTING.md`), so the script does not catch an
+   interrupt. Nix exits 1 when interrupted, so a Ctrl-C during the first attempt
+   starts the retry, and a second Ctrl-C stops it. CI is unaffected.
 3. **Workflow steps.** Each job runs
    `scripts/nix-retry develop .#<shell> --accept-flake-config -c true` just
    before its first `nix develop` step. That keeps the storage and resource
@@ -113,12 +115,11 @@ Nix step. We expect that to be rare.
   - A second exit 1 fails the step, and `dev`'s message says it retried.
   - A build that exits 100 isn't retried.
   - A run interrupted by a signal isn't retried.
-- Tests run `scripts/nix-retry` with a fake `nix` and show four things:
+- Tests run `scripts/nix-retry` with a fake `nix` and show three things:
   - Exit 1 is retried once.
   - Exit 100 isn't retried.
   - The script exits with Nix's final status and passes stdout and stderr
     through.
-  - An interrupt isn't retried.
 - An `e2e-workflow` test shows that a producer build exiting 1 runs once more.
 - A workflow test asserts two things for every job in `ci.yml`, `mutants.yml`
   and `upgrade.yml` that runs `nix develop`. The job must first enter that same

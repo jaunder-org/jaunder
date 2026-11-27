@@ -175,7 +175,7 @@ def test_an_interrupt_while_a_child_runs_is_remembered() -> None:
     state.supervising = True
     state.handle(signal.SIGINT, None)
 
-    assert state.received == [signal.SIGINT]
+    assert state.interrupted
     assert state.forwarded == []
 
 

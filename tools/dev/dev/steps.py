@@ -115,15 +115,15 @@ class _Signals:
         self.supervising = False
         self.child: subprocess.Popen[bytes] | None = None
         self.forwarded: list[int] = []
-        # Every request while the child ran, SIGINT included: its exit is no
-        # longer its own verdict, so it is never run again.
-        self.received: list[int] = []
+        # Whether any request, SIGINT included, arrived while the child ran: its
+        # exit is then no longer its own verdict, so it is never run again.
+        self.interrupted = False
         # Requests that arrived while the child was starting, relayed once it has.
         self.pending: list[int] = []
 
     def handle(self, signum: int, _frame: FrameType | None) -> None:
         if self.supervising:
-            self.received.append(signum)
+            self.interrupted = True
             if signum == signal.SIGINT:
                 return
             self.forwarded.append(signum)
@@ -196,7 +196,7 @@ def _supervise(
     )
     _signals.supervising = True
     _signals.forwarded = []
-    _signals.received = []
+    _signals.interrupted = False
     _signals.pending = []
     try:
         try:
@@ -313,7 +313,7 @@ def _run(
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
         code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
-        if nix_retry and code == 1 and not signalled and not _signals.received:
+        if nix_retry and code == 1 and not signalled and not _signals.interrupted:
             print(
                 f"dev: {name}: Nix exited 1 without a builder failing, as when a"
                 " substitute download fails; running it once more",

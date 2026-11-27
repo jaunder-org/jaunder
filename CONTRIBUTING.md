@@ -1345,7 +1345,9 @@ records:
   step, including each `e2e-producer` step: `scripts/e2e-workflow` runs that
   build, and the step judges the one output its `build.json` selected;
 - `jaunder.nix.output` and `jaunder.nix.fetched_bytes`, for the Nix build steps
-  `dev` itself builds (not `e2e-producer`).
+  `dev` itself builds (not `e2e-producer`);
+- `jaunder.nix.retried`, on a `build` step whose `nix build` exited 1 and ran
+  once more.
 
 A Nix build step of a flake installable has two child steps: `eval`
 (`nix path-info --derivation`) evaluates it, leaving the evaluation cached, and

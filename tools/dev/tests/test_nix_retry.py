@@ -8,9 +8,7 @@ shell already realised; a direct `nix build` step goes through it too.
 
 import os
 import re
-import signal
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
@@ -24,21 +22,17 @@ WORKFLOWS = [
     for name in ("ci.yml", "mutants.yml", "upgrade.yml")
 ]
 SHELL = re.compile(r"nix develop (\.#[\w-]+)")
+# `nix build` as a command, not inside `scripts/nix-retry build`.
+BUILD = re.compile(r"(?:^|[\s;&|(])nix build")
 
-# Records its arguments, then exits with the next of NIX_CODES (the last
-# repeats). With NIX_WAIT it waits instead, and exits 1 on SIGINT, as Nix does.
+# Records its arguments, then exits with the next of NIX_BUILD_CODE, a
+# comma-separated status per attempt (the last repeats), as conftest's fake does.
 FAKE_NIX = """\
 #!/usr/bin/env bash
 echo "$*" >> "$NIX_CALLS"
-if [[ -n ${NIX_WAIT-} ]]; then
-  sleep 30 >/dev/null 2>&1 &
-  trap 'kill $!; exit 1' INT
-  touch "$NIX_WAIT"
-  wait
-fi
 echo out
 echo err >&2
-read -ra codes <<< "${NIX_CODES//,/ }"
+read -ra codes <<< "${NIX_BUILD_CODE//,/ }"
 attempt=$(($(wc -l < "$NIX_CALLS") - 1))
 last=$((${#codes[@]} - 1))
 exit "${codes[$((attempt < last ? attempt : last))]}"
@@ -64,7 +58,6 @@ def launch(tmp_path: Path, **extra: str) -> subprocess.Popen[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-        start_new_session=True,
     )
 
 
@@ -79,7 +72,7 @@ def calls(tmp_path: Path) -> list[str]:
 def test_nix_retry_runs_a_command_that_exits_1_once_more(
     tmp_path: Path, codes: str, status: int, attempts: int
 ) -> None:
-    script = launch(tmp_path, NIX_CODES=codes)
+    script = launch(tmp_path, NIX_BUILD_CODE=codes)
     stdout, stderr = script.communicate(timeout=30)
 
     assert script.returncode == status
@@ -87,22 +80,6 @@ def test_nix_retry_runs_a_command_that_exits_1_once_more(
     assert stdout == "out\n" * attempts
     assert stderr.count("err\n") == attempts
     assert ("running it once more" in stderr) == (attempts == 2)
-
-
-def test_nix_retry_does_not_retry_an_interrupted_command(tmp_path: Path) -> None:
-    ready = tmp_path / "ready"
-    script = launch(tmp_path, NIX_CODES="0", NIX_WAIT=str(ready))
-    deadline = time.monotonic() + 30
-    while not ready.exists():
-        assert time.monotonic() < deadline, "the fake nix never started"
-        time.sleep(0.01)
-    # A terminal's interrupt reaches the whole foreground process group.
-    os.killpg(script.pid, signal.SIGINT)
-    _, stderr = script.communicate(timeout=30)
-
-    assert script.returncode == 130
-    assert calls(tmp_path) == ["build --no-link .#demo"]
-    assert "running it once more" not in stderr
 
 
 def steps(job: dict[str, Any]) -> list[dict[str, Any]]:
@@ -119,7 +96,7 @@ def test_each_job_enters_its_dev_shell_through_nix_retry_first() -> None:
             runs = [step.get("run", "") for step in steps(job)]
             shells = {shell for run in runs for shell in SHELL.findall(run)}
             assert len(shells) <= 1, where
-            assert not [run for run in runs if "nix build" in run], where
+            assert not [run for run in runs if BUILD.search(run)], where
             if not shells:
                 continue
             (shell,) = shells

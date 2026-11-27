@@ -3,9 +3,9 @@
 # builder failed and 1 when none did. A substitute download that failed is one
 # such failure (#2135, NixOS/nix#16722), and its second attempt starts the
 # download afresh. `dev`'s own Nix builds retry the same way.
+# Nix also exits 1 when interrupted, so a Ctrl-C during the first attempt
+# starts the retry; a second one stops it.
 set -uo pipefail
-# Nix exits 1 when interrupted too: an interrupt ends this, not a retry.
-trap 'exit 130' INT
 status=0
 nix "$@" || status=$?
 if ((status == 1)); then
