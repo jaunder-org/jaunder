@@ -1046,9 +1046,9 @@ The host check surface that `check-no-test`, `prepush` and `validate-no-e2e`
 share is five public groups, run in this order and stopping at the first
 failure. `ci-validate-host` runs the same groups without the six Clippy units,
 because CI takes its Clippy verdict from the hermetic lane's `static-code`
-([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md)).
-Each group can be run on its own to re-check one kind of failure; `mode` is
-`verify` (the default) or `fix`:
+([CI Clippy verdict from Nix](docs/adr/0255-ci-clippy-verdict-from-nix.md)), and
+runs cargo-deny only with `--advisories`. Each group can be run on its own to
+re-check one kind of failure; `mode` is `verify` (the default) or `fix`:
 
 | Group                       | Runs                                                                                   |
 | --------------------------- | -------------------------------------------------------------------------------------- |
@@ -1125,7 +1125,12 @@ selected consumers, inputs and populations in detail:
   Hooks and local gates run host Clippy; CI runs only the hermetic Clippy
   verdict, an attributable-cost decision under the deferral below (#2010). Host
   cargo-deny includes advisories; sandbox mode intentionally checks only offline
-  bans, licenses and sources (ADR-0145).
+  bans, licenses and sources (ADR-0145). Local gates always run host cargo-deny.
+  CI runs it only for a pull request or merge-queue entry that changes the root
+  `Cargo.lock`, `deny.toml` or a `Cargo.toml` outside `tools/`
+  (`dev ci-validate-host --advisories`). The daily `advisories.yml` scan
+  (`dev advisory-scan`) checks `main` and files one issue per failing advisory
+  ([CI checks advisories only on a dependency change](docs/adr/drafts/ci-checks-advisories-on-dependency-change.md)).
 - **Doctests:** execute the root fence population only in the hermetic producer,
   whose bidirectional reconciliation prevents population loss, plus the
   separate, unreconciled `tools-doctests` run of the tools workspace.
@@ -2076,7 +2081,9 @@ avoids the issue entirely by discarding the whole cluster.
   `dev prepush`. The local push hook stays fast while CI remains the
   non-bypassable hermetic backstop.
 - `cargo deny check` verifies dependency policy, advisories, and licensing (run
-  as one of the static checks).
+  as one of the static checks). CI checks advisories only when the dependencies
+  change, and a daily scan reports new advisories against `main` as issues (see
+  the cargo-deny note in the verification families above).
 
 The gate is **stateless**: its verdict is a pure function of
 `(coverage report, source tree)` — there is no committed baseline, anchor, or

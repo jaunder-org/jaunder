@@ -9,6 +9,7 @@ from typing import Any
 import click
 
 from dev import (
+    advisories,
     checkout,
     csr,
     e2e,
@@ -111,6 +112,11 @@ _workflow(
 )
 
 
+_workflow(
+    "advisory-scan",
+    advisories.scan,
+    "Daily scan of main: cargo-deny advisories, one issue per failing advisory.",
+)
 _workflow("coverage", gates.coverage, "Clean tree, then Rust coverage and CRAP policy.")
 _workflow(
     "doctests", gates.doctests, "Clean tree, then the doctests producer and gate."

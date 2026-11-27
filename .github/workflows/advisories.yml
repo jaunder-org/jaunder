@@ -1,0 +1,43 @@
+name: Advisories
+
+# CI checks RustSec advisories only for a change to the product dependencies,
+# so a newly published advisory fails no unrelated pull request. This daily scan
+# checks `main` and files one issue per failing advisory, or comments on the one
+# already open (`dev advisory-scan`).
+on:
+  schedule:
+    # Daily 06:17 UTC, off the hour and clear of the other scheduled runs.
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+# Overlapping runs could each find no open issue and file the same advisory
+# twice, so a run waits for the one before it.
+concurrency:
+  group: advisories
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scan:
+    name: Advisory scan
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-ci
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Scan advisories (via dev)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: nix develop .#ci --accept-flake-config -c dev advisory-scan
+      # Diagnostic only: the table never decides the job's result.
+      - name: Trace summary
+        if: always()
+        run:
+          nix develop .#ci --accept-flake-config -c sh -c 'dev trace summary
+          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
+          summary unavailable, see this step's log"

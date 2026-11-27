@@ -5112,6 +5112,18 @@ sandbox policy: host mode keeps full `cargo deny check`, while sandbox mode
 skips `advisories` and checks only `bans`, `licenses`, and `sources`
 ([Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md)).
 
+#### When CI checks advisories
+
+The hermetic `static-code` check is CI's bans, licenses and sources verdict on
+every run. The CI host lane runs full `cargo deny check` only when `dev.scope`
+finds that a pull request or merge-queue entry changes the product dependencies:
+the root `Cargo.lock`, `deny.toml`, or a `Cargo.toml` outside `tools/`. An
+unreadable diff counts as a change. A push to `main` never checks advisories.
+The daily `advisories.yml` workflow runs `dev advisory-scan` on `main` instead,
+and comments on or opens one issue per failing advisory. Local gates keep full
+`cargo deny check`
+([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)).
+
 #### Shared static-check definitions
 
 Named `dev static` checks own the migrated project/tool static invocations, with
@@ -5540,9 +5552,11 @@ the sole command-capture interface.
   formatting/byte-compilation, and ERT respectively. Static-code requests the
   six-leaf Clippy aggregate once; its own derivation does not rerun those lints.
   Code retains workspace-specific offline Cargo homes; Cargo-deny uses full
-  `cargo deny check` on host and skips `advisories` in sandbox mode
+  `cargo deny check` on host and skips `advisories` in sandbox mode. The CI host
+  lane runs it only for a product-dependency change
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
+  [CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
   [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).
