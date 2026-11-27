@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-from conftest import Checkout, cells
+from conftest import Checkout, cells, nests
 
 from dev import chrome, runner
 from dev.summary import BEFORE_DEV
@@ -156,6 +156,55 @@ def test_merge_gives_overlapping_siblings_separate_tracks(tmp_path: Path) -> Non
         if event["ph"] == "M"
     ]
     assert names == ["root", "b"]
+
+
+def test_merge_reuses_a_track_once_its_slices_have_ended(tmp_path: Path) -> None:
+    run = tmp_path / "run.trace.d"
+    write_records(
+        run,
+        start("root", None, 0),
+        start("a", "root", 10_000),
+        start("b", "root", 20_000),
+        end("b", "root", 30_000),
+        start("c", "root", 40_000),
+        end("a", "root", 50_000),
+        end("c", "root", 60_000),
+        end("root", None, 100_000),
+    )
+    chrome.write(run, tmp_path / "run.trace.json")
+    events = slices(tmp_path / "run.trace.json")
+    track = {event["name"]: event["tid"] for event in events}
+    assert track == {"root": 0, "a": 0, "b": 1, "c": 1}
+    assert nests(events)
+
+
+def test_a_track_a_child_outside_its_parent_took_is_not_nested_onto(
+    tmp_path: Path,
+) -> None:
+    # `late` outlives `a` and claims a track at 12 µs. Neither the root `b`,
+    # which starts on the top-level track after `a`, nor `c`, which starts
+    # while `late` is still open, may share `late`'s track.
+    run = tmp_path / "run.trace.d"
+    write_records(
+        run,
+        start("a", None, 0),
+        end("a", None, 10_000),
+        start("late", "a", 12_000),
+        end("late", "a", 40_000),
+        start("b", None, 11_000),
+        start("c", "b", 20_000),
+        end("b", None, 30_000),
+        end("c", "b", 35_000),
+        start("orphan", "lost", 13_000),
+        end("orphan", "lost", 14_000),
+    )
+    chrome.write(run, tmp_path / "run.trace.json")
+    events = slices(tmp_path / "run.trace.json")
+    track = {event["name"]: event["tid"] for event in events}
+    assert track["a"] == track["b"] == 0
+    assert track["late"] != 0
+    assert track["c"] not in (0, track["late"])
+    assert nests(events)
 
 
 def test_summary_does_not_sum_overlapping_children(

@@ -58,8 +58,10 @@ from dev.traces import (
 
 # The utilization at or above which an attempt's duration fails the budget.
 PRESSURE_THRESHOLD = 0.80
+# The VM sidecar's phase that runs Playwright.
+GATE_PHASE = "gate-execution"
 # The VM sidecar's phases that must each have succeeded once (`nix/e2e_capture.py`).
-REQUIRED_PHASES = ("gate-execution", "result-lift", "post-gate-checks")
+REQUIRED_PHASES = (GATE_PHASE, "result-lift", "post-gate-checks")
 PHASE_NAMES = (
     "nix-evaluation",
     "nix-substitution",

@@ -28,6 +28,7 @@ from opentelemetry.sdk.trace.id_generator import IdGenerator
 from opentelemetry.trace import NoOpTracer, Tracer, set_span_in_context
 from opentelemetry.trace import Span as ApiSpan
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.util.types import AttributeValue
 
 from dev import chrome, runner
 from dev.spans import STATUS, Status
@@ -169,20 +170,65 @@ class Phase:
     ok: bool
 
 
-def record_phases(step: ApiSpan, started_ns: int, phases: Iterable[Phase]) -> None:
-    """Writes `phases` as finished children of the still-open `step`.
+@dataclass(frozen=True)
+class Imported:
+    """A finished span, with its subtree, that a step's child timed where it
+    could not trace (a producer's phase, a span of its OTLP capture): placed in
+    the run afterwards, on the child's own clock."""
+
+    name: str
+    start_ns: int
+    end_ns: int
+    attributes: Mapping[str, AttributeValue]
+    children: Sequence[Imported] = ()
+
+
+def record_spans(parent: ApiSpan, spans: Iterable[Imported]) -> list[ApiSpan]:
+    """Writes `spans` and their subtrees as finished descendants of `parent`,
+    each parent before its children, and returns the top-level spans written."""
+    written = []
+    for imported in spans:
+        span = tracer().start_span(
+            imported.name,
+            set_span_in_context(parent),
+            attributes=imported.attributes,
+            start_time=imported.start_ns,
+        )
+        record_spans(span, imported.children)
+        span.end(end_time=imported.end_ns)
+        written.append(span)
+    return written
+
+
+def record_phases(
+    step: ApiSpan, started_ns: int, phases: Iterable[Phase]
+) -> list[tuple[Phase, ApiSpan]]:
+    """Writes `phases` as finished children of the still-open `step`, and
+    returns each phase written with its span.
 
     `started_ns` is the wall-clock nanosecond the step started. Only phases
     inside the step so far are its own work: one outside it, as from a reused
     output or an earlier run, is left out rather than misplaced.
     """
     ended_ns = time.time_ns()
-    context = set_span_in_context(step)
-    for phase in phases:
-        if started_ns <= phase.start_ns <= phase.end_ns <= ended_ns:
-            span = tracer().start_span(phase.name, context, start_time=phase.start_ns)
-            span.set_attribute(STATUS, Status.OK if phase.ok else Status.FAILED)
-            span.end(end_time=phase.end_ns)
+    inside = [
+        phase
+        for phase in phases
+        if started_ns <= phase.start_ns <= phase.end_ns <= ended_ns
+    ]
+    written = record_spans(
+        step,
+        [
+            Imported(
+                phase.name,
+                phase.start_ns,
+                phase.end_ns,
+                {STATUS: Status.OK if phase.ok else Status.FAILED},
+            )
+            for phase in inside
+        ],
+    )
+    return list(zip(inside, written, strict=True))
 
 
 def cap_command_line(command_line: str) -> str:

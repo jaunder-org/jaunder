@@ -35,6 +35,11 @@ TRACE_MEMBER = f"{CAPTURE_ROOT}/{TRACE_FILE}"
 # The e2e harness's spans: one per test, and one per test-owned page.
 TEST_SPAN = "e2e.test"
 PAGE_SPAN = "e2e.page"
+# The `e2e.test.lifecycle` envelope (#794): each test's root, whose children are
+# its named phases.
+LIFECYCLE_SPAN = "e2e.test.lifecycle"
+# Where an imported span keeps its OTLP status (`status_code`).
+OTEL_STATUS_CODE = "otel.status_code"
 
 # A timestamp written as text is read within the 128-bit range; one written as
 # a JSON number must fit int64.
@@ -226,6 +231,54 @@ def has_attr(span: Any, key: str) -> bool:
     return isinstance(attributes, list) and any(
         member(attribute, "key") == key for attribute in attributes
     )
+
+
+def _plain(value: Any) -> str | bool | int | float | None:
+    """An OTLP `AnyValue` as a plain value: a string, a bool, an int64 (a JSON
+    number or string) or a finite double; None for any other kind."""
+    text, flag = member(value, "stringValue"), member(value, "boolValue")
+    if isinstance(text, str):
+        return text
+    if isinstance(flag, bool):
+        return flag
+    number = member(value, "intValue")
+    if isinstance(number, str) and re.fullmatch(r"-?[0-9]+", number):
+        number = int(number)
+    integer = as_i64(number)
+    if integer is not None:
+        return integer
+    return finite(member(value, "doubleValue"))
+
+
+def attributes(span: Any) -> dict[str, str | bool | int | float]:
+    """A span's `attributes[]` as plain values. An attribute of any other kind
+    (an array, a key-value list, bytes) is left out, never an error, so a new
+    kind of attribute cannot make a capture unreadable."""
+    found: dict[str, str | bool | int | float] = {}
+    entries = member(span, "attributes")
+    for attribute in entries if isinstance(entries, list) else []:
+        key, value = member(attribute, "key"), _plain(member(attribute, "value"))
+        if isinstance(key, str) and value is not None:
+            found[key] = value
+    return found
+
+
+# OTLP's status codes, by number or enum name, as OpenTelemetry's
+# `otel.status_code` attribute spells them; UNSET has no spelling.
+_STATUS_CODES = {
+    1: "OK",
+    2: "ERROR",
+    "STATUS_CODE_OK": "OK",
+    "STATUS_CODE_ERROR": "ERROR",
+}
+
+
+def status_code(span: Any) -> str | None:
+    """A span's OTLP status as `OK` or `ERROR`; None when unset or unknown."""
+    code = member(member(span, "status"), "code")
+    if isinstance(code, bool) or not isinstance(code, int | str):
+        return None
+    return _STATUS_CODES.get(code)
 
 
 def parse_json_attr(span: Any, key: str, span_source: str) -> Any | None:

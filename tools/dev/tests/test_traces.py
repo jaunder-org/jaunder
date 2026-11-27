@@ -15,6 +15,7 @@ from dev.traces import (
     Decomposition,
     Filters,
     MalformedJsonAttr,
+    attributes,
     decompose,
     field_f64,
     get_attr,
@@ -31,6 +32,7 @@ from dev.traces import (
     read_spans,
     read_trace_member,
     span_interval_ms,
+    status_code,
     to_url_path,
 )
 
@@ -164,6 +166,52 @@ def test_an_attribute_is_its_string_then_its_int_then_empty() -> None:
         "",
     ]
     assert get_attr({"attributes": "none"}, "method") == ""
+
+
+def test_attributes_keep_plain_values_and_leave_out_other_kinds() -> None:
+    span = {
+        "attributes": [
+            "not an attribute",
+            {"key": 7, "value": {"stringValue": "keyless"}},
+            attr("method", "GET"),
+            {"key": "flag", "value": {"boolValue": True}},
+            {"key": "n", "value": {"intValue": 42}},
+            {"key": "s", "value": {"intValue": "-99"}},
+            {"key": "huge", "value": {"intValue": str(2**63)}},
+            {"key": "bad", "value": {"intValue": "1e3"}},
+            {"key": "d", "value": {"doubleValue": 0.25}},
+            {"key": "inf", "value": {"doubleValue": float("inf")}},
+            {"key": "a", "value": {"arrayValue": {"values": []}}},
+            {"key": "b", "value": {"bytesValue": "AA=="}},
+            {"key": "v"},
+        ]
+    }
+    assert attributes(span) == {
+        "method": "GET",
+        "flag": True,
+        "n": 42,
+        "s": -99,
+        "d": 0.25,
+    }
+    assert attributes({"attributes": "none"}) == {}
+
+
+@pytest.mark.parametrize(
+    ("status", "code"),
+    [
+        ({"code": 1}, "OK"),
+        ({"code": 2}, "ERROR"),
+        ({"code": "STATUS_CODE_OK"}, "OK"),
+        ({"code": "STATUS_CODE_ERROR"}, "ERROR"),
+        ({"code": 0}, None),
+        ({"code": True}, None),
+        ({"code": [2]}, None),
+        ({}, None),
+        (None, None),
+    ],
+)
+def test_a_status_is_ok_error_or_none(status: Any, code: str | None) -> None:
+    assert status_code({"status": status}) == code
 
 
 def test_a_json_attribute_is_absent_malformed_or_parsed() -> None:
