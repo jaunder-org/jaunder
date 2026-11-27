@@ -40,7 +40,7 @@ for path in /nix/store "$workspace" /tmp; do
 done
 probe memory-and-swap free -b
 if [[ $label == final ]]; then
-  for path in /nix/store "$workspace/.xtask/tmp" "$workspace"; do
+  for path in /nix/store "$workspace/.tmp" "$workspace"; do
     probe "allocated bytes: $path" timeout 10s du -s -x -B1 -- "$path"
   done
 fi

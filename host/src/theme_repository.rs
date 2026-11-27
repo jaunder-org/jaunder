@@ -595,7 +595,7 @@ mod tests {
 
         let special = repository();
         fs::create_dir(special.path().join("assets")).expect("assets");
-        let _socket = UnixListener::bind(special.path().join("assets/socket")).expect("socket");
+        let _socket = UnixListener::bind(special.path().join("assets/s")).expect("socket");
         assert!(matches!(
             accept_theme_repository(special.path()),
             Err(ThemeRepositoryError::EntryType { .. })

@@ -4,8 +4,8 @@
 
 Gate, test, coverage, mutant and `dev e2e-local` runs stop leaving directories
 in `/tmp`. A direnv shell (and every agent session started from one) gets the
-same checkout-local `TMPDIR=<checkout>/.xtask/tmp` that `nix develop` already
-gives, so host temp files go away with the worktree.
+same checkout-local `TMPDIR=<checkout>/.tmp` that `nix develop` already gives,
+so host temp files go away with the worktree.
 
 ## Approach and tradeoffs
 
@@ -28,8 +28,8 @@ Four independent fixes, one per leak named in the issue:
    empty directory. We are not patching or wrapping the upstream binary.
 4. **direnv `TMPDIR`.** nix-direnv restores the pre-entry `TMPDIR` after running
    the shellHook, so the routing never survives. The TMPDIR block (resolve
-   checkout root, create and probe `.xtask/tmp`, export, or `exit 1`) moves into
-   one shell file, `nix/checkout-tmpdir.sh`. Both shellHook sites in
+   checkout root, create and probe `.tmp`, export, or `exit 1`) moves into one
+   shell file, `nix/checkout-tmpdir.sh`. Both shellHook sites in
    `nix/dev-shells.nix` (`shellEnv` and `ci-nix`, today two copies) inline it
    with `builtins.readFile`, and `.envrc` sources the same file after
    `use flake`, with its own `watch_file nix/checkout-tmpdir.sh` (the existing
@@ -38,6 +38,18 @@ Four independent fixes, one per leak named in the issue:
    consumers, and the existing duplicate between the two hooks disappears. Under
    direnv the block runs twice (nix-direnv discards the first export); that is
    cheap and accepted.
+
+   The binding moves from `<checkout>/.xtask/tmp` to `<checkout>/.tmp` (ignored
+   in `.gitignore`). Once direnv sessions used the checkout-local `TMPDIR`,
+   tests that bind a Unix socket inside a `TempDir`
+   (`storage/src/backup/media.rs` ×2, `host/src/theme_repository.rs`,
+   `server/src/metrics.rs`, `server/tests/misc/backup_corpus.rs`) broke the
+   107-byte socket-path limit in a long-named worktree (113 bytes here). The
+   shorter root plus one-byte socket leaf names (`s`) bring the worst case to
+   105 bytes for this worktree. Accepted cost: these tests need a checkout path
+   of about 80 bytes or less. We rejected a socket directory under
+   `XDG_RUNTIME_DIR` because it accumulates leftovers even longer than `/tmp`.
+   `scripts/ci-storage-probe` measures the new path.
 
    Simplest alternative: a second copy of the export line in `.envrc`. Rejected
    because the issue asks for a single definition and the two copies already in
@@ -48,7 +60,7 @@ Four independent fixes, one per leak named in the issue:
 
 Proof to execute (recorded in the PR, not committed):
 
-- `direnv exec . printenv TMPDIR` prints `<checkout>/.xtask/tmp`.
+- `direnv exec . printenv TMPDIR` prints `<checkout>/.tmp`.
 - With `TMPDIR` pointed at a fresh empty directory, running the dev-suite
   e2e-workflow tests and the `storage` unit tests leaves that directory empty.
   (Leak 3 is proved by the committed collector test below; the fake collector
@@ -65,7 +77,7 @@ Committed tests:
   against the shared file; a new test copies `.envrc` and
   `nix/checkout-tmpdir.sh` into a git-initialised fixture, sources `.envrc` with
   stub `watch_file` and a stub `use` that resets `TMPDIR` (as nix-direnv does),
-  and asserts the result is the fixture checkout's `.xtask/tmp`. It skips via
+  and asserts the result is the fixture checkout's `.tmp`. It skips via
   `require(...)` like the module's other tests where the filtered
   `checks.dev-python` source lacks those files.
 - `CONTRIBUTING.md`'s shell-entry paragraph says direnv gets the same binding.

@@ -22,8 +22,8 @@ let
     appOfflineCargoHome
     ;
 
-  # The checkout-bound TMPDIR block every shell's hook starts with; .envrc
-  # sources the same file.
+  # The checkout-bound TMPDIR block the default, ci, mutants and ci-nix hooks
+  # start with; .envrc sources the same file.
   checkoutTmpdir = builtins.readFile ./checkout-tmpdir.sh;
 
   # Everything `dev validate` needs on the host (toolchain + the

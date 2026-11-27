@@ -77,22 +77,27 @@ reconcile jobs. `theme-thumbnail` is described in [themes](docs/themes.md).
 
 Enter the default, CI, mutants or `ci-nix` shell from the intended Git checkout.
 At entry, their shared startup hook creates and verifies the absolute
-`<checkout>/.xtask/tmp` directory and exports it as `TMPDIR`, deliberately
-replacing any inherited value before provisioning or user commands run. Failure
-to resolve the checkout or create/use that directory visibly stops shell
-startup; there is no `/tmp` fallback. The value stays bound to that entry
-checkout after `cd`; enter a new shell to bind to another checkout. A later
-command-local `TMPDIR=/absolute/override command` still wins for that command
-and its inheriting children. The hook lives in `nix/checkout-tmpdir.sh`;
-`.envrc` sources it again after `use flake`, because nix-direnv restores the
-pre-entry `TMPDIR` after running the hook, so a direnv shell gets the same
-binding and the same visible failure.
+`<checkout>/.tmp` directory and exports it as `TMPDIR`, deliberately replacing
+any inherited value before provisioning or user commands run. Failure to resolve
+the checkout or create/use that directory visibly stops shell startup; there is
+no `/tmp` fallback. The value stays bound to that entry checkout after `cd`;
+enter a new shell to bind to another checkout. A later command-local
+`TMPDIR=/absolute/override command` still wins for that command and its
+inheriting children. The hook lives in `nix/checkout-tmpdir.sh`; `.envrc`
+sources it again after `use flake`, because nix-direnv restores the pre-entry
+`TMPDIR` after running the hook, so a direnv shell gets the same binding and the
+same visible failure.
+
+The path is kept shallow because tests bind Unix sockets beneath it, and a
+socket path is capped at 107 bytes. The tests use one-byte socket names, which
+fit a checkout path of about 80 bytes (a `~/src/jaunder/<branch>` worktree or
+CI's workspace).
 
 This routes host-tool temporary files, not their ownership or cleanup. Ignored
-`.xtask/` storage preserves existing unique leaves and cleanup owners; it does
-not collect leftovers. Tools with explicit temporary/output paths (including
-browser profiles and Playwright outputs), Nix daemon/build processes, and
-sandbox storage are not universally redirected.
+`.tmp/` storage preserves existing unique leaves and cleanup owners; it does not
+collect leftovers. Tools with explicit temporary/output paths (including browser
+profiles and Playwright outputs), Nix daemon/build processes, and sandbox
+storage are not universally redirected.
 
 On Linux, entering any project shell (`ci-nix` included) also sets
 `LD_LIBRARY_PATH` to exactly the Nix OpenSSL and dav1d library directories,

@@ -53,7 +53,7 @@ def test_baseline_then_final_append_labelled_sections_with_a_marker_each(
     assert "memory-and-swap" in baseline
     # Only the final snapshot pays for the bounded allocation scans.
     assert not any(title.startswith("allocated bytes") for title in baseline)
-    assert f"allocated bytes: {tmp_path}/.xtask/tmp" in final
+    assert f"allocated bytes: {tmp_path}/.tmp" in final
     assert final[: len(baseline)] == baseline
 
 
@@ -68,7 +68,7 @@ def test_a_failed_measurement_is_recorded_and_never_fails_the_probe(
     failed = {
         title: marker
         for title, marker in measured.items()
-        if title.endswith((str(missing), f"{missing}/.xtask/tmp"))
+        if title.endswith((str(missing), f"{missing}/.tmp"))
     }
     assert len(failed) == 5, measured  # bytes, inodes, mount and two scans
     assert all(m.endswith(" missing_evidence=true") for m in failed.values())

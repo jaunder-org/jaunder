@@ -322,14 +322,14 @@ mod tests {
         let destination = temp.path().join("destination");
         fs::create_dir_all(&source)?;
         let _listener =
-            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+            std::os::unix::net::UnixListener::bind(source.join("s")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
 
         restore_media_directory(&source, &destination, BackupFilesystemRoot::Media)?;
 
         assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
         assert!(
-            !destination.join("sock").exists(),
+            !destination.join("s").exists(),
             "a non-regular entry must not be copied"
         );
         Ok(())
@@ -361,14 +361,14 @@ mod tests {
         let destination = temp.path().join("destination");
         fs::create_dir_all(&source)?;
         let _listener =
-            std::os::unix::net::UnixListener::bind(source.join("sock")).expect("bind unix socket");
+            std::os::unix::net::UnixListener::bind(source.join("s")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
 
         mirror_media_directory(&source, &destination, None, BackupFilesystemRoot::Media)?;
 
         assert_eq!(fs::read_to_string(destination.join("real.txt"))?, "keep");
         assert!(
-            !destination.join("sock").exists(),
+            !destination.join("s").exists(),
             "a non-regular entry must not be mirrored"
         );
         Ok(())
