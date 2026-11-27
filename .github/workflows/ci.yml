@@ -54,10 +54,12 @@ jobs:
   # projection uses the slim image's own `jq`; the pinned `jq` runs the same
   # script in the hermetic checks.
   #
-  # It also decides whether the change is documentation-only, with the slim
-  # image's own `python3` and `git` running `dev.scope`, which needs only the
-  # standard library; the pinned Python runs the same module in `dev`'s tests. A
-  # push has no base, so it is never documentation-only.
+  # It also decides whether the change is documentation-only, and whether it
+  # changes the product dependencies, with the slim image's own `python3` and
+  # `git` running `dev.scope`, which needs only the standard library; the pinned
+  # Python runs the same module in `dev`'s tests. A push has no base, so it is
+  # never documentation-only and never checks advisories: the daily
+  # `advisories.yml` scan owns `main`.
   merge-queue-verdict:
     name: Merge-queue verdict
     runs-on: ubuntu-slim
@@ -71,6 +73,7 @@ jobs:
       lanes: ${{ steps.matrix.outputs.lanes }}
       reconciles: ${{ steps.matrix.outputs.reconciles }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
+      dependencies: ${{ steps.scope.outputs.dependencies }}
     steps:
       - name: Look up a passing merge-queue run of this commit
         id: lookup
@@ -124,7 +127,7 @@ jobs:
         run:
           jq -r -f scripts/e2e-matrix.jq end2end/e2e-lanes.json >>
           "$GITHUB_OUTPUT"
-      - name: Decide whether the change is documentation-only
+      - name: Decide the change's documentation and dependency scope
         id: scope
         env:
           BASE:
@@ -178,8 +181,14 @@ jobs:
           retention-days: 14
       - name: Enter the ci shell
         run: scripts/nix-retry develop .#ci --accept-flake-config -c true
+      # RustSec advisories are checked only for a change to the product
+      # dependencies, so a newly published advisory fails no unrelated work.
       - name: Validate host lane (via dev)
-        run: nix develop .#ci --accept-flake-config -c dev ci-validate-host
+        env:
+          DEPENDENCIES: ${{ needs.merge-queue-verdict.outputs.dependencies }}
+        run: |
+          if [ "$DEPENDENCIES" = true ]; then set -- --advisories; fi
+          nix develop .#ci --accept-flake-config -c dev ci-validate-host "$@"
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()

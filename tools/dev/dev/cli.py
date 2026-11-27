@@ -78,12 +78,21 @@ _workflow(
     "proof, wasm budget and tests, coverage, doctests and Elisp coverage.",
 )
 _workflow("validate", gates.validate, "validate-no-e2e, then the full E2E workflow.")
-_workflow(
-    "ci-validate-host",
-    gates.ci_validate_host,
-    "CI host lane: clean tree, Verify host checks, the platform contract "
-    "and the auxiliary host tests.",
+
+
+@cli.command("ci-validate-host")
+@click.option(
+    "--advisories",
+    is_flag=True,
+    help="Run cargo-deny, advisories included; CI passes it when the change "
+    "touches the product dependencies.",
 )
+def ci_validate_host(advisories: bool) -> None:
+    """CI host lane: clean tree, Verify host checks, the platform contract
+    and the auxiliary host tests."""
+    _gate(lambda: gates.ci_validate_host(advisories))
+
+
 _workflow(
     "ci-validate-hermetic",
     gates.ci_validate_hermetic,
