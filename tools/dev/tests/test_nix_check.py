@@ -118,46 +118,6 @@ def test_failed_build_records_no_cache_and_stops_the_gate(checkout: Checkout) ->
     assert (build["jaunder.status"], build["process.exit.code"]) == ("failed", 3)
 
 
-RETRYING = (
-    b"dev: build: Nix exited 1 without a builder failing, as when a substitute"
-    b" download fails; running it once more\n"
-)
-
-
-def test_a_build_that_exits_1_runs_once_more_in_the_same_step(
-    checkout: Checkout,
-) -> None:
-    # Nix exits 1 when no builder failed, as for a dropped substitute download.
-    result = nix_check(checkout, NIX_BUILD_CODE="1,0", NIX_ULTIMATE="1")
-
-    assert result.returncode == 0, result
-    assert checkout.order() == EVAL + BUILD + BUILD + PATH_INFO + fetch()
-    assert result.stderr == b"build-err\n" + RETRYING + b"build-err\n"
-    build = children(checkout, "demo")["build"]
-    assert build["jaunder.nix.retried"] is True
-    assert (build["jaunder.status"], build["process.exit.code"]) == ("ok", 0)
-    assert checkout.merged()["demo"]["args"]["jaunder.cache"] == "built"
-
-
-def test_a_build_that_exits_1_twice_fails_after_one_retry(checkout: Checkout) -> None:
-    result = nix_check(checkout, NIX_BUILD_CODE="1")
-
-    assert result.returncode == 1
-    assert checkout.order() == EVAL + BUILD + BUILD
-    assert RETRYING in result.stderr
-    build = children(checkout, "demo")["build"]
-    assert build["jaunder.nix.retried"] is True
-    assert (build["jaunder.status"], build["process.exit.code"]) == ("failed", 1)
-
-
-def test_a_builder_failure_is_not_retried(checkout: Checkout) -> None:
-    result = nix_check(checkout, NIX_BUILD_CODE="100,0")
-
-    assert result.returncode == 100
-    assert checkout.order() == EVAL + BUILD
-    assert "jaunder.nix.retried" not in children(checkout, "demo")["build"]
-
-
 def test_a_failed_evaluation_fails_the_step_before_any_build(
     checkout: Checkout,
 ) -> None:

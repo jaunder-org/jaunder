@@ -1,15 +1,15 @@
 #!/usr/bin/env bash
-# Runs `nix "$@"`, and once more if it exits 1. Nix exits 100 to 104 when a
-# builder failed and 1 when none did. A substitute download that failed is one
-# such failure (#2135, NixOS/nix#16722), and its second attempt starts the
-# download afresh. `dev`'s own Nix builds retry the same way.
+# Runs `nix "$@"`, and once more if it exits 1, as Nix does when a substitute
+# download fails (#2135, NixOS/nix#16722); the second attempt fetches afresh.
+# Nix exits 1 for a builder failure too, through the daemon or `nix build`, so
+# that fails twice: wrap only commands that rarely build.
 # Nix also exits 1 when interrupted, so a Ctrl-C during the first attempt
 # starts the retry; a second one stops it.
 set -uo pipefail
 status=0
 nix "$@" || status=$?
 if ((status == 1)); then
-  echo "nix-retry: nix exited 1 without a builder failing, as when a substitute download fails; running it once more" >&2
+  echo "nix-retry: nix exited 1, as it does when a substitute download fails; running it once more" >&2
   status=0
   nix "$@" || status=$?
 fi
