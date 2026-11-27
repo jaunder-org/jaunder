@@ -178,9 +178,11 @@ def test_each_outcome_has_its_exit_status_and_report(
     # Absent optional fields are omitted, never null.
     assert set(found) <= {"outcome", "pr", "head_sha", "phase", "detail"} | {
         "pointer",
+        "ejection",
         "events",
     }
     assert ("phase" in found) == (outcome == "pending")
+    assert ("ejection" in found) == (outcome == "ejected")
     assert None not in found.values()
     terminal = [e["detail"] for e in found["events"] if e["kind"] == "terminal"]
     assert terminal == ([] if outcome == "pending" else [outcome])

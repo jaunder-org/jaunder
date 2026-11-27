@@ -9,8 +9,8 @@ refusal, an unknown pull request or an internal defect 2 with no report, so a
 defect can never read as a verdict.
 
 The observer only reads: it never arms, merges, re-enqueues, cleans up or edits
-the tracker; `scripts/pr-land.sh` is the only armer and observes through this
-same command. Readiness is not approval to merge. The repository comes from the
+the tracker; `dev pr-land` (`pr_land`) is the only armer and observes in
+process through this same module. Readiness is not approval to merge. The repository comes from the
 origin remote and the requirements from its live `main` ruleset, read once per
 invocation; no check, job or workflow name is hard-coded.
 
@@ -31,6 +31,7 @@ injected.
 
 import base64
 import json
+import re
 import sys
 import time
 import traceback
@@ -40,7 +41,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, NamedTuple
 
-from dev import annotations, steps
+from dev import annotations, steps, trace
 
 # Runs one command (`gh` or `git`): its status, stdout and stderr.
 Runner = Callable[[Sequence[str]], tuple[int, str, str]]
@@ -54,6 +55,9 @@ PASSING_CONCLUSIONS = ("SUCCESS", "NEUTRAL", "SKIPPED")
 # Job conclusions that fail a merge-group check and so eject the entry;
 # cancellation follows a removal rather than causing it.
 EJECTING_CONCLUSIONS = ("failure", "timed_out", "startup_failure")
+# The trace attributes of an ejection's classification.
+EJECTION_RUN = "jaunder.ejection.run"
+EJECTION_SIGNATURE = "jaunder.ejection.signature"
 READY_DETAIL = (
     "all required checks passed; obtain approval for this exact PR/head, "
     "then run `dev pr-land`"
@@ -63,7 +67,8 @@ PR_QUERY = """\
 query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){
     pullRequest(number:$number){
-      number state mergedAt mergeCommit{oid} mergeable mergeStateStatus
+      number state baseRefName headRefName mergedAt mergeCommit{oid}
+      mergeable mergeStateStatus
       isInMergeQueue mergeQueueEntry{position} autoMergeRequest{enabledAt}
       commits(last:1){nodes{commit{oid committedDate}}}
       statusCheckRollup{
@@ -154,8 +159,9 @@ def _truncate(text: str) -> str:
     return text if len(text) <= 300 else text[:300] + "…"
 
 
-def classify(code: int, stdout: str, stderr: str) -> Any:
-    """One `gh` call's JSON reply, or the typed error its outputs describe.
+def classify(code: int, stdout: str, stderr: str, text: bool = False) -> Any:
+    """One `gh` call's JSON reply, or the typed error its outputs describe;
+    with `text`, a successful reply is plain text, such as a job log.
 
     `gh api` exits 1 for every failure, so the body decides; a nonzero exit is
     never success, and a GraphQL `errors` array is an error even on exit 0.
@@ -163,6 +169,8 @@ def classify(code: int, stdout: str, stderr: str) -> Any:
     # `steps` reports an executable it cannot find as a shell's 127.
     if code == 127:
         raise GhError(Kind.MISSING)
+    if text and code == 0:
+        return stdout
     try:
         body, parsed = json.loads(stdout), True
     except ValueError:
@@ -258,6 +266,9 @@ class Check:
 class Snapshot:
     state: str
     head: str
+    # The base and head branch names: `pr-land` binds its action to them.
+    base: str
+    branch: str
     # Git refreshes it on rebase and amend, so a re-pushed head post-dates a
     # merge-group run from before the push.
     committed: datetime
@@ -289,6 +300,8 @@ class Run:
     created: datetime
     conclusion: str | None
     failed_job: str | None = None
+    # Its workflow file, which classifying an ejection reads.
+    workflow: str | None = None
 
 
 def _invalid_rule(index: int, field: str) -> GhError:
@@ -401,6 +414,9 @@ def parse_snapshot(value: Any, number: int) -> tuple[Snapshot, str | None]:
         raise _malformed("head commit has no oid")
     if committed is None:
         raise _malformed("head commit has no committedDate")
+    base, branch = _text(pr, "baseRefName"), _text(pr, "headRefName")
+    if not (base and branch):
+        raise _malformed("pull request has no base or head branch name")
     if "statusCheckRollup" not in pr:
         raise _malformed("status-check response omitted rollup")
     checks: list[Check] = []
@@ -425,6 +441,8 @@ def parse_snapshot(value: Any, number: int) -> tuple[Snapshot, str | None]:
     snapshot = Snapshot(
         state=pr["state"],
         head=head,
+        base=base,
+        branch=branch,
         committed=committed,
         checks=tuple(checks),
         mergeable=mergeable or "UNKNOWN",
@@ -467,7 +485,13 @@ def parse_runs(value: Any, number: int) -> Run | None:
         ):
             raise _malformed("merge-group run is incomplete")
         if newest is None or created > newest.created:
-            newest = Run(run["id"], run["html_url"], created, conclusion)
+            newest = Run(
+                run["id"],
+                run["html_url"],
+                created,
+                conclusion,
+                workflow=_text(run, "path"),
+            )
     return newest
 
 
@@ -500,9 +524,19 @@ def parse_pressure(value: Any) -> list[str]:
     return found
 
 
-def job_names(source: str) -> frozenset[str] | None:
-    """What a ruleset context can match in one workflow file: each job's
-    literal `name`, or its key when it has none; None if it is no workflow."""
+@dataclass(frozen=True)
+class Definition:
+    """One job of a workflow file: its key, its literal name (the key when
+    unnamed) and the keys it `needs`."""
+
+    key: str
+    name: str
+    needs: frozenset[str] = frozenset()
+
+
+def job_definitions(source: str) -> tuple[Definition, ...] | None:
+    """The jobs of one workflow file; None if it is no workflow. A job whose
+    name is not text has no definition, so nothing can match it."""
     # Imported here: only this parse needs it, and every `dev` command would
     # otherwise pay for it at import.
     import yaml
@@ -513,11 +547,158 @@ def job_names(source: str) -> frozenset[str] | None:
         return None
     if not isinstance(jobs, dict):
         return None
-    names = (
-        job.get("name", key) if isinstance(job, dict) else key
-        for key, job in jobs.items()
+    definitions = []
+    for key, job in jobs.items():
+        name = job.get("name", key) if isinstance(job, dict) else key
+        needs = job.get("needs", []) if isinstance(job, dict) else []
+        needs = [needs] if isinstance(needs, str) else needs
+        if isinstance(key, str) and isinstance(name, str) and isinstance(needs, list):
+            keys = frozenset(need for need in needs if isinstance(need, str))
+            definitions.append(Definition(key, name, keys))
+    return tuple(definitions)
+
+
+def job_names(definitions: Sequence[Definition]) -> frozenset[str]:
+    """What a ruleset context can match in one workflow file."""
+    return frozenset(definition.name for definition in definitions)
+
+
+# Classifying an ejection: pure functions of the failed jobs, their workflow
+# file and their logs.
+
+_EXPRESSION = re.compile(r"\$\{\{.*?\}\}", re.DOTALL)
+# CSI and other two-byte escapes, which GitHub's job logs carry.
+_ESCAPE = re.compile(r"\x1b(?:\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])")
+
+
+@dataclass(frozen=True)
+class Signature:
+    """A known infrastructure failure: every pattern is in the job's log.
+
+    `example` is the real job it was written from; a new signature needs one.
+    """
+
+    name: str
+    example: int
+    patterns: tuple[re.Pattern[str], ...]
+
+
+# The closed, reviewed list; anything else is not retried.
+SIGNATURES = (
+    Signature(
+        "nix-substitute",
+        # PR #2016, merge-group run 44632169176. #2072 failed with HTTP 206,
+        # so the status is not part of the signature.
+        135941369307,
+        (
+            re.compile(r"is required, but there is no substituter that can build it"),
+            re.compile(r"error: unable to download '[^']+': HTTP error \d+"),
+        ),
+    ),
+)
+
+
+def signature(log: str) -> str | None:
+    """The signature a job's log matches, if any."""
+    text = _ESCAPE.sub("", log)
+    for known in SIGNATURES:
+        if all(pattern.search(text) for pattern in known.patterns):
+            return known.name
+    return None
+
+
+def defines(definition: Definition, name: str) -> bool:
+    """Whether a job reported as `name` is `definition`: each `${{ … }}` in
+    its name, such as a matrix value, stands for any text."""
+    literal = _EXPRESSION.split(definition.name)
+    return re.fullmatch(".*".join(map(re.escape, literal)), name, re.DOTALL) is not None
+
+
+@dataclass(frozen=True)
+class FailedJob:
+    id: int
+    name: str
+    derived: bool = False
+    signature: str | None = None
+
+
+def derive(
+    failed: Sequence[FailedJob], definitions: Sequence[Definition]
+) -> tuple[FailedJob, ...] | str:
+    """The failed jobs, each marked derived when it `needs` another failed
+    job; or why they cannot be told apart.
+
+    One `needs` hop and no matrix expansion: aggregates and reconciliation
+    fail whenever a lane does, so only the jobs they depend on are evidence.
+    """
+    found: list[tuple[FailedJob, Definition]] = []
+    for job in failed:
+        matches = [d for d in definitions if defines(d, job.name)]
+        if len(matches) != 1:
+            return f"job '{job.name}' matches {len(matches)} workflow jobs"
+        found.append((job, matches[0]))
+    failing = {definition.key for _, definition in found}
+    return tuple(
+        replace(job, derived=not definition.needs.isdisjoint(failing))
+        for job, definition in found
     )
-    return frozenset(name for name in names if isinstance(name, str))
+
+
+@dataclass(frozen=True)
+class Ejection:
+    """Why a merge-group run ejected the PR: `unclassified` says why it is not
+    a known infrastructure failure, and is None only when it is."""
+
+    run: str
+    jobs: tuple[FailedJob, ...]
+    unclassified: str | None
+
+    @property
+    def signature(self) -> str | None:
+        if self.unclassified is not None:
+            return None
+        return "+".join(sorted({job.signature or "" for job in self.primary}))
+
+    @property
+    def primary(self) -> tuple[FailedJob, ...]:
+        return tuple(job for job in self.jobs if not job.derived)
+
+    def report(self) -> dict[str, Any]:
+        jobs = [
+            {
+                "id": job.id,
+                "name": job.name,
+                "derived": job.derived,
+                "signature": job.signature,
+            }
+            for job in self.jobs
+        ]
+        return {
+            "run": self.run,
+            "signature": self.signature,
+            "unclassified": self.unclassified,
+            "jobs": jobs,
+        }
+
+    @property
+    def detail(self) -> str:
+        if self.signature is not None:
+            return f"infrastructure: {self.signature} ({self.run})"
+        return f"unclassified: {self.unclassified} ({self.run})"
+
+
+def judge(run: str, jobs: Sequence[FailedJob]) -> Ejection:
+    """Infrastructure only if every primary job matched a signature."""
+    primary = [job for job in jobs if not job.derived]
+    unmatched = [job for job in primary if job.signature is None]
+    unclassified = (
+        "no failed job to classify"
+        if not primary
+        else f"job '{unmatched[0].name}' matches no infrastructure signature"
+        if unmatched
+        else None
+    )
+    return Ejection(run, tuple(jobs), unclassified)
 
 
 # The decision rules: pure functions of parsed evidence.
@@ -531,6 +712,8 @@ class Step:
     outcome: str | None = None
     detail: str | None = None
     pointer: str | None = None
+    # Only on `ejected`: whether a known infrastructure failure caused it.
+    ejection: Ejection | None = None
 
 
 def _end(outcome: str, detail: str | None = None, pointer: str | None = None) -> Step:
@@ -682,7 +865,7 @@ def decide(
 # Reading GitHub.
 
 
-def _traced(argv: Sequence[str]) -> tuple[int, str, str]:
+def traced(argv: Sequence[str]) -> tuple[int, str, str]:
     code, output, diagnostics = steps.captured(argv[0], argv)
     return code, output.decode(errors="replace"), diagnostics.decode(errors="replace")
 
@@ -696,7 +879,9 @@ class GitHub:
         self.runner = runner
         self.slug = f"{owner}/{repository}"
         self.owner, self.repository, self.number = owner, repository, number
-        self._jobs: dict[tuple[str, str], tuple[frozenset[str], str | None]] = {}
+        self._jobs: dict[
+            tuple[str, str], tuple[tuple[Definition, ...], str | None]
+        ] = {}
 
     def call(self, *args: str) -> Any:
         return classify(*self.runner(["gh", *args]))
@@ -733,17 +918,15 @@ class GitHub:
         args += ["-f", f"name={self.repository}", "-f", f"oid={oid}"]
         return parse_pressure(self.call("api", "graphql", *args))
 
-    def ejection(self) -> Run | None:
-        """The newest merge-group run, with its first ejecting job while it
-        is still in progress."""
-        runs = f"repos/{self.slug}/actions/runs?event=merge_group&per_page=100"
-        run = parse_runs(self.call("api", runs), self.number)
+    def _jobs_of(self, run: int) -> Any:
+        """The latest attempt of each job of merge-group run `run`, page by
+        page, each with a valid conclusion."""
         page = 1
-        while run is not None and run.conclusion is None:
+        while True:
             jobs = _get(
                 self.call(
                     "api",
-                    f"repos/{self.slug}/actions/runs/{run.id}/jobs"
+                    f"repos/{self.slug}/actions/runs/{run}/jobs"
                     f"?filter=latest&per_page=100&page={page}",
                 ),
                 "jobs",
@@ -754,18 +937,85 @@ class GitHub:
                 conclusion = job.get("conclusion", 0) if isinstance(job, dict) else 0
                 if not (conclusion is None or isinstance(conclusion, str)):
                     raise _malformed("merge-group job omitted its conclusion")
-                if conclusion in EJECTING_CONCLUSIONS:
-                    if not isinstance(job.get("name"), str):
-                        raise _malformed("merge-group job omitted its name")
-                    return replace(run, failed_job=job["name"])
+                yield job
             if len(jobs) < 100:
-                break
+                return
             page += 1
+
+    def ejection(self) -> Run | None:
+        """The newest merge-group run, with its first ejecting job while it
+        is still in progress."""
+        runs = f"repos/{self.slug}/actions/runs?event=merge_group&per_page=100"
+        run = parse_runs(self.call("api", runs), self.number)
+        if run is None or run.conclusion is not None:
+            return run
+        for job in self._jobs_of(run.id):
+            if job["conclusion"] in EJECTING_CONCLUSIONS:
+                if not isinstance(job.get("name"), str):
+                    raise _malformed("merge-group job omitted its name")
+                return replace(run, failed_job=job["name"])
         return run
 
-    def workflow_jobs(self, path: str, head: str) -> tuple[frozenset[str], str | None]:
-        """The job names in workflow file `path` at commit `head`, and why the
-        file could not be used, if it could not.
+    def failed_jobs(self, run: int) -> list[FailedJob]:
+        failed = []
+        for job in self._jobs_of(run):
+            if job["conclusion"] in EJECTING_CONCLUSIONS:
+                if not (
+                    _is_natural(job.get("id")) and isinstance(job.get("name"), str)
+                ):
+                    raise _malformed("merge-group job omitted its id or name")
+                failed.append(FailedJob(job["id"], job["name"]))
+        return failed
+
+    def job_log(self, job: int) -> str:
+        """One job's log, which is text, not JSON; GitHub's escapes included."""
+        logs = f"repos/{self.slug}/actions/jobs/{job}/logs"
+        log: str = classify(
+            *self.runner(["gh", "api", logs, "--allow-escape-sequences"]), text=True
+        )
+        return log
+
+    def classify_ejection(self, run: Run, head: str) -> Ejection:
+        """Whether a known infrastructure failure caused `run`'s ejection.
+
+        Classification only ever adds to an `ejected` report: a read that
+        fails, transient or not, leaves the run unclassified and says why,
+        never spending a poll strike or changing the outcome.
+        """
+        with trace.tracer().start_as_current_span("classify-ejection") as span:
+            span.set_attribute(EJECTION_RUN, run.url)
+            ejection = self._classify(run, head)
+            span.set_attribute(EJECTION_SIGNATURE, ejection.signature or "")
+        return ejection
+
+    def _classify(self, run: Run, head: str) -> Ejection:
+        if run.workflow is None:
+            return Ejection(run.url, (), "the run names no workflow file")
+        definitions, problem = self.workflow_jobs(run.workflow, head)
+        if problem is not None:
+            return Ejection(run.url, (), f"workflow {run.workflow}: {problem}")
+        try:
+            jobs = derive(self.failed_jobs(run.id), definitions)
+        except GhError as error:
+            return Ejection(run.url, (), f"its jobs are unreadable: {error.detail}")
+        if isinstance(jobs, str):
+            return Ejection(run.url, (), jobs)
+        classified = []
+        for job in jobs:
+            if not job.derived:
+                try:
+                    job = replace(job, signature=signature(self.job_log(job.id)))
+                except GhError as error:
+                    why = f"job '{job.name}' log is unreadable: {error.detail}"
+                    return Ejection(run.url, jobs, why)
+            classified.append(job)
+        return judge(run.url, classified)
+
+    def workflow_jobs(
+        self, path: str, head: str
+    ) -> tuple[tuple[Definition, ...], str | None]:
+        """The jobs in workflow file `path` at commit `head`, and why the file
+        could not be used, if it could not.
 
         An unusable file has no jobs, so its failures stay optional rather than
         failing the poll. Each answer is kept for the watch, except a transient
@@ -773,13 +1023,13 @@ class GitHub:
         """
         if (path, head) in self._jobs:
             return self._jobs[path, head]
-        names: frozenset[str] | None = None
+        definitions: tuple[Definition, ...] | None = None
         problem, settled = "it is outside .github/workflows/", True
         if path.startswith(".github/workflows/"):
             contents = f"repos/{self.slug}/contents/{path}?ref={head}"
             try:
                 encoded = _get(self.call("api", contents), "content")
-                names = job_names(base64.b64decode(encoded).decode())
+                definitions = job_definitions(base64.b64decode(encoded).decode())
                 problem = "it is not a workflow"
             except GhError as error:
                 problem, settled = (
@@ -788,7 +1038,7 @@ class GitHub:
                 )
             except TypeError, ValueError:
                 problem = "its contents are not base64 UTF-8 text"
-        found = (frozenset(), problem) if names is None else (names, None)
+        found = ((), problem) if definitions is None else (definitions, None)
         if settled:
             self._jobs[path, head] = found
         return found
@@ -886,7 +1136,10 @@ def _poll(
                 continue
             names: frozenset[str] = frozenset()
             if check.kind == "actions" and check.workflow is not None:
-                names, problem = github.workflow_jobs(check.workflow, snapshot.head)
+                definitions, problem = github.workflow_jobs(
+                    check.workflow, snapshot.head
+                )
+                names = job_names(definitions)
                 if problem is not None:
                     detail = f"workflow {check.workflow} has no usable jobs: {problem}"
                     # Once per file and head: a transient problem's detail can
@@ -910,6 +1163,8 @@ def _poll(
         queued_head=queued_head,
         required=required,
     )
+    if step.outcome == "ejected" and ejection is not None:
+        step = replace(step, ejection=github.classify_ejection(ejection, snapshot.head))
     return snapshot, step, warnings
 
 
@@ -934,7 +1189,7 @@ def _log_pressure(log: _Log, github: GitHub, snapshot: Snapshot) -> None:
             log("warning", detail)
 
 
-def _watch(
+def observe(
     watch: Watch,
     runner: Runner,
     now: Callable[[], float],
@@ -956,8 +1211,12 @@ def _watch(
         detail: str | None = None,
         pointer: str | None = None,
         phase: str | None = None,
+        ejection: Ejection | None = None,
     ) -> dict[str, Any]:
-        optional = {"phase": phase, "detail": detail, "pointer": pointer}
+        optional: dict[str, Any] = {"phase": phase, "detail": detail}
+        optional["pointer"] = pointer
+        if ejection is not None:
+            optional["ejection"] = ejection.report()
         present = {key: value for key, value in optional.items() if value is not None}
         report = {"outcome": outcome, "pr": number, "head_sha": head}
         return report | present | {"events": log.events}
@@ -1011,11 +1270,11 @@ def _watch(
             (snapshot.queued, snapshot.position),
         )
         # Passive readiness stays a phase; default readiness ends the watch.
-        terminal: tuple[str, str | None, str | None] | None = None
+        terminal: Step | None = None
         if step.outcome is not None:
-            terminal = (step.outcome, step.detail, step.pointer)
+            terminal = step
         elif ready and not watch.until:
-            terminal = ("ready-to-land", READY_DETAIL, None)
+            terminal = _end("ready-to-land", READY_DETAIL)
         # The terminal event stands in for the final phase, but check and
         # queue changes on that poll still report.
         if terminal is None and (previous is None or previous.phase != step.phase):
@@ -1029,10 +1288,17 @@ def _watch(
         if snapshot.queued:
             queued_head = snapshot.head
         if terminal is not None:
-            if terminal[0] in SUCCESSFUL:
+            if terminal.outcome in SUCCESSFUL:
                 _log_pressure(log, github, snapshot)
-            log("terminal", terminal[0])
-            return end(*terminal)
+            if terminal.ejection is not None:
+                log("classify", terminal.ejection.detail)
+            log("terminal", str(terminal.outcome))
+            return end(
+                str(terminal.outcome),
+                terminal.detail,
+                terminal.pointer,
+                ejection=terminal.ejection,
+            )
         if watch.once:
             return end("pending", phase=step.phase)
         if now() - log.last >= HEARTBEAT_SECONDS:
@@ -1070,20 +1336,20 @@ def _subject(number: int | None, runner: Runner) -> tuple[str, str, int]:
 
 def run(
     watch: Watch,
-    runner: Runner = _traced,
+    runner: Runner = traced,
     now: Callable[[], float] = time.time,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
     """Prints the report; its outcome is the exit status."""
     try:
-        report = _watch(watch, runner, now, sleep)
+        report = observe(watch, runner, now, sleep)
     except steps.StepFailed:
         raise
     except NoSubject as refusal:
         print(f"dev: pr-watch: {refusal}", file=sys.stderr, flush=True)
         raise steps.StepFailed(2, signalled=False) from None
     except Exception as defect:
-        # A defect, not a verdict: exit 2, which `pr-land.sh` never reads as one.
+        # A defect, not a verdict: exit 2, never an outcome.
         traceback.print_exc()
         raise steps.StepFailed(2, signalled=False) from defect
     print(json.dumps(report, separators=(",", ":"), ensure_ascii=False), flush=True)

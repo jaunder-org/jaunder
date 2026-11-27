@@ -6,6 +6,7 @@
 - Amended: 2026-11-25 — verdicts for `tools/host-proof` (#1974)
 - Amended: 2026-11-25 — `admit-inputs` joins `host-tool`, not
   `repository-policy` (#2102)
+- Amended: 2026-11-26 — `pr-land.sh` moves to Python (#2139)
 
 ## Context
 
@@ -85,9 +86,11 @@ Signal forwarding, supervising long-lived children, or data shaping beyond `jq`
 means Python. This amends ADR-0249's "no shell exception is added". ADR-0249
 rejected bash for exactly the capability this rule excludes. Five of the six
 current scripts conform: `pr-land.sh`, `pr-cleanup.sh`, `build-csr-assets.sh`,
-`e2e-workflow` and `git-add`. `test-theme-repository-release-version.sh` does
-not: it cuts a regex and a `run:` block out of a workflow file with `sed` by
-fixed indentation, which is data shaping beyond `jq`. It moves to Python
+`e2e-workflow` and `git-add`. _Amended by #2139:_ `pr-land.sh` became
+`tools/dev/dev/pr_land.py` when its one-re-enqueue rule made landing a state
+machine. `test-theme-repository-release-version.sh` does not: it cuts a regex
+and a `run:` block out of a workflow file with `sed` by fixed indentation, which
+is data shaping beyond `jq`. It moves to Python
 ([#2070](https://github.com/jaunder-org/jaunder/issues/2070)).
 
 **Verdicts.**
@@ -109,7 +112,7 @@ fixed indentation, which is data shaping beyond `jq`. It moves to Python
   [ADR-0198](0198-active-workflow-incomplete-pr-evidence.md),
   [ADR-0220](0220-explicit-one-shot-pr-reenqueue.md) and
   [ADR-0240](0240-just-frontdoors-host-pr-observer.md), including the exit-code
-  and JSON contract that `pr-land.sh` relies on.
+  and JSON contract that `pr-land.sh` relied on.
 - **`perf-data` moves to Python, against generated schemas.** The host CLI links
   no product code. The `performance` writer side stays Rust: the dataset plan,
   the manifest and fragment types, `test-support`'s seeder and `perf-producer`,

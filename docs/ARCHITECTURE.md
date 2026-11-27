@@ -5718,13 +5718,13 @@ continues through the queue. `--until merged` explicitly requests passive
 waiting across the ready handoff
 ([the actionable-handoff decision](adr/0135-pr-watch-actionable-handoff.md)).
 `dev pr-land <PR> <approved-head-SHA> [--reenqueue]` requires previously
-obtained and recorded exact PR/head human approval. Its thin native `gh`/`git`
-sequence validates repository/base/head/local divergence and shared-observer
-readiness before one `gh pr merge --auto --merge --match-head-commit` call. It
-verifies actual arm/queue/complete merged readback and observes the same head
-until merged. No-op or uncertain evidence never permits retry/rearming. `dev`
-cannot attest that human approval exists. This replaces the former xtask
-ownership under the
+obtained and recorded exact PR/head human approval. `tools/dev/dev/pr_land.py`
+validates repository/base/head/local divergence and readiness from the same
+observer, run in process, before each
+`gh pr merge --auto --merge --match-head-commit` call. It verifies actual
+arm/queue/complete merged readback and observes the same head until merged.
+No-op or uncertain evidence never permits retry/rearming. `dev` cannot attest
+that human approval exists. This replaces the former xtask ownership under the
 [approved successor draft](adr/0240-just-frontdoors-host-pr-observer.md),
 preserving [ADR-0087](adr/0087-xtask-github-pr-observation.md)'s capability
 split. The observer's transport is `gh`: each call captures its exit status,
@@ -5766,9 +5766,17 @@ unchanged. Approval `issue-1896-observer-queue-continuation-v1`, request
 authorizes this narrow history transfer, not a second classifier/poller,
 mutation, trust registry or approval bypass.
 
-Default land refuses ejection. Explicit
-`dev pr-land <PR> <approved-head-SHA> --reenqueue` permits ONE native call after
-separately authorized recovery, refusing queued or auto-merge-armed PRs.
+A land invocation re-enqueues an observed ejection at most once. The observer
+classifies each `ejected` run read-only and reports `.ejection`: failed jobs
+that `need` another failed job of the run are derived, and every other failed
+job must match a signature from the closed, reviewed `pr_watch.SIGNATURES` list,
+each written from a real example job (today the Nix substitute failure). Only
+then does `pr-land` re-enqueue automatically, at preflight or after arming,
+printing the signature and run URL; classification failures and mixes are
+unclassified and never change the outcome. Otherwise
+`dev pr-land <PR> <approved-head-SHA> --reenqueue` permits that ONE native call
+after separately authorized recovery. Either way, a later ejection in the same
+invocation is terminal, and queued or auto-merge-armed PRs are refused.
 `dev pr-land` captures the historical URL from live ejection preflight and
 requires a second one-snapshot ready verdict from the SAME observer with only
 that run acknowledged before action. Public read-only `--expected-head <SHA>`

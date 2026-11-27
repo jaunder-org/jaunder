@@ -3,6 +3,8 @@
 - Status: accepted
 - Date: 2026-07-30
 - Issue: [#729](https://github.com/jaunder-org/jaunder/issues/729)
+- Amended: 2026-11-26 — automatic one-shot re-enqueue after an infrastructure
+  ejection ([#2139](https://github.com/jaunder-org/jaunder/issues/2139))
 
 ## Context
 
@@ -105,6 +107,10 @@ authorization from the authority assigned by governing owner policy. In
 particular, `--reenqueue` remains a separate, explicit one-shot action, and
 neither observation nor diagnosis authorizes it. `land` remains the distinct
 per-PR human merge approval; recovery authorization does not waive that gate.
+_Amended by #2139:_ one exception. Inside an already approved `land`, an
+ejection the observer classifies as a known infrastructure failure authorizes
+one re-enqueue per invocation
+([explicit one-shot recovery](0220-explicit-one-shot-pr-reenqueue.md)).
 
 ## Consequences
 

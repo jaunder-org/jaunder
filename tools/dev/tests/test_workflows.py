@@ -92,14 +92,6 @@ FORWARDED: list[tuple[list[str], Commands]] = [
     (["e2e"], [["bash", "scripts/e2e-workflow", "all", ""]]),
     (["e2e", "3"], [["bash", "scripts/e2e-workflow", "all", "3"]]),
     (
-        ["pr-land", "731", "f" * 40],
-        [["bash", "scripts/pr-land.sh", "731", "f" * 40, "ordinary"]],
-    ),
-    (
-        ["pr-land", "731", "f" * 40, "--reenqueue"],
-        [["bash", "scripts/pr-land.sh", "731", "f" * 40, "--reenqueue"]],
-    ),
-    (
         ["pr-cleanup", "731", "f" * 40, "unmanaged"],
         [["bash", "scripts/pr-cleanup.sh", "731", "f" * 40, "unmanaged"]],
     ),

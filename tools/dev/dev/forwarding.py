@@ -34,10 +34,6 @@ def coverage_check(args: Sequence[str]) -> None:
     steps.run("coverage-check", [*steps.tool(COVERAGE_CHECK), *args], _report(args))
 
 
-def pr_land(number: str, expected_head: str, mode: str) -> None:
-    steps.run("pr-land", ["bash", "scripts/pr-land.sh", number, expected_head, mode])
-
-
 def pr_cleanup(number: str, expected_head: str, ownership: str) -> None:
     steps.run(
         "pr-cleanup",

@@ -1,6 +1,7 @@
-"""PR land and cleanup front doors through `dev`, against scripted gh, git and
-cargo: never a real PR, merge or checkout cleanup. One cleanup also runs
-against real Git in disposable repositories, never this checkout.
+"""PR land and cleanup front doors through `dev`, as a caller runs them, against
+scripted gh, git and cargo: never a real PR, merge or checkout cleanup. One
+cleanup also runs against real Git in disposable repositories, never this
+checkout. `test_pr_land.py` proves landing's decisions in process.
 
 They run the repository's scripts and jq, so only the filtered
 `checks.dev-python` source may skip them.
@@ -23,12 +24,10 @@ from dev import pr_watch
 
 HEAD = "a" * 40
 MERGE = "b" * 40
-HISTORICAL = "https://github.com/jaunder-org/jaunder/actions/runs/42"
 BASH = shutil.which("bash") or "/bin/sh"
 # Each native call must be the next scripted one. Checkout discovery, which
-# `dev` itself makes, goes to the real Git unrecorded. Unless a test runs the
-# real observer, `dev` on the scripts' PATH is scripted too: it replays
-# observer reports, so land tests never depend on observer internals.
+# `dev` itself makes, goes to the real Git unrecorded; any other Git call fails
+# unless the caller's repository redirects were scrubbed.
 NATIVE = f"""#!{BASH}
 set -euo pipefail
 tool=${{0##*/}}
@@ -43,11 +42,6 @@ reply=$(jq -ce --argjson n "$n" --arg tool "$tool" --argjson args "$args" '.[$n]
 if [[ "$tool" == gh ]]; then jq -c '.body' <<< "$reply"; else jq -rj '.text // ""' <<< "$reply"; fi
 if [[ $(jq -r '.exit // 0' <<< "$reply") != 0 ]]; then echo 'simulated native failure' >&2; exit 1; fi
 """
-LIVE_QUERY = (
-    'query($number:Int!){repository(owner:"jaunder-org",name:"jaunder"){'
-    "pullRequest(number:$number){number state baseRefName headRefName headRefOid "
-    "isInMergeQueue autoMergeRequest{enabledAt} mergedAt mergeCommit{oid}}}}"
-)
 
 
 @dataclass
@@ -66,12 +60,6 @@ class Native:
             GIT_INDEX_FILE="foreign-index",
         )
 
-    def land(
-        self, recovery: bool, calls: list[Any]
-    ) -> subprocess.CompletedProcess[bytes]:
-        mode = "--reenqueue" if recovery else "ordinary"
-        return self.dev("pr-land", "731", HEAD, mode, calls=calls)
-
     def cleanup(
         self, ownership: str, calls: list[Any]
     ) -> subprocess.CompletedProcess[bytes]:
@@ -84,151 +72,68 @@ class Native:
 @pytest.fixture
 def native(checkout: Checkout) -> Native:
     require(shutil.which("jq") is not None, "jq")
-    checkout.from_repository("scripts/pr-land.sh", "scripts/pr-cleanup.sh")
-    # pr-land.sh observes through `dev pr-watch`, here the scripted reports.
-    for tool in ["gh", "git", "cargo", "dev"]:
+    checkout.from_repository("scripts/pr-cleanup.sh")
+    for tool in ["gh", "git", "cargo"]:
         checkout.executable(tool, NATIVE)
     return Native(checkout)
 
 
-def live(armed: bool) -> dict[str, Any]:
-    return {
-        "tool": "gh",
-        "args": ["api", "graphql", "-f", f"query={LIVE_QUERY}", "-F", "number=731"],
-        "body": {
-            "data": {
-                "repository": {
-                    "pullRequest": {
-                        "number": 731,
-                        "state": "OPEN",
-                        "baseRefName": "main",
-                        "headRefName": "issue-731-example",
-                        "headRefOid": HEAD,
-                        "isInMergeQueue": False,
-                        "autoMergeRequest": {"enabledAt": "now"} if armed else None,
-                    }
-                }
-            }
-        },
-    }
+ORIGIN = {
+    "tool": "git",
+    "args": ["remote", "get-url", "origin"],
+    "text": "https://github.com/jaunder-org/jaunder.git\n",
+}
+PR_READ = ["api", "graphql", "-f", f"query={pr_watch.PR_QUERY}"]
+PR_READ += ["-f", "owner=jaunder-org", "-f", "name=jaunder", "-F", "number=731"]
+RUNS = "repos/jaunder-org/jaunder/actions/runs?event=merge_group&per_page=100"
 
 
-def observation(outcome: str, recovery: bool, once: bool) -> dict[str, Any]:
-    args = ["pr-watch", "731"]
-    args += ["--once"] if once else ["--until", "merged"]
-    args += ["--expected-head", HEAD]
-    if recovery:
-        args += ["--acknowledged-ejection", HISTORICAL]
-    report = {
-        "outcome": outcome,
-        "pr": 731,
-        "head_sha": HEAD,
-        "pointer": HISTORICAL if outcome == "ejected" else MERGE,
-        "detail": "2026-11-08T00:00:00Z",
-        "events": [],
-    }
-    return {
-        "tool": "dev",
-        "args": args,
-        "exit": 0 if outcome in ("merged", "ready-to-land") else 1,
-        "text": json.dumps(report),
-    }
+def read(body: Any) -> dict[str, Any]:
+    return {"tool": "gh", "args": PR_READ, "body": body}
 
 
-def land_calls(recovery: bool) -> list[Any]:
-    calls: list[Any] = [
-        {
-            "tool": "git",
-            "args": ["remote", "get-url", "origin"],
-            "text": "https://github.com/jaunder-org/jaunder.git\n",
-        },
-        live(False),
+def pressure(oid: str, body: Any) -> dict[str, Any]:
+    """The duration-pressure annotation read of commit `oid`."""
+    query = ["api", "graphql", "-f", f"query={pr_watch.ANNOTATIONS_QUERY}"]
+    query += ["-f", "owner=jaunder-org", "-f", "name=jaunder", "-f", f"oid={oid}"]
+    return {"tool": "gh", "args": query, "body": body}
+
+
+def observed(*polls: Any) -> list[Any]:
+    """One observation: origin, the ruleset, then each scripted read."""
+    rules_read = ["api", "repos/jaunder-org/jaunder/rules/branches/main"]
+    return [ORIGIN, {"tool": "gh", "args": rules_read, "body": rules(V, E)}, *polls]
+
+
+def test_land_runs_end_to_end_as_a_caller_runs_it(native: Native) -> None:
+    calls = [
+        ORIGIN,
+        read(green()),
         {
             "tool": "git",
             "args": ["branch", "--show-current"],
             "text": "issue-731-example\n",
         },
         {"tool": "git", "args": ["rev-parse", "--verify", "HEAD"], "text": HEAD},
-        observation("ejected" if recovery else "ready-to-land", False, True),
-    ]
-    if recovery:
-        calls.append(observation("ready-to-land", True, True))
-    calls += [
-        live(False),
+        *observed(
+            read(green()),
+            {"tool": "gh", "args": ["api", RUNS], "body": runs()},
+            pressure(HEAD, annotations()),
+        ),
+        read(green()),
         {
             "tool": "gh",
             "args": ["pr", "merge", "731", "--repo", "jaunder-org/jaunder", "--auto"]
             + ["--merge", "--match-head-commit", HEAD],
         },
-        live(True),
-        observation("merged", recovery, False),
+        read(green(armed=True)),
+        *observed(
+            read(merged()),
+            pressure(HEAD, annotations()),
+            pressure(MERGE, annotations(e2e=[PRESSURE])),
+        ),
     ]
-    return calls
-
-
-def pull_request(call: dict[str, Any]) -> dict[str, Any]:
-    pr: dict[str, Any] = call["body"]["data"]["repository"]["pullRequest"]
-    return pr
-
-
-def rewrite_report(call: dict[str, Any], **changes: Any) -> None:
-    call["text"] = json.dumps(json.loads(call["text"]) | changes)
-
-
-RECOVERY = [False, True]
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-def test_an_approved_land_makes_one_head_bound_action_then_observes(
-    native: Native, recovery: bool
-) -> None:
-    calls = land_calls(recovery)
-    result = native.land(recovery, calls)
-    assert result.returncode == 0, result
-    assert native.count() == len(calls)
-    report = json.loads(result.stdout)
-    assert (report["outcome"], report["head_sha"]) == ("merged", HEAD)
-
-
-def watched(*observer: Any) -> list[Any]:
-    """The native calls of one real `dev pr-watch 731`: origin, ruleset, then
-    each scripted read, `annotations:<oid>` naming one commit's annotations."""
-    repository = ["-f", "owner=jaunder-org", "-f", "name=jaunder"]
-    query = ["api", "graphql", "-f", f"query={pr_watch.PR_QUERY}", *repository]
-    query += ["-F", "number=731"]
-    rules_path = "repos/jaunder-org/jaunder/rules/branches/main"
-    runs_path = "repos/jaunder-org/jaunder/actions/runs?event=merge_group&per_page=100"
-    paths = {"pr": query, "rules": ["api", rules_path], "runs": ["api", runs_path]}
-
-    def args(name: str) -> list[str]:
-        kind, _, oid = name.partition(":")
-        if kind != "annotations":
-            return paths[name]
-        annotations = ["api", "graphql", "-f", f"query={pr_watch.ANNOTATIONS_QUERY}"]
-        return [*annotations, *repository, "-f", f"oid={oid}"]
-
-    return [
-        {
-            "tool": "git",
-            "args": ["remote", "get-url", "origin"],
-            "text": "https://github.com/jaunder-org/jaunder.git\n",
-        },
-        {"tool": "gh", "args": paths["rules"], "body": rules(V, E)},
-    ] + [{"tool": "gh", "args": args(name), "body": body} for name, body in observer]
-
-
-def test_land_runs_the_real_observer_end_to_end(native: Native) -> None:
-    native.checkout.dev_on_path()
-    calls = land_calls(False)
-    calls[4:5] = watched(
-        ("pr", green()), ("runs", runs()), (f"annotations:{HEAD}", annotations())
-    )
-    calls[-1:] = watched(
-        ("pr", merged()),
-        (f"annotations:{HEAD}", annotations()),
-        (f"annotations:{MERGE}", annotations(e2e=[PRESSURE])),
-    )
-    result = native.land(False, calls)
+    result = native.dev("pr-land", "731", HEAD, calls=calls)
     assert result.returncode == 0, result
     assert native.count() == len(calls)
     report = json.loads(result.stdout)
@@ -243,187 +148,14 @@ def test_land_runs_the_real_observer_end_to_end(native: Native) -> None:
     ]
 
 
-ADVERSE = ["pending", "blocked", "conflicted", "checks-failed", "ejected"]
-ADVERSE += ["watcher-error", "stale", "merged"]
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-@pytest.mark.parametrize("outcome", ADVERSE)
-def test_land_refuses_an_adverse_or_incomplete_observation_before_mutation(
-    native: Native, recovery: bool, outcome: str
-) -> None:
-    calls = land_calls(recovery)
-    index = 5 if recovery else 4
-    calls[index] = observation(outcome, recovery, True)
-    assert native.land(recovery, calls).returncode != 0, outcome
-    assert native.count() == index + 1, f"no action after {outcome}"
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-def test_land_refuses_a_changed_live_head(native: Native, recovery: bool) -> None:
-    for index in [1, 6 if recovery else 5]:
-        calls = land_calls(recovery)
-        pull_request(calls[index])["headRefOid"] = MERGE
-        assert native.land(recovery, calls).returncode != 0
-        assert native.count() == index + 1
-
-
 @pytest.mark.parametrize(
-    "outcome", ["ready-to-land", "pending", "checks-failed", "watcher-error"]
+    "args", [["0", HEAD], ["731", "A" * 40], ["731", HEAD, "--recover"]]
 )
-def test_recovery_requires_a_live_ejection(native: Native, outcome: str) -> None:
-    calls = land_calls(True)
-    calls[4] = observation(outcome, False, True)
-    assert native.land(True, calls).returncode != 0
-    assert native.count() == 5
-
-
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [("isInMergeQueue", True), ("autoMergeRequest", {"enabledAt": "now"})],
-)
-def test_recovery_refuses_an_armed_or_queued_preflight(
-    native: Native, field: str, value: Any
+def test_land_refuses_malformed_identity_before_any_call(
+    native: Native, args: list[str]
 ) -> None:
-    calls = land_calls(True)
-    pull_request(calls[1])[field] = value
-    assert native.land(True, calls).returncode != 0
-    assert native.count() == 5
-
-
-def wrong_origin(calls: list[Any]) -> int:
-    calls[0]["text"] = "https://github.com/other/repo.git"
-    return 1
-
-
-def local_divergence(calls: list[Any]) -> int:
-    calls[3]["text"] = MERGE
-    return 4
-
-
-def wrong_base(calls: list[Any]) -> int:
-    pull_request(calls[1])["baseRefName"] = "release"
-    return 2
-
-
-def wrong_reported_head(calls: list[Any]) -> int:
-    rewrite_report(calls[4], head_sha=MERGE)
-    return 5
-
-
-def missing_arm(calls: list[Any]) -> int:
-    del pull_request(calls[1])["autoMergeRequest"]
-    return 2
-
-
-def malformed_arm(calls: list[Any]) -> int:
-    pull_request(calls[1])["autoMergeRequest"] = "armed"
-    return 2
-
-
-def api_errors(calls: list[Any]) -> int:
-    calls[1]["body"]["errors"] = [{"message": "unavailable"}]
-    return 2
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-@pytest.mark.parametrize(
-    "fault",
-    [wrong_origin, local_divergence, wrong_base, wrong_reported_head, missing_arm]
-    + [malformed_arm, api_errors],
-)
-def test_land_rejects_wrong_repository_divergence_base_and_malformed_arm_evidence(
-    native: Native, recovery: bool, fault: Any
-) -> None:
-    calls = land_calls(recovery)
-    expected = fault(calls)
-    assert native.land(recovery, calls).returncode != 0
-    assert native.count() == expected
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-def test_an_inconsistent_success_report_status_is_not_permission(
-    native: Native, recovery: bool
-) -> None:
-    calls = land_calls(recovery)
-    index = 5 if recovery else 4
-    calls[index]["exit"] = 1
-    assert native.land(recovery, calls).returncode != 0
-    assert native.count() == index + 1
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-@pytest.mark.parametrize("state", ["queued", "merged"])
-def test_an_immediate_queue_or_merged_readback_is_not_a_silent_no_op(
-    native: Native, recovery: bool, state: str
-) -> None:
-    calls = land_calls(recovery)
-    readback = 8 if recovery else 7
-    pr = pull_request(calls[readback])
-    pr["autoMergeRequest"] = None
-    if state == "queued":
-        pr["isInMergeQueue"] = True
-        # Only a positive same-head queue readback gets the history input.
-        calls[readback + 1]["args"] += ["--observed-queued-head", HEAD]
-    else:
-        pr |= {
-            "state": "MERGED",
-            "mergedAt": "2026-11-08T00:00:00Z",
-            "mergeCommit": {"oid": MERGE},
-        }
-    result = native.land(recovery, calls)
-    assert result.returncode == 0, result
-    assert native.count() == readback + 2
-
-
-def action_fails(calls: list[Any], action: int, recovery: bool) -> int:
-    calls[action]["exit"] = 1
-    return action + 1
-
-
-def action_is_a_no_op(calls: list[Any], action: int, recovery: bool) -> int:
-    calls[action + 1] = live(False)
-    return action + 2
-
-
-def readback_fails(calls: list[Any], action: int, recovery: bool) -> int:
-    calls[action + 1]["exit"] = 1
-    return action + 2
-
-
-def fresh_ejection(calls: list[Any], action: int, recovery: bool) -> int:
-    calls[action + 2] = observation("ejected", recovery, False)
-    return action + 3
-
-
-def checks_failed(calls: list[Any], action: int, recovery: bool) -> int:
-    calls[action + 2] = observation("checks-failed", recovery, False)
-    return action + 3
-
-
-def head_drift(calls: list[Any], action: int, recovery: bool) -> int:
-    rewrite_report(calls[action + 2], head_sha=MERGE)
-    return action + 3
-
-
-def incomplete_merge(calls: list[Any], action: int, recovery: bool) -> int:
-    rewrite_report(calls[action + 2], pointer=None)
-    return action + 3
-
-
-@pytest.mark.parametrize("recovery", RECOVERY)
-@pytest.mark.parametrize(
-    "fault",
-    [action_fails, action_is_a_no_op, readback_fails, fresh_ejection, checks_failed]
-    + [head_drift, incomplete_merge],
-)
-def test_no_action_error_or_post_action_uncertainty_ever_rearms(
-    native: Native, recovery: bool, fault: Any
-) -> None:
-    calls = land_calls(recovery)
-    expected = fault(calls, 7 if recovery else 6, recovery)
-    assert native.land(recovery, calls).returncode != 0
-    assert native.count() == expected, "no retry"
+    assert native.dev("pr-land", *args, calls=[]).returncode == 2
+    assert native.count() == 0
 
 
 SNAPSHOT = {
