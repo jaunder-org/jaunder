@@ -17,19 +17,25 @@ from pathlib import Path
 import pytest
 from conftest import Checkout
 
-from dev.advisories import Advisory, findings, merged
+from dev.advisories import Advisory, Place, findings, merged
 
 FIXTURES = Path(__file__).parent / "fixtures" / "cargo-deny"
 REPORT = (FIXTURES / "url-2.5.8-advisories.jsonl").read_bytes()
 TOOLS_REPORT = (FIXTURES / "zip-9.0.4-tools-advisories.jsonl").read_bytes()
 # A report with nothing to find: its summary record alone.
 CLEAN = REPORT.splitlines()[1] + b"\n"
+URL_PLACE = Place("url", "2.5.8", "product")
 URL = Advisory(
     "RUSTSEC-2026-0592",
     "url",
     "Stack overflow in `Url::origin()` on nested `blob:` URLs",
-    ("`url` 2.5.8 in the product workspace",),
+    (URL_PLACE,),
 )
+
+
+def at_version(report: bytes, version: bytes) -> bytes:
+    """`report` with its affected `url` at `version`."""
+    return report.replace(b'"2.5.8"', b'"' + version + b'"')
 
 
 def test_a_vulnerability_is_one_finding_in_its_workspace() -> None:
@@ -37,8 +43,9 @@ def test_a_vulnerability_is_one_finding_in_its_workspace() -> None:
     (zip_advisory,) = findings(TOOLS_REPORT, "tools")
     assert (zip_advisory.id, zip_advisory.found) == (
         "RUSTSEC-2026-0548",
-        ("`zip` 9.0.4 in the tools workspace",),
+        (Place("zip", "9.0.4", "tools"),),
     )
+    assert URL_PLACE.described() == "`url` 2.5.8 in the product workspace"
 
 
 def test_the_title_names_the_advisory_crate_and_summary() -> None:
@@ -48,17 +55,22 @@ def test_the_title_names_the_advisory_crate_and_summary() -> None:
     )
 
 
-def test_each_advisory_is_one_finding_however_often_it_is_reported() -> None:
-    """cargo-deny reports an advisory once per affected crate version; a blank
-    line is not a record."""
+def test_each_advisory_is_one_issue_at_each_distinct_version() -> None:
+    """cargo-deny reports an advisory once per affected crate version, possibly
+    more than once in a workspace; a blank line is not a record."""
     diagnostic = REPORT.splitlines()[0]
+    older = at_version(diagnostic, b"2.5.7")
     other = json.loads(diagnostic)
     other["fields"]["advisory"]["id"] = "RUSTSEC-2026-9999"
-    report = b"\n".join([diagnostic, b"", diagnostic, json.dumps(other).encode()])
-    assert [finding.id for finding in findings(report, "product")] == [
+    report = b"\n".join(
+        [diagnostic, b"", older, diagnostic, json.dumps(other).encode()]
+    )
+    first, second = merged(findings(report, "product"))
+    assert (first.id, first.found) == (
         "RUSTSEC-2026-0592",
-        "RUSTSEC-2026-9999",
-    ]
+        (URL_PLACE, Place("url", "2.5.7", "product")),
+    )
+    assert second.id == "RUSTSEC-2026-9999"
 
 
 def test_only_errors_with_an_advisory_are_findings() -> None:
@@ -76,12 +88,9 @@ def test_only_errors_with_an_advisory_are_findings() -> None:
 
 
 def test_an_advisory_in_both_workspaces_is_one_found_in_each() -> None:
-    tools = findings(REPORT.replace(b'"2.5.8"', b'"2.5.7"'), "tools")
-    (both,) = merged([findings(REPORT, "product"), tools])
-    assert both.found == (
-        "`url` 2.5.8 in the product workspace",
-        "`url` 2.5.7 in the tools workspace",
-    )
+    tools = findings(at_version(REPORT, b"2.5.7"), "tools")
+    (both,) = merged([*findings(REPORT, "product"), *tools])
+    assert both.found == (URL_PLACE, Place("url", "2.5.7", "tools"))
 
 
 # Fakes that record each call's argv as one JSON line in `calls`. cargo replays
@@ -186,7 +195,7 @@ def test_a_tools_advisory_is_reported_like_a_product_one(
 
 
 def test_an_advisory_in_both_workspaces_is_one_issue(checkout: Checkout) -> None:
-    tools = REPORT.replace(b'"2.5.8"', b'"2.5.7"')
+    tools = at_version(REPORT, b"2.5.7")
     code, _, calls = scan(checkout, product=(REPORT, 1), tools=(tools, 1))
     assert code == 1
     assert calls[:3] == [DENY, TOOLS_DENY, search("RUSTSEC-2026-0592")]
@@ -208,6 +217,7 @@ def test_an_open_issue_for_the_advisory_gets_a_comment_instead(
     ]
     code, _, calls = scan(checkout, product=(REPORT, 1), open_issues=open_issues)
     assert code == 1
+    assert calls[:3] == [DENY, TOOLS_DENY, search("RUSTSEC-2026-0592")]
     (comment,) = calls[3:]
     assert comment[:6] == [
         "issue",

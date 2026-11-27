@@ -45,6 +45,8 @@ is caught where the same problem in the product would be. A pull request that
 changes either workspace's dependencies can fail on an advisory against a crate
 it didn't touch, in either workspace.
 
-`zip` was left at 9.0.4 when this landed, so that the first daily scan would
-file its issue from Actions. Until it was upgraded, every local gate and every
-dependency-changing pull request failed on RUSTSEC-2026-0548.
+The decision lands with `zip` still at 9.0.4, so that the first scan after it
+files that advisory's issue from Actions. Until `zip` is upgraded, every local
+gate and every dependency-changing pull request fails on RUSTSEC-2026-0548. Both
+cargo-deny checks run last wherever they run, so that failure hides no other
+check's verdict.

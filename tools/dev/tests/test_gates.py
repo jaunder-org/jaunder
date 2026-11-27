@@ -167,7 +167,10 @@ TSC = [
 ]
 
 
-TOOLS_CARGO_DENY = "cargo deny --manifest-path tools/Cargo.toml check"
+# Both workspaces' cargo-deny, product first.
+CARGO_DENY = commands(
+    "cargo deny check", "cargo deny --manifest-path tools/Cargo.toml check"
+)
 
 
 def tsc_and_cargo_deny() -> Commands:
@@ -324,15 +327,16 @@ HOST_LANE = [*host("verify"), PLATFORM]
 
 def ci_host_lane(advisories: bool) -> Commands:
     """CI's host lane: only the host checks the hermetic lane does not own
-    (HERMETIC_OWNED), and cargo-deny only when asked to check advisories."""
+    (HERMETIC_OWNED), and cargo-deny on both workspaces, last, only when asked
+    to check advisories."""
     return [
         *CLEAN,
         *docs_shape(),
         *map(source_contract, SOURCE_CONTRACTS),
-        *(commands("cargo deny check", TOOLS_CARGO_DENY) if advisories else []),
         PLATFORM,
         *tools_tests(),
         *commands("pytest -m repository tools/dev"),
+        *(CARGO_DENY if advisories else []),
     ]
 
 

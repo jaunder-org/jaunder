@@ -26,6 +26,8 @@ class Mode(StrEnum):
 
 PRODUCT_HOME = "JAUNDER_PRODUCT_CARGO_HOME"
 TOOLS_HOME = "JAUNDER_TOOLS_CARGO_HOME"
+# The Cargo arguments that select the tools workspace from the checkout root.
+TOOLS_MANIFEST = ["--manifest-path", "tools/Cargo.toml"]
 
 
 @dataclass(frozen=True)
@@ -185,17 +187,11 @@ LEAVES = {
     "tools-fmt": _cargo(
         "Format the tools workspace.",
         TOOLS_HOME,
-        lambda fix, _sandbox: [
-            "fmt",
-            "--manifest-path",
-            "tools/Cargo.toml",
-            "--all",
-            *_check(fix),
-        ],
+        lambda fix, _sandbox: ["fmt", *TOOLS_MANIFEST, "--all", *_check(fix)],
     ),
     # The sandbox has no advisory database, so it checks the offline policies.
-    # Both workspaces are checked under the one root `deny.toml`, which
-    # cargo-deny reads from the checkout root it runs in.
+    # Both workspaces are checked under the one root `deny.toml`; `tools/` has
+    # no policy of its own.
     "cargo-deny": _cargo(
         "Check the product workspace's dependency policy.",
         PRODUCT_HOME,
@@ -206,8 +202,7 @@ LEAVES = {
         TOOLS_HOME,
         lambda _fix, sandbox: [
             "deny",
-            "--manifest-path",
-            "tools/Cargo.toml",
+            *TOOLS_MANIFEST,
             "check",
             *_offline_policies(sandbox),
         ],
@@ -267,8 +262,7 @@ LEAVES = {
     "tools-clippy": _clippy(
         "Clippy on the tools workspace.",
         TOOLS_HOME,
-        "--manifest-path",
-        "tools/Cargo.toml",
+        *TOOLS_MANIFEST,
         "--workspace",
         "--all-targets",
         "--features",

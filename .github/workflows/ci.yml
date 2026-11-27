@@ -16,8 +16,8 @@ on:
 # cancelled or queued.
 concurrency:
   group:
-    ci-${{ github.event_name == 'pull_request' &&
-    github.event.pull_request.number || github.run_id }}
+    ci-${{ github.event_name == 'pull_request' && github.event.pull_request.number
+    || github.run_id }}
   cancel-in-progress: true
 
 # Runner selection for every job that builds: pin the image, never `ubuntu-latest`.
@@ -55,11 +55,11 @@ jobs:
   # script in the hermetic checks.
   #
   # It also decides whether the change is documentation-only, and whether it
-  # changes either Cargo workspace's dependencies, with the slim image's own `python3` and
-  # `git` running `dev.scope`, which needs only the standard library; the pinned
-  # Python runs the same module in `dev`'s tests. A push has no base, so it is
-  # never documentation-only and never checks advisories: the daily
-  # `advisories.yml` scan owns `main`.
+  # changes either Cargo workspace's dependencies, with the slim image's own
+  # `python3` and `git` running `dev.scope`, which needs only the standard
+  # library; the pinned Python runs the same module in `dev`'s tests. A push has
+  # no base, so it is never documentation-only and never checks advisories: the
+  # daily `advisories.yml` scan owns `main`.
   merge-queue-verdict:
     name: Merge-queue verdict
     runs-on: ubuntu-slim
@@ -162,9 +162,7 @@ jobs:
         uses: actions/cache/restore@v6
         with:
           path: ~/.cache/kache
-          key:
-            kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt
-            }}
+          key: kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             kache-${{ runner.os }}-
       # Upload the post-cache baseline before heavy work: a runner-level
@@ -172,9 +170,7 @@ jobs:
       - name: Capture host resource baseline
         id: host-resource-baseline
         continue-on-error: true
-        run:
-          bash scripts/ci-storage-probe .xtask/host-resource-baseline.txt
-          baseline
+        run: bash scripts/ci-storage-probe .xtask/host-resource-baseline.txt baseline
       - name: Upload host resource baseline
         if: always() && steps.host-resource-baseline.outcome != 'skipped'
         uses: actions/upload-artifact@v7.0.1
@@ -198,9 +194,8 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload host validation diagnostics
         if: always()
         continue-on-error: true
@@ -232,9 +227,7 @@ jobs:
         uses: actions/cache/save@v6
         with:
           path: ~/.cache/kache
-          key:
-            kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt
-            }}
+          key: kache-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
 
   validate-hermetic:
     name: Validation hermetic
@@ -252,15 +245,13 @@ jobs:
       - name: Enter the ci-nix shell
         run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate hermetic lane (via dev)
-        run:
-          nix develop .#ci-nix --accept-flake-config -c dev ci-validate-hermetic
+        run: nix develop .#ci-nix --accept-flake-config -c dev ci-validate-hermetic
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload hermetic validation diagnostics
         if: always()
         continue-on-error: true
@@ -295,8 +286,7 @@ jobs:
         run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate test checks lane (via dev)
         run:
-          nix develop .#ci-nix --accept-flake-config -c dev
-          ci-validate-test-checks
+          nix develop .#ci-nix --accept-flake-config -c dev ci-validate-test-checks
       - name: Build Emacs package for Cachix
         run:
           scripts/nix-retry build --accept-flake-config --no-link
@@ -305,9 +295,8 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload test checks validation diagnostics
         if: always()
         continue-on-error: true
@@ -338,9 +327,7 @@ jobs:
       - name: Capture coverage storage baseline
         id: coverage-storage-baseline
         continue-on-error: true
-        run:
-          bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt
-          baseline
+        run: bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt baseline
       - name: Enter the ci-nix shell
         run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate Rust coverage lane (via dev)
@@ -349,15 +336,12 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Capture coverage storage final snapshot
         if: always()
         continue-on-error: true
-        run:
-          bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt
-          final
+        run: bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt final
       - name: Upload coverage storage snapshot
         if: always()
         continue-on-error: true
@@ -403,9 +387,8 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload docs validation diagnostics
         if: always()
         continue-on-error: true
@@ -478,9 +461,7 @@ jobs:
       - name: Capture lane storage baseline
         id: lane-storage-baseline
         continue-on-error: true
-        run:
-          bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt
-          baseline
+        run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt baseline
       - name: Enter the ci-nix shell
         run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Capture lane storage after ci-nix shell entry
@@ -496,14 +477,12 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Capture lane final storage snapshot
         if: always()
         continue-on-error: true
-        run:
-          bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt final
+        run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt final
       - name: Upload lane storage snapshot
         if: always()
         continue-on-error: true
@@ -575,9 +554,8 @@ jobs:
       - name: Trace summary
         if: always()
         run:
-          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace summary
-          --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace
-          summary unavailable, see this step's log"
+          nix develop .#ci-nix --accept-flake-config -c sh -c 'dev trace
+          summary --markdown >> "$GITHUB_STEP_SUMMARY"' || echo "::warning::Trace summary unavailable, see this step's log"
       - name: Upload reconciliation diagnostics
         if: always()
         continue-on-error: true
