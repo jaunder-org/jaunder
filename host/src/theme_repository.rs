@@ -595,6 +595,7 @@ mod tests {
 
         let special = repository();
         fs::create_dir(special.path().join("assets")).expect("assets");
+        // One-byte name: socket paths cap at 107 bytes under a checkout TMPDIR.
         let _socket = UnixListener::bind(special.path().join("assets/s")).expect("socket");
         assert!(matches!(
             accept_theme_repository(special.path()),

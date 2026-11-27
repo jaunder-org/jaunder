@@ -321,6 +321,7 @@ mod tests {
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");
         fs::create_dir_all(&source)?;
+        // One-byte name: socket paths cap at 107 bytes under a checkout TMPDIR.
         let _listener =
             std::os::unix::net::UnixListener::bind(source.join("s")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
@@ -360,6 +361,7 @@ mod tests {
         let source = temp.path().join("source");
         let destination = temp.path().join("destination");
         fs::create_dir_all(&source)?;
+        // One-byte name: socket paths cap at 107 bytes under a checkout TMPDIR.
         let _listener =
             std::os::unix::net::UnixListener::bind(source.join("s")).expect("bind unix socket");
         fs::write(source.join("real.txt"), "keep")?;
