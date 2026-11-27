@@ -623,13 +623,6 @@ e2eUpgradeBaseline =
         jaunderExecutable = "${upgradeFrom.jaunder}/bin/jaunder";
         instancesEnv = e2eInstancesEnv [ instance ];
       }}
-      # An earlier build that predates the instance map (#2076) reads its server
-      # origin and seed tools' paths from the environment instead. Drop these
-      # once the oldest build this check upgrades from includes the map.
-      + " JAUNDER_E2E_BASE_URL=${instance.baseUrl}"
-      + " JAUNDER_CAPTURE_DIR=${instance.captureDir}"
-      + " JAUNDER_DB=${instance.db}"
-      + " JAUNDER_STORAGE_PATH=${instance.storagePath}"
       + " JAUNDER_UPGRADE_PHASE=baseline"
       + " JAUNDER_UPGRADE_STATE_DIR=${upgradeStateDir}"
       + " ${upgradeFrom.nodejs}/bin/node node_modules/.bin/playwright test"
