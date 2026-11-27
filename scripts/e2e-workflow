@@ -53,7 +53,7 @@ mkdir -p "$destination" .xtask/gcroots
 # These are this producer's files, never an ambient temporary/build directory.
 rm -f -- "$destination"/*-"$lane".* "$destination/build.json" "$destination/build.log"
 status=0
-nix build -L --keep-failed --log-lines 50 --accept-flake-config \
+scripts/nix-retry build -L --keep-failed --log-lines 50 --accept-flake-config \
   --out-link ".xtask/gcroots/$check" --json "$installable" \
   >"$destination/build.json" 2> >(tee "$destination/build.log" >&2) || status=$?
 # Wait for the diagnostic tee as well as Nix before returning to artifact upload.

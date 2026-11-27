@@ -176,6 +176,8 @@ jobs:
           path: .xtask/host-resource-baseline.txt
           if-no-files-found: error
           retention-days: 14
+      - name: Enter the ci shell
+        run: scripts/nix-retry develop .#ci --accept-flake-config -c true
       - name: Validate host lane (via dev)
         run: nix develop .#ci --accept-flake-config -c dev ci-validate-host
       # Diagnostic only: the table never decides the job's result.
@@ -230,6 +232,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Enter the ci-nix shell
+        run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate hermetic lane (via dev)
         run: nix develop .#ci-nix --accept-flake-config -c dev ci-validate-hermetic
       # Diagnostic only: the table never decides the job's result.
@@ -266,14 +270,16 @@ jobs:
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build UX sandbox helper for Cachix
         run:
-          nix build --no-update-lock-file --no-write-lock-file --no-link
-          .#ux-sandbox
+          scripts/nix-retry build --no-update-lock-file --no-write-lock-file
+          --no-link .#ux-sandbox
+      - name: Enter the ci-nix shell
+        run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate test checks lane (via dev)
         run:
           nix develop .#ci-nix --accept-flake-config -c dev ci-validate-test-checks
       - name: Build Emacs package for Cachix
         run:
-          nix build --accept-flake-config --no-link
+          scripts/nix-retry build --accept-flake-config --no-link
           .#emacsPackages.x86_64-linux.jaunder
       # Diagnostic only: the table never decides the job's result.
       - name: Trace summary
@@ -312,6 +318,8 @@ jobs:
         id: coverage-storage-baseline
         continue-on-error: true
         run: bash scripts/ci-storage-probe .xtask/coverage-storage-snapshot.txt baseline
+      - name: Enter the ci-nix shell
+        run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Validate Rust coverage lane (via dev)
         run: nix develop .#ci-nix --accept-flake-config -c dev coverage
       # Diagnostic only: the table never decides the job's result.
@@ -361,6 +369,8 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Enter the ci shell
+        run: scripts/nix-retry develop .#ci --accept-flake-config -c true
       - name: Validate docs lane (via dev)
         run: nix develop .#ci --accept-flake-config -c dev ci-validate-docs
       # Diagnostic only: the table never decides the job's result.
@@ -442,6 +452,8 @@ jobs:
         id: lane-storage-baseline
         continue-on-error: true
         run: bash scripts/ci-storage-probe .xtask/lane-storage-snapshot.txt baseline
+      - name: Enter the ci-nix shell
+        run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       - name: Capture lane storage after ci-nix shell entry
         continue-on-error: true
         run: |
@@ -520,6 +532,8 @@ jobs:
           pattern: e2e-lane-${{ matrix.backend }}-${{ matrix.browser }}-*
           path: .xtask/e2e-lanes
           merge-multiple: true
+      - name: Enter the ci-nix shell
+        run: scripts/nix-retry develop .#ci-nix --accept-flake-config -c true
       # SQLite/Chromium reconciliation also verifies server-function coverage.
       - name: Reconcile lane evidence even when downloads are missing
         if: always()

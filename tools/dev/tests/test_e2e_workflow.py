@@ -154,6 +154,7 @@ def e2e(checkout: Checkout) -> E2E:
     checkout.from_repository(
         "scripts/e2e-workflow",
         "scripts/e2e-matrix.jq",
+        "scripts/nix-retry",
         "end2end/e2e-lanes.json",
     )
     checkout.executable("nix", FAKE_NIX)
@@ -860,6 +861,14 @@ def test_a_failed_producer_lifts_available_evidence_but_never_verifies_it(
     assert e2e.capture.read_text() == "current diagnostic"
     assert b"warning" not in result.stderr, "a successful lift was reported missing"
     assert b"e2e-evidence" not in result.stdout
+
+
+def test_a_producer_build_that_exits_1_runs_once_more(e2e: E2E) -> None:
+    # Nix exits 1 when no builder failed, as when a substitute download fails.
+    result = e2e.run("e2e-producer", LANE, output=capture_only(), status="1")
+    assert result.returncode == 1
+    assert e2e.events().count(f"producer {LANE}\n") == 2
+    assert b"running it once more" in result.stderr
 
 
 @pytest.mark.parametrize("output", ["unevaluable", "missing", "empty"])

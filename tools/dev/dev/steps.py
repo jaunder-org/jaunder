@@ -37,6 +37,7 @@ from dev.spans import (
     EXIT_CODE,
     FETCHED_BYTES,
     NIX_OUTPUT,
+    NIX_RETRIED,
     STATUS,
     Cache,
     Status,
@@ -114,11 +115,15 @@ class _Signals:
         self.supervising = False
         self.child: subprocess.Popen[bytes] | None = None
         self.forwarded: list[int] = []
+        # Whether any request, SIGINT included, arrived while the child ran: its
+        # exit is then no longer its own verdict, so it is never run again.
+        self.interrupted = False
         # Requests that arrived while the child was starting, relayed once it has.
         self.pending: list[int] = []
 
     def handle(self, signum: int, _frame: FrameType | None) -> None:
         if self.supervising:
+            self.interrupted = True
             if signum == signal.SIGINT:
                 return
             self.forwarded.append(signum)
@@ -191,6 +196,7 @@ def _supervise(
     )
     _signals.supervising = True
     _signals.forwarded = []
+    _signals.interrupted = False
     _signals.pending = []
     try:
         try:
@@ -301,11 +307,21 @@ def _run(
     realizes: Callable[[], str] | None = None,
     finished: Callable[[Span, int], None] | None = None,
     verdict: bool = False,
+    nix_retry: bool = False,
 ) -> bytes:
     with _step(name, argv) as span:
         started_ns = time.time_ns()
         start = started_ns // 1_000_000_000
         code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
+        if nix_retry and code == 1 and not signalled and not _signals.interrupted:
+            print(
+                f"dev: {name}: Nix exited 1 without a builder failing, as when a"
+                " substitute download fails; running it once more",
+                file=sys.stderr,
+                flush=True,
+            )
+            span.set_attribute(NIX_RETRIED, True)
+            code, signalled, output, _ = _supervise(argv, capture, environment, stdin)
         if render is not None:
             rendered = render(output)
             sys.stdout.buffer.write(output if rendered is None else rendered.encode())
@@ -414,15 +430,30 @@ def text(
     environment: Environment | None = None,
     refusal: Callable[[str], str | None] | None = None,
     finished: Callable[[Span, int], None] | None = None,
+    nix_retry: bool = False,
 ) -> str:
     """A step's stdout as a shell's `$(...)` gives it: trailing newlines removed.
 
     `refusal`, if given, judges that text: a reason it returns is printed and
     fails the step with status 1. `finished` is as for `run`.
+
+    With `nix_retry`, a Nix child that exits 1 runs once more within the same
+    step, unless a signal arrived while it ran. Nix exits 100 to 104 when a
+    builder failed and 1 when none did: a substitute download that failed
+    (#2135) is one such failure, and its second attempt starts the download
+    afresh. A persistent failure fails both.
     """
     judge = None if refusal is None else lambda output: refusal(_shell_text(output))
     return _shell_text(
-        _run(name, argv, True, environment, refusal=judge, finished=finished)
+        _run(
+            name,
+            argv,
+            True,
+            environment,
+            refusal=judge,
+            finished=finished,
+            nix_retry=nix_retry,
+        )
     )
 
 
@@ -570,7 +601,9 @@ def nix_build(
     and never change the step.
 
     `finished` is as for `run`, for the `build` step: what the builder timed
-    itself belongs under it.
+    itself belongs under it. A build that exits 1, with no builder failed, runs
+    once more as `text`'s `nix_retry` says; the `build` span then records
+    `jaunder.nix.retried`.
 
     A `verdict` must execute here: the step fails, naming it, unless the build
     printed one output that this machine's store built (`ultimate`).
@@ -589,7 +622,9 @@ def nix_build(
                 derivation = text("eval", evaluate)
             # After the evaluation, which registers what it writes.
             start = int(time.time())
-            paths = text("build", argv, refusal=refusal, finished=finished)
+            paths = text(
+                "build", argv, refusal=refusal, finished=finished, nix_retry=True
+            )
             if verdict and _reported_not_executed_here(name, paths):
                 raise StepFailed(1, False)
             _record_outcome(span, 0, False)

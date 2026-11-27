@@ -4667,11 +4667,15 @@ path before the build started, otherwise `built` or `substituted` by
 `build` child, so it is evaluated once and the evaluation is timed; the value
 describes only the output, which the step records as `jaunder.nix.output`, with
 `jaunder.nix.fetched_bytes` for what substituters supplied to the build's
-closure unless the output was reused. When a producer times its own phases where
-it cannot trace (the Rust coverage producer's `status.json` stages, an E2E
-lane's VM phase manifest), `dev` writes them afterwards as children of the step
-that ran it, at the producer's recorded start and duration. Only phases inside
-that step are written, so a reused output's or an earlier run's are left out
+closure unless the output was reused. A `build` child that exits 1, with no
+builder failed, runs once more and records `jaunder.nix.retried`, so a dropped
+substitute download doesn't fail the step. `scripts/nix-retry` does the same for
+the E2E producer's build and for CI's dev-shell entry and direct builds. When a
+producer times its own phases where it cannot trace (the Rust coverage
+producer's `status.json` stages, an E2E lane's VM phase manifest), `dev` writes
+them afterwards as children of the step that ran it, at the producer's recorded
+start and duration. Only phases inside that step are written, so a reused
+output's or an earlier run's are left out
 ([producer-timed phases](adr/0263-dev-traces-producer-timed-phases.md)). Under
 an E2E lane's `gate-execution` phase, `dev` likewise writes the lane's test tree
 from its lifted OTLP capture: every span below the parent injected into

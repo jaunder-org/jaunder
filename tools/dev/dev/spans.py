@@ -13,6 +13,7 @@ STATUS = "jaunder.status"
 CACHE = "jaunder.cache"
 NIX_OUTPUT = "jaunder.nix.output"
 FETCHED_BYTES = "jaunder.nix.fetched_bytes"
+NIX_RETRIED = "jaunder.nix.retried"
 
 
 class Status(StrEnum):
