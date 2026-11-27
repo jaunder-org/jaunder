@@ -22,6 +22,10 @@ let
     appOfflineCargoHome
     ;
 
+  # The checkout-bound TMPDIR block every shell's hook starts with; .envrc
+  # sources the same file.
+  checkoutTmpdir = builtins.readFile ./checkout-tmpdir.sh;
+
   # Everything `dev validate` needs on the host (toolchain + the
   # static-check tools) plus what the Nix checks pull anyway — so the CI
   # shell shares those store paths rather than adding cost.
@@ -162,25 +166,7 @@ let
     E2E_PLAYWRIGHT_TEST = "${pkgs.playwright-test}/lib/node_modules/@playwright/test";
     shellHook = ''
       # Bind host temp routing to the checkout at entry, before provisioning.
-      # Exit (not return) prevents nix develop from running a command after failure.
-      if ! jaunder_checkout_root="$(git rev-parse --show-toplevel)" || [[ "$jaunder_checkout_root" != /* ]]; then
-        printf 'jaunder: cannot resolve an absolute Git checkout root for TMPDIR\n' >&2
-        exit 1
-      fi
-      jaunder_tmpdir="$jaunder_checkout_root/.xtask/tmp"
-      # Exercise directory use as well as creation; an existing path is not proof
-      # that host tools can create temporary files there.
-      if ! mkdir -p -- "$jaunder_tmpdir" || ! jaunder_tmp_probe="$(mktemp "$jaunder_tmpdir/.shell-entry.XXXXXXXXXX")"; then
-        printf 'jaunder: cannot create or use TMPDIR %s\n' "$jaunder_tmpdir" >&2
-        exit 1
-      fi
-      if ! rm -- "$jaunder_tmp_probe"; then
-        printf 'jaunder: cannot remove TMPDIR usability probe %s\n' "$jaunder_tmp_probe" >&2
-        exit 1
-      fi
-      export TMPDIR="$jaunder_tmpdir"
-      unset jaunder_checkout_root jaunder_tmpdir jaunder_tmp_probe
-
+      ${checkoutTmpdir}
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isLinux linuxLibraryPathExport}
       ${pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
         export PLAYWRIGHT_BROWSERS_PATH="''${XDG_CACHE_HOME:-$HOME/Library/Caches}/ms-playwright-jaunder/${pkgs.playwright-test.version}"
@@ -214,21 +200,7 @@ in
     TZ = "UTC";
     TZDIR = "${pkgs.tzdata}/share/zoneinfo";
     shellHook = ''
-      if ! jaunder_checkout_root="$(git rev-parse --show-toplevel)" || [[ "$jaunder_checkout_root" != /* ]]; then
-        printf 'jaunder: cannot resolve an absolute Git checkout root for TMPDIR\n' >&2
-        exit 1
-      fi
-      jaunder_tmpdir="$jaunder_checkout_root/.xtask/tmp"
-      if ! mkdir -p -- "$jaunder_tmpdir" || ! jaunder_tmp_probe="$(mktemp "$jaunder_tmpdir/.shell-entry.XXXXXXXXXX")"; then
-        printf 'jaunder: cannot create or use TMPDIR %s\n' "$jaunder_tmpdir" >&2
-        exit 1
-      fi
-      if ! rm -- "$jaunder_tmp_probe"; then
-        printf 'jaunder: cannot remove TMPDIR usability probe %s\n' "$jaunder_tmp_probe" >&2
-        exit 1
-      fi
-      export TMPDIR="$jaunder_tmpdir"
-      unset jaunder_checkout_root jaunder_tmpdir jaunder_tmp_probe
+      ${checkoutTmpdir}
       ${linuxLibraryPathExport}
     '';
   };

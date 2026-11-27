@@ -83,7 +83,10 @@ to resolve the checkout or create/use that directory visibly stops shell
 startup; there is no `/tmp` fallback. The value stays bound to that entry
 checkout after `cd`; enter a new shell to bind to another checkout. A later
 command-local `TMPDIR=/absolute/override command` still wins for that command
-and its inheriting children.
+and its inheriting children. The hook lives in `nix/checkout-tmpdir.sh`;
+`.envrc` sources it again after `use flake`, because nix-direnv restores the
+pre-entry `TMPDIR` after running the hook, so a direnv shell gets the same
+binding and the same visible failure.
 
 This routes host-tool temporary files, not their ownership or cleanup. Ignored
 `.xtask/` storage preserves existing unique leaves and cleanup owners; it does

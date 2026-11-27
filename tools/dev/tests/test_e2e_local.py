@@ -150,11 +150,13 @@ for key in ("OTELCOL_GRPC_ENDPOINT", "OTELCOL_HTTP_ENDPOINT"):
     host, port = os.environ[key].rsplit(":", 1)
     listeners.append(socket.create_server((host, int(port))))
 note("collector-args", json.dumps(sys.argv[1:]))
+note("collector-tmpdir", json.dumps([os.environ["TMPDIR"], str(capture)]))
 (capture / "otel-traces.jsonl").write_text("{}\\n")
 if behaviour == "instance-file":
     (capture / "instance-0").touch()
 if behaviour == "readonly-tmp":
-    os.chmod(os.environ["TMPDIR"], 0o500)
+    # The capture source is made in the run's TMPDIR.
+    os.chmod(capture.parent, 0o500)
 code = 2 if behaviour == "fail-shutdown" else 0
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(code))
 while not (behaviour == "premature" and (state / "playwright-ran").exists()):
@@ -767,6 +769,11 @@ def test_two_workers_each_get_a_seeded_server_and_one_playwright_run(
         "--set=service.telemetry.metrics.level=none",
     ]
     assert e2e.notes("capture-path-env") == [[]]
+    # The collector's own temp files land in its capture source, which the
+    # run removes once the capture is retained.
+    ((collector_tmpdir, source),) = e2e.notes("collector-tmpdir")
+    assert collector_tmpdir == source
+    assert not Path(source).exists()
 
     servers = e2e.notes("servers")
     assert [argv for argv, _ in servers] == [["serve"], ["serve"]]

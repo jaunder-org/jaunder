@@ -159,6 +159,37 @@ printenv TMPDIR
     assert_provisioned(name, record, b_tmp)
 
 
+def test_direnv_rebinds_tmpdir_after_nix_direnv_restores_it(tmp_path: Path) -> None:
+    """nix-direnv runs the shellHook, then restores the pre-entry TMPDIR."""
+    envrc = REPOSITORY / ".envrc"
+    shared = REPOSITORY / "nix" / "checkout-tmpdir.sh"
+    require(envrc.is_file() and shared.is_file(), "the repository's .envrc")
+    root = repository(tmp_path, "checkout")
+    (root / "nix").mkdir()
+    shutil.copy(envrc, root / ".envrc")
+    shutil.copy(shared, root / "nix" / "checkout-tmpdir.sh")
+    script = (
+        "watch_file() { :; }\n"
+        'use() { export TMPDIR="$JAUNDER_TEST_PARENT"; }\n'
+        "source .envrc\n"
+        "printenv TMPDIR"
+    )
+    output = subprocess.run(
+        ["bash", "--noprofile", "--norc", "-c", script],
+        cwd=root,
+        env=os.environ
+        | {
+            "GIT_CEILING_DIRECTORIES": str(tmp_path),
+            "JAUNDER_TEST_PARENT": str(tmp_path),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert output.returncode == 0, output.stderr
+    assert output.stdout == f"{root / '.xtask' / 'tmp'}\n"
+
+
 @pytest.mark.parametrize("failure", ["no-checkout", "blocked", "unusable"])
 def test_invalid_checkout_or_temp_directory_stops_startup_and_command(
     tmp_path: Path, shell: tuple[str, str], failure: str
