@@ -48,8 +48,8 @@ REPLAYED, LANE_JOB, GATE_JOB = 44632169176, 135941369307, 135954057965
 INFRASTRUCTURE = run(run_id=REPLAYED, workflow=WORKFLOW)
 RUN_URL = f"https://github.com/o/r/actions/runs/{REPLAYED}"
 FRESH_URL = "https://github.com/o/r/actions/runs/10"
-UNKNOWN = run(run_id=REPLAYED, workflow=WORKFLOW)
-UNKNOWN_LOG = {f"log:{LANE_JOB}": [(0, TEST_FAILURE_LOG, "")]}
+# The same run unclassified: its lane's log shows a real test failure.
+REAL_FAILURE = {f"log:{LANE_JOB}": [(0, TEST_FAILURE_LOG, "")]}
 
 
 def fresh(workflow: str | None = WORKFLOW) -> Any:
@@ -159,7 +159,7 @@ def test_an_explicit_recovery_spends_the_one_re_enqueue(lands: Any) -> None:
         green(),
         armed(),
         green(),
-        ejections=[UNKNOWN, UNKNOWN, fresh()],
+        ejections=[INFRASTRUCTURE, INFRASTRUCTURE, fresh()],
         **{f"log:{LANE_JOB}": [(0, TEST_FAILURE_LOG, ""), (0, NIX_LOG, "")]},
     )
     code, report, err = lands(fake, reenqueue=True)
@@ -178,7 +178,7 @@ def test_explicit_recovery_requires_a_live_ejection(lands: Any) -> None:
 @pytest.mark.parametrize(
     "routes",
     [
-        UNKNOWN_LOG,
+        REAL_FAILURE,
         {
             "jobs": [
                 failed_jobs((LANE_JOB, LANE), (9, "Validation host"), (GATE_JOB, GATE))
@@ -209,7 +209,7 @@ def test_an_unclassified_ejection_after_the_arm_is_terminal(
 def test_an_unclassified_preflight_ejection_is_refused_without_action(
     lands: Any,
 ) -> None:
-    fake = scripted(green(), green(), ejections=[UNKNOWN], **UNKNOWN_LOG)
+    fake = scripted(green(), green(), ejections=[INFRASTRUCTURE], **REAL_FAILURE)
     code, report, err = lands(fake)
     assert (code, report, merges(fake)) == (1, None, 0)
     assert "dev: pr-land: not ready to land: ejected" in err
@@ -405,4 +405,4 @@ def test_merged_without_a_commit_is_not_merge_evidence(lands: Any) -> None:
     fake = scripted(green(), green(), green(), armed(), incomplete, ejections=[None])
     code, report, err = lands(fake)
     assert (code, report["outcome"]) == (1, "merged")
-    assert "merged without a merge commit and time" in err
+    assert "incomplete merged evidence" in err

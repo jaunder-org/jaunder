@@ -3,9 +3,8 @@
 It polls until the next caller-actionable outcome and prints one JSON report on
 stdout: `outcome`, `pr`, `head_sha`, `phase` (only for `pending`), `detail`,
 `pointer`, `ejection` (only for `ejected`) and the `events` log; absent optional
-fields are omitted. Each event
-also reaches stderr as it happens: only changes, plus a heartbeat after ten
-quiet minutes. `ready-to-land` and `merged` exit 0, every other report 1, and a
+fields are omitted. Each event also reaches stderr as it happens: only changes,
+plus a heartbeat after ten quiet minutes. `ready-to-land` and `merged` exit 0, every other report 1, and a
 refusal, an unknown pull request or an internal defect 2 with no report, so a
 defect can never read as a verdict.
 

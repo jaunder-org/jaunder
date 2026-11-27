@@ -11,8 +11,8 @@ An ejection is terminal unless this invocation re-enqueues, which it does at
 most once: when the ejection's classification names a known infrastructure
 signature, at preflight or after arming; or, for a preflight ejection of any
 cause, when the caller passed `--reenqueue`, which then requires one. Any later
-ejection ends the invocation, whatever its cause. The observer's final report is printed on
-stdout; only a complete `merged` report for the head exits 0.
+ejection ends the invocation, whatever its cause. The observer's final report
+is printed on stdout; only a complete `merged` report for the head exits 0.
 """
 
 import json
@@ -124,7 +124,7 @@ class _Lander:
             suffix = f" ({detail})" if detail else ""
             _refuse(f"not ready to land: {report['outcome']}{suffix}")
 
-    def claim_reenqueue(self, report: dict[str, Any], explicit: bool = False) -> bool:
+    def claim_reenqueue(self, report: dict[str, Any], explicit: bool) -> bool:
         """Spends the invocation's one re-enqueue on this ejection, if it is
         unspent and the ejection is infrastructure or `explicit`ly recovered;
         the ejection is then acknowledged."""
@@ -182,7 +182,9 @@ class _Lander:
             # dequeue before its first poll is still reported.
             queued = self.land.head if self.arm() else None
             report = self.observe(until="merged", observed_queued_head=queued)
-            if report["outcome"] != "ejected" or not self.claim_reenqueue(report):
+            if report["outcome"] != "ejected" or not self.claim_reenqueue(
+                report, explicit=False
+            ):
                 return report
             if (again := self.observe(once=True))["outcome"] != "ready-to-land":
                 return again
@@ -212,6 +214,6 @@ def run(
     if report["outcome"] != "merged":
         raise steps.StepFailed(1, signalled=False)
     if not complete:
-        # GitHub said merged without the commit or time: not merge evidence.
-        print("dev: pr-land: merged without a merge commit and time", file=sys.stderr)
+        # A merged outcome without its merge commit or detail is not evidence.
+        print("dev: pr-land: incomplete merged evidence", file=sys.stderr)
         raise steps.StepFailed(1, signalled=False)
