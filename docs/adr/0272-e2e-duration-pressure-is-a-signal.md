@@ -1,6 +1,6 @@
-# ADR-DRAFT: E2E duration pressure is a reported signal; only a timeout fails
+# ADR-0272: E2E duration pressure is a reported signal; only a timeout fails
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2137](https://github.com/jaunder-org/jaunder/issues/2137)
 
@@ -18,9 +18,9 @@ fails and whose retry passes is reported `flaky` and exits 0. A timed-out first
 attempt followed by a passing retry was failed only by the pressure rule,
 because a timed-out attempt is always at 100% or more.
 
-[ADR-0238](../0238-just-e2e-workflow-ownership.md) retained retry-duration
-pressure as one of the narrow verdicts. This decision narrows that verdict:
-pressure is still computed from the same evidence, but no longer refuses a lane.
+[ADR-0238](0238-just-e2e-workflow-ownership.md) retained retry-duration pressure
+as one of the narrow verdicts. This decision narrows that verdict: pressure is
+still computed from the same evidence, but no longer refuses a lane.
 
 The human decision (2026-11-26): a test that is close to its timeout should not
 fail the lane, but that fact must be surfaced, not silently absorbed.

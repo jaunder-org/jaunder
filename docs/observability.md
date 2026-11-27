@@ -713,7 +713,7 @@ other attempt at **80% or more** of its effective whole-test timeout is
 in its `e2e-evidence` output, and in CI as one `Duration pressure` warning
 annotation per lane plus every attempt in the step summary. `dev pr-watch` and
 `dev pr-land` repeat those annotations as `warning` events in their successful
-handoffs (docs/adr/drafts/e2e-duration-pressure-is-a-signal.md).
+handoffs (docs/adr/0272-e2e-duration-pressure-is-a-signal.md).
 
 Each backend/browser pair adds one host reconciliation after its four lane
 producers settle. It consumes the independent unsharded census plus every

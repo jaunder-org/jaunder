@@ -4220,7 +4220,7 @@ or more of its effective timeout passes. Its lane producer writes a
 `Duration pressure` warning annotation per lane and step-summary lines, and
 `dev pr-watch` (hence `dev pr-land`) reads those annotations back into `warning`
 events in its handoff
-([duration pressure is a signal](adr/drafts/e2e-duration-pressure-is-a-signal.md)).
+([duration pressure is a signal](adr/0272-e2e-duration-pressure-is-a-signal.md)).
 Missing, duplicated, misidentified, malformed, or failed evidence fails
 reconciliation; failed producers are still awaited and their recoverable
 evidence remains an aggregate input. The stable result-only `e2e gate` requires
@@ -4801,7 +4801,7 @@ The explicit local workflows are:
   still Markdown-only (or empty), and raw worktree/index blob identity for every
   tracked regular file (symlinks and gitlinks are not hashed), so no list of a
   check's inputs has to mirror its Nix source filter
-  ([shared static verdicts](adr/drafts/prepush-takes-shared-static-verdicts.md)).
+  ([shared static verdicts](adr/0273-prepush-takes-shared-static-verdicts.md)).
   The ordinary Git-backed `static-docs` request then runs as a `dev` Nix-check
   step, so it uses `dev`'s one definition of Nix check flags and appears in the
   trace with its cache state. A post-request status/index check fails on
@@ -4828,7 +4828,7 @@ The explicit local workflows are:
   `byte-compile`), `static-typescript` (`tsc`) and `static-ert` (`ert`). Their
   filtered sources let a verdict built for another tree, locally or by CI
   through Cachix, be reused
-  ([shared static verdicts](adr/drafts/prepush-takes-shared-static-verdicts.md)).
+  ([shared static verdicts](adr/0273-prepush-takes-shared-static-verdicts.md)).
   Clippy, `test-local` and the auxiliary host tests stay on the host by measured
   decision: their Nix forms rebuild from cold on most changes, and `dev-python`
   skips the tests that check `dev` against the rest of the repository. Index

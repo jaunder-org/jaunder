@@ -1,6 +1,6 @@
-# ADR-DRAFT: Pre-push takes reusable static verdicts from Nix
+# ADR-0273: Pre-push takes reusable static verdicts from Nix
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2136](https://github.com/jaunder-org/jaunder/issues/2136)
 
@@ -8,7 +8,7 @@
 
 `dev prepush` ran its whole Verify host surface on the host, except that on
 x86_64-linux the Markdown slot already took the Nix `static-docs` verdict
-([ADR-0029](../0029-git-enforced-verify-gate.md), #1863 supplement). In local
+([ADR-0029](0029-git-enforced-verify-gate.md), #1863 supplement). In local
 traces of 14 pre-push runs (2026-11-22 to 26), the median run took 694 s:
 
 - `test-local`: 374 s
@@ -23,7 +23,7 @@ A Nix check is input-addressed and reads a filtered source slice. When a branch
 leaves every input of a check untouched, the derivation is the one `main` built.
 It is then reused from the local store, or substituted from Cachix, which CI
 fills under the static-verdict rule of
-[ADR-0267](../0267-ci-honours-non-substitutable-verdicts.md).
+[ADR-0267](0267-ci-honours-non-substitutable-verdicts.md).
 
 Alternatives were measured and rejected:
 
@@ -33,7 +33,7 @@ Alternatives were measured and rejected:
 - **A Nix or dropped `test-local`.** A Nix test derivation rebuilds from cold on
   every Rust change. Dropping it moves defect discovery to CI and stops the
   hooks exercising host-only build paths
-  ([ADR-0255](../0255-ci-clippy-verdict-from-nix.md)).
+  ([ADR-0255](0255-ci-clippy-verdict-from-nix.md)).
 - **`dev-python`.** Its source is only `tools/dev`, so about 25 tests that check
   `dev` against hooks, workflows, `flake.nix` and scripts skip there. Keeping
   those tests on the host would still cost 58 s of the 99 s.
@@ -87,5 +87,5 @@ rather than 1. The hand-kept list of `static-docs` inputs is gone.
 - The issue's "re-push under a minute" target is not met, by decision: host
   `nextest`, Clippy and source contracts still run on every push.
 - This amends the #1117 and #1863 supplements of
-  [ADR-0029](../0029-git-enforced-verify-gate.md). Current state:
+  [ADR-0029](0029-git-enforced-verify-gate.md). Current state:
   `docs/ARCHITECTURE.md` §The verify ladder & git-enforced gate.

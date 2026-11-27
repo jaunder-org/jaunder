@@ -299,6 +299,8 @@ convention). See the Status column below for each ADR's current status.
 | [0269](adr/0269-per-worker-e2e-server-instances.md)                      | Every Playwright worker owns its own E2E server instance                                                     | accepted   |
 | [0270](adr/0270-perf-data-python-reads-validated-data.md)                | Performance host work is Python that reads already-validated data                                            | accepted   |
 | [0271](adr/0271-dev-trace-shows-e2e-capture-spans.md)                    | Dev traces show an e2e lane's capture spans                                                                  | accepted   |
+| [0272](adr/0272-e2e-duration-pressure-is-a-signal.md)                    | E2E duration pressure is a reported signal; only a timeout fails                                             | accepted   |
+| [0273](adr/0273-prepush-takes-shared-static-verdicts.md)                 | Pre-push takes reusable static verdicts from Nix                                                             | accepted   |
 
 <!-- adr-table:end -->
 

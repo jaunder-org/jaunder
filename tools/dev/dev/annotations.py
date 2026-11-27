@@ -7,7 +7,7 @@ job's check run, where the observer finds it by its title.
 import os
 
 # Marks a lane's duration pressure
-# (docs/adr/drafts/e2e-duration-pressure-is-a-signal.md).
+# (docs/adr/0272-e2e-duration-pressure-is-a-signal.md).
 DURATION_PRESSURE = "Duration pressure"
 
 
