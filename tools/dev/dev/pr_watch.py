@@ -42,8 +42,7 @@ from typing import Any, NamedTuple
 
 import yaml
 
-from dev import steps
-from dev.e2e_evidence import PRESSURE_TITLE
+from dev import annotations, steps
 
 # Runs one command (`gh` or `git`): its status, stdout and stderr.
 Runner = Callable[[Sequence[str]], tuple[int, str, str]]
@@ -493,7 +492,7 @@ def parse_pressure(value: Any) -> list[str]:
             for annotation in _nodes(run, "annotations"):
                 if (
                     _get(annotation, "annotationLevel") != "WARNING"
-                    or _get(annotation, "title") != PRESSURE_TITLE
+                    or _get(annotation, "title") != annotations.DURATION_PRESSURE
                 ):
                     continue
                 name, message = _text(run, "name"), _text(annotation, "message")
@@ -912,7 +911,7 @@ def _poll(
     return snapshot, step, warnings
 
 
-def _pressure(log: _Log, github: GitHub, snapshot: Snapshot) -> None:
+def _log_pressure(log: _Log, github: GitHub, snapshot: Snapshot) -> None:
     """Logs each duration-pressure warning of a successful watch: on the PR
     head and, once merged, on the merge commit, which is the merge-group
     run's commit. The warnings never change the outcome, and neither does a
@@ -1029,7 +1028,7 @@ def _watch(
             queued_head = snapshot.head
         if terminal is not None:
             if terminal[0] in SUCCESSFUL:
-                _pressure(log, github, snapshot)
+                _log_pressure(log, github, snapshot)
             log("terminal", terminal[0])
             return end(*terminal)
         if watch.once:

@@ -59,9 +59,6 @@ from dev.traces import (
 # The utilization at or above which an attempt is reported as duration
 # pressure. It is a signal, never a verdict: only a `timedOut` attempt fails.
 PRESSURE_THRESHOLD = 0.80
-# The GitHub annotation title that marks duration pressure, which `pr_watch`
-# reads back into its handoff.
-PRESSURE_TITLE = "Duration pressure"
 # Every status Playwright's JSON reporter gives an attempt.
 ATTEMPT_STATUSES = ("passed", "failed", "timedOut", "skipped", "interrupted")
 # The VM sidecar's phase that runs Playwright.
@@ -342,7 +339,7 @@ def _duration_manifest(document: dict[str, Any]) -> tuple[int, bool, _ManifestTe
     )
 
 
-def _contiguous(retries: dict[int, Any], source: str, identity: _TestIdentity) -> None:
+def _contiguous[T](retries: dict[int, T], source: str, identity: _TestIdentity) -> None:
     for expected, actual in enumerate(sorted(retries)):
         if actual != expected:
             raise EvidenceError(
@@ -464,26 +461,31 @@ class Pressure:
 
 
 @dataclass(frozen=True)
-class Duration:
+class DurationBudget:
     """A lane's passing duration budget: its greatest pressure, and every
     attempt at or above the threshold, worst first."""
 
     maximum: Pressure
     pressured: list[Pressure]
 
+    def headline(self) -> str:
+        return (
+            f"{len(self.pressured)} attempt(s) at or above "
+            f"{PRESSURE_THRESHOLD * 100:.0f}% of their timeout"
+        )
+
     def detail(self) -> str:
         if not self.pressured:
             return f"maximum duration pressure {self.maximum.describe()}"
-        heading = (
-            f"duration pressure: {len(self.pressured)} attempt(s) at or above "
-            f"{PRESSURE_THRESHOLD * 100:.0f}% of their timeout"
-        )
         return "\n".join(
-            [heading, *(f"  {pressure.describe()}" for pressure in self.pressured)]
+            [
+                f"duration pressure: {self.headline()}",
+                *(f"  {pressure.describe()}" for pressure in self.pressured),
+            ]
         )
 
 
-def _pressure(expected: _Timeouts, observed: _Results) -> Duration:
+def _pressure(expected: _Timeouts, observed: _Results) -> DurationBudget:
     if expected.keys() != observed.keys():
         missing = sorted(expected.keys() - observed.keys())
         unexpected = sorted(observed.keys() - expected.keys())
@@ -512,7 +514,7 @@ def _pressure(expected: _Timeouts, observed: _Results) -> Duration:
             attempts.append(attempt)
     # Worst first; both keep identity and retry order on a tie.
     by_pressure = sorted(attempts, key=lambda attempt: -attempt.utilization)
-    return Duration(
+    return DurationBudget(
         by_pressure[0],
         [
             attempt
@@ -522,7 +524,7 @@ def _pressure(expected: _Timeouts, observed: _Results) -> Duration:
     )
 
 
-def validate_duration_json(report_json: str, manifest_json: str) -> Duration:
+def validate_duration_json(report_json: str, manifest_json: str) -> DurationBudget:
     """The duration budget over in-memory report and manifest JSON."""
     specs = report_specs(report_json, "parsing Playwright report")
     version, complete, tests = decode(
@@ -537,7 +539,7 @@ def validate_duration_json(report_json: str, manifest_json: str) -> Duration:
     return _pressure(_manifest_attempts(tests), _report_attempts(specs))
 
 
-def validate_duration_files(report: Path, manifest: Path) -> Duration:
+def validate_duration_files(report: Path, manifest: Path) -> DurationBudget:
     """The duration budget over a lane's lifted report and duration manifest."""
     return validate_duration_json(read(report, "report"), read(manifest, "manifest"))
 
@@ -791,7 +793,7 @@ def lane_evidence(identity: str, root: Path) -> LaneEvidence:
     )
 
 
-def verify_lane(identity: str, catalog: Path, root: Path) -> tuple[str, Duration]:
+def verify_lane(identity: str, catalog: Path, root: Path) -> tuple[str, DurationBudget]:
     """One enabled lane's lifted evidence under `root`: its population, duration
     budget and boot decomposition coverage. The verdict, and the duration
     budget its producer reports."""

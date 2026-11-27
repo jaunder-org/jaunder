@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 from conftest import FIXTURES, lift_lanes, write_capture, write_lane_capture
 
-from dev import e2e
 from dev.e2e_evidence import (
     LaneEvidence,
     reconcile,
@@ -770,34 +769,6 @@ def test_both_missing_and_unexpected_tests_are_named() -> None:
         validate_duration_json(report, MANIFEST)
     assert "missing test_id=id-1" in str(refused.value)
     assert "unexpected test_id=other" in str(refused.value)
-
-
-def test_pressure_without_a_step_summary_is_still_annotated(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.delenv("GITHUB_STEP_SUMMARY", raising=False)
-    e2e._report_pressure(
-        "lane", validate_duration_json(attempts((900, "passed")), MANIFEST)
-    )
-    assert capsys.readouterr().out.startswith(
-        "::warning title=Duration pressure::lane: "
-    )
-
-
-def test_an_unwritable_step_summary_is_said_never_failed(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    monkeypatch.setenv("GITHUB_ACTIONS", "true")
-    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path))
-    e2e._report_pressure(
-        "lane", validate_duration_json(attempts((900, "passed")), MANIFEST)
-    )
-    captured = capsys.readouterr()
-    assert captured.out.startswith("::warning title=Duration pressure::")
-    assert captured.err.startswith(f"dev: {tmp_path}: no pressure summary: ")
 
 
 def test_duration_files_name_what_could_not_be_read(tmp_path: Path) -> None:

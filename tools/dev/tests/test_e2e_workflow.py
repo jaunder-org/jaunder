@@ -332,12 +332,33 @@ def test_a_pressured_lane_passes_and_is_annotated_and_summarized(e2e: E2E) -> No
     stdout = result.stdout.decode()
     assert (
         f"::warning title=Duration pressure::{LANE}: 1 attempt(s) at or above 80"
-        f"%25; worst {PRESSURED.replace('%', '%25')}\n"
+        f"%25 of their timeout; worst {PRESSURED.replace('%', '%25')}\n"
     ) in stdout
     assert "verified\nduration pressure: 1 attempt(s)" in stdout
     assert (e2e.root / "summary.md").read_text() == (
         f"### Duration pressure: {LANE}\n\n- {PRESSURED}\n\n"
     )
+
+
+@pytest.mark.parametrize("summary", ["", "unwritable"])
+def test_pressure_without_a_usable_step_summary_is_still_annotated(
+    e2e: E2E, summary: str
+) -> None:
+    if summary:
+        # A directory cannot be appended to.
+        summary = str(e2e.root)
+    result = e2e.run(
+        "e2e-producer",
+        LANE,
+        output=pressured_output(),
+        status="0",
+        GITHUB_ACTIONS="true",
+        GITHUB_STEP_SUMMARY=summary,
+    )
+    assert result.returncode == 0, result
+    assert b"::warning title=Duration pressure::" in result.stdout
+    said = f"dev: {summary}: no pressure summary: ".encode()
+    assert (said in result.stderr) == bool(summary)
 
 
 def test_a_pressured_lane_outside_github_is_only_shown(e2e: E2E) -> None:

@@ -14,7 +14,7 @@ from pathlib import Path
 
 from opentelemetry.trace import Span
 
-from dev import e2e_evidence, server_fn_coverage, steps, trace, traces
+from dev import annotations, e2e_evidence, server_fn_coverage, steps, trace, traces
 from dev.commands import SOURCE_CONTRACT
 from dev.e2e_evidence import GATE_PHASE
 from dev.evidence import CATALOG, EvidenceError
@@ -172,34 +172,23 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     return add
 
 
-def _annotation(text: str) -> str:
-    """`text` escaped as a GitHub workflow-command message."""
-    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-
-
-def _report_pressure(lane: str, duration: e2e_evidence.Duration) -> None:
+def _report_pressure(lane: str, budget: e2e_evidence.DurationBudget) -> None:
     """Under GitHub Actions, the lane's duration pressure as one warning
     annotation and its every attempt in the step summary, so a green run still
     shows it. One annotation per lane: GitHub drops a step's annotations past
     ten. A summary that cannot be written is said, never a failure."""
-    if not duration.pressured or os.environ.get("GITHUB_ACTIONS") != "true":
+    if not budget.pressured or not annotations.in_github_actions():
         return
-    threshold = f"{e2e_evidence.PRESSURE_THRESHOLD * 100:.0f}%"
-    message = (
-        f"{lane}: {len(duration.pressured)} attempt(s) at or above {threshold}; "
-        f"worst {duration.pressured[0].describe()}"
-    )
-    print(
-        f"::warning title={e2e_evidence.PRESSURE_TITLE}::{_annotation(message)}",
-        flush=True,
-    )
+    title = annotations.DURATION_PRESSURE
+    worst = budget.pressured[0].describe()
+    annotations.warning(title, f"{lane}: {budget.headline()}; worst {worst}")
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if not summary:
         return
-    lines = "".join(f"- {pressure.describe()}\n" for pressure in duration.pressured)
+    lines = "".join(f"- {pressure.describe()}\n" for pressure in budget.pressured)
     try:
         with open(summary, "a", encoding="utf-8") as out:
-            out.write(f"### {e2e_evidence.PRESSURE_TITLE}: {lane}\n\n{lines}\n")
+            out.write(f"### {title}: {lane}\n\n{lines}\n")
     except OSError as error:
         print(f"dev: {summary}: no pressure summary: {error}", file=sys.stderr)
 
@@ -224,8 +213,8 @@ def producer(lane: str) -> None:
     output = Path(_selected_output(check))
 
     def decide() -> str:
-        verdict, duration = e2e_evidence.verify_lane(lane, Path(CATALOG), output)
-        _report_pressure(lane, duration)
+        verdict, budget = e2e_evidence.verify_lane(lane, Path(CATALOG), output)
+        _report_pressure(lane, budget)
         return verdict
 
     steps.verdict("e2e-evidence", decide)

@@ -18,6 +18,10 @@ fails and whose retry passes is reported `flaky` and exits 0. A timed-out first
 attempt followed by a passing retry was failed only by the pressure rule,
 because a timed-out attempt is always at 100% or more.
 
+[ADR-0238](../0238-just-e2e-workflow-ownership.md) retained retry-duration
+pressure as one of the narrow verdicts. This decision narrows that verdict:
+pressure is still computed from the same evidence, but no longer refuses a lane.
+
 The human decision (2026-11-26): a test that is close to its timeout should not
 fail the lane, but that fact must be surfaced, not silently absorbed.
 
@@ -45,9 +49,13 @@ fail the lane, but that fact must be surfaced, not silently absorbed.
 
 - **The signal reaches the handoff.** When `dev pr-watch` ends `ready-to-land`
   or `merged`, it reads the `Duration pressure` annotations once from the PR
-  head and, when merged, from the merge commit, which is the merge-group run's
-  commit. It reports each one as a `warning` event, and `dev pr-land` inherits
-  them through pr-watch. A warning never changes the outcome.
+  head and, when merged, from the merge commit. The merge queue fast-forwards
+  `main` to the merge-group commit, and CI's push run skips the e2e lanes when
+  it finds that commit's passing merge-queue run. So the merge commit's pressure
+  annotations normally come from the merge-group run alone; they come from a
+  push run only when the lanes genuinely ran again. It reports each one as a
+  `warning` event, and `dev pr-land` inherits them through pr-watch. A warning
+  never changes the outcome.
 - **Persistent pressure is a filing rule, not a scanner.** Whoever reads a
   pressure warning in a handoff comments on the open issue for that test, or
   files one (`CONTRIBUTING.md`). The tracker dedups across runs.
@@ -62,6 +70,7 @@ fail the lane, but that fact must be surfaced, not silently absorbed.
   annotations, which is deliberately not built now.
 - The 80% threshold and the timeout budgets are unchanged. Re-sizing a timeout
   remains a separate, evidence-led change.
-- `pr-watch` hard-codes one annotation title, `Duration pressure`, which the e2e
-  verdict owns. Other warning annotations, such as GitHub's own deprecation
-  notices, are not surfaced.
+- `pr-watch` surfaces one annotation title, `Duration pressure`, which it shares
+  with the producer through a neutral annotations module rather than depending
+  on the e2e verdicts. Other warning annotations, such as GitHub's own
+  deprecation notices, are not surfaced.

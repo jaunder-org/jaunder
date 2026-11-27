@@ -4216,9 +4216,10 @@ producer artifacts (three for Chromium, five for Firefox), proves the exact
 census/report/manifest union, and independently validates retries, timed-out
 attempts, panic phases, and boot traces. Duration pressure is a reported signal,
 not a verdict. A `timedOut` attempt fails at any retry. Any other attempt at 80%
-or more of its effective timeout passes, and its lane producer surfaces it: a
-`Duration pressure` warning annotation per lane, step-summary lines, and
-`warning` events in the `dev pr-watch` / `dev pr-land` handoff
+or more of its effective timeout passes. Its lane producer writes a
+`Duration pressure` warning annotation per lane and step-summary lines, and
+`dev pr-watch` (hence `dev pr-land`) reads those annotations back into `warning`
+events in its handoff
 ([duration pressure is a signal](adr/drafts/e2e-duration-pressure-is-a-signal.md)).
 Missing, duplicated, misidentified, malformed, or failed evidence fails
 reconciliation; failed producers are still awaited and their recoverable
