@@ -354,6 +354,7 @@ esac
 if [ "$name" = cargo ]; then
     printf '%s\n' "${RUSTC_WRAPPER-unset}" "${CARGO_INCREMENTAL-unset}" "${KACHE_CACHE_EXECUTABLES-unset}" > cache-env
     printf '%s\n' "${CARGO_HOME-unset}" "${CARGO_NET_OFFLINE-unset}" > cargo-env
+    printf '%s\n' "${KACHE_EVENT_ROOT-unset}" >> kache-trees
 fi
 if [ "$name $1" = "nix build" ]; then
     previous=
@@ -704,4 +705,8 @@ def checkout(tmp_path: Path) -> Checkout:
     (root / "sub").mkdir()
     tools = tmp_path / "bin"
     tools.mkdir()
-    return Checkout(root, tools)
+    checkout = Checkout(root, tools)
+    # The devShell's kache would read the developer's own store. Without a
+    # test's report it fails silently, so a compiling step records nothing.
+    checkout.executable("kache", "#!/bin/sh\nexit 1\n")
+    return checkout

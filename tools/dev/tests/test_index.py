@@ -23,7 +23,7 @@ shared_docs = pytest.mark.skipif(
 )
 # What the fakes and `dev` write into the checkout root.
 EXCLUDE = (
-    "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
+    "/order\n/commands\n/cache-env\n/cargo-env\n/kache-trees\n/.xtask/\n"
     "/producer-resource\n/producer-cleanup\n"
 )
 MARKDOWN_HOST = [

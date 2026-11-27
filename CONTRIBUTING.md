@@ -289,7 +289,12 @@ Beyond that environment kache runs on its defaults: one store in the user cache
 directory serves every worktree, its daemon starts on demand, and the store is
 capped at 5 % of its volume (5 GiB floor, 100 GiB ceiling) with automatic GC.
 Nothing runs `kache init` or writes kache, Cargo or shell configuration into
-your files.
+your files. The one exception: each compiling Cargo step labels its kache events
+with a build tree of its own (`KACHE_EVENT_ROOT`), so its trace can carry its
+hits and misses ([Observation and traces](#observation-and-traces)). kache then
+sees each step run as a separate build. `kache explain` therefore finds no
+earlier build of the same tree to compare a `dev` step's misses against, and
+`kache stats --last-build --root <checkout>` reports only the latest step.
 
 - **Disk.** kache restores artifacts into each worktree's `target/` as reflinks
   on a reflink filesystem (btrfs, or XFS with reflink), so worktrees share the
@@ -1383,7 +1388,32 @@ records:
 - `jaunder.nix.output` and `jaunder.nix.fetched_bytes`, for the Nix build steps
   `dev` itself builds (not `e2e-producer`);
 - `jaunder.nix.retried`, on a `build` step whose `nix build` exited 1 and ran
-  once more.
+  once more;
+- `jaunder.kache.hits`, `jaunder.kache.misses` and
+  `jaunder.kache.avoided_compile_ms`, for the host Cargo steps that compile: the
+  Clippy leaves, `tools-tests-build`, `tools-tests`, `image-worker`,
+  `nextest-build`, `nextest` and `csr-wasm`.
+
+A compiling Cargo step's child gets `KACHE_EVENT_ROOT` set to
+`.xtask/kache/<trace id>-<span id>` under the checkout, a path that is never
+created. So kache's session for that build tree holds exactly this step's
+compiles. Once the child exits, `dev` asks
+`kache stats --json --last-build --root <that path>`, still inside the step. It
+records the hits (local, prefetch and remote), the misses and kache's
+`time_saved_ms`. That is compile time summed over compiles that run in parallel,
+not wall time, so it can exceed the step's duration. A failed build records its
+counts too. A step whose only compiler work was rustc probes records zeros.
+Nothing is recorded in these cases:
+
+- the step was signalled;
+- it compiled nothing, or ran with `KACHE_DISABLED=1`, so kache has no events
+  for its tree and the query fails;
+- the query fails for another reason or prints a report of another shape;
+- it ran in a sandbox, with no `RUSTC_WRAPPER=kache`.
+
+Recording never changes the step. The query adds about 0.2-0.6 s per compiling
+step
+([compiling steps label their kache events](docs/adr/drafts/dev-steps-label-their-kache-events.md)).
 
 A Nix build step of a flake installable has two child steps: `eval`
 (`nix path-info --derivation`) evaluates it, leaving the evaluation cached, and

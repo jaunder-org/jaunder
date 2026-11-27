@@ -173,8 +173,12 @@ TOOLS_TESTS = (
 def host_tests() -> None:
     # Compiled first with the run's own arguments, so `tools-tests` times the
     # tests alone.
-    steps.run("tools-tests-build", ["cargo", "test", "--no-run", *TOOLS_TESTS])
-    steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS])
+    steps.run(
+        "tools-tests-build",
+        ["cargo", "test", "--no-run", *TOOLS_TESTS],
+        compiles=True,
+    )
+    steps.run("tools-tests", ["cargo", "test", *TOOLS_TESTS], compiles=True)
     steps.run("ruff-format", ["ruff", "format", "--check", "tools/dev"])
     steps.run("ruff-check", ["ruff", "check", "tools/dev"])
     steps.run("mypy", ["mypy", "--strict", "tools/dev"])
@@ -233,6 +237,7 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
             "image-worker",
             ["cargo", "build", "--locked", "-p", "jaunder", "--bin", "jaunder"],
             environment=environment,
+            compiles=True,
         )
         if not nextest_args:
             # The tests compile apart from their run when `dev` chooses the
@@ -242,11 +247,13 @@ def test_local(nextest_args: tuple[str, ...] = ()) -> None:
                 "nextest-build",
                 ["cargo", "nextest", "run", "--no-run", "--workspace"],
                 environment=environment,
+                compiles=True,
             )
         steps.run(
             "nextest",
             ["pg-run", "cargo", "nextest", "run", *(nextest_args or ("--workspace",))],
             environment=environment,
+            compiles=True,
         )
 
 

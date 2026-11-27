@@ -14,6 +14,9 @@ CACHE = "jaunder.cache"
 NIX_OUTPUT = "jaunder.nix.output"
 FETCHED_BYTES = "jaunder.nix.fetched_bytes"
 NIX_RETRIED = "jaunder.nix.retried"
+KACHE_HITS = "jaunder.kache.hits"
+KACHE_MISSES = "jaunder.kache.misses"
+KACHE_AVOIDED_COMPILE_MS = "jaunder.kache.avoided_compile_ms"
 # On a gate span that did not end `ok`: the first span to end unsuccessfully
 # in that process, and why.
 FAILED_STEP = "jaunder.failed_step"

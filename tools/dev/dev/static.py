@@ -38,6 +38,8 @@ class Leaf:
     # Host preparation, run as its own steps first: the environment changes
     # the check then needs.
     prepare: Callable[[], steps.Environment] | None = None
+    # A Cargo leaf that compiles (`steps.run`'s `compiles`).
+    compiles: bool = False
 
 
 def _fixed(summary: str, *argv: str) -> Leaf:
@@ -49,7 +51,12 @@ def _check(fix: bool) -> list[str]:
     return [] if fix else ["--check"]
 
 
-def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> Leaf:
+def _cargo(
+    summary: str,
+    home: str,
+    args: Callable[[bool, bool], list[str]],
+    compiles: bool = False,
+) -> Leaf:
     return Leaf(
         summary,
         lambda fix, sandbox: [
@@ -58,12 +65,16 @@ def _cargo(summary: str, home: str, args: Callable[[bool, bool], list[str]]) -> 
             *args(fix, sandbox),
         ],
         home,
+        compiles=compiles,
     )
 
 
 def _clippy(summary: str, home: str, *args: str) -> Leaf:
     return _cargo(
-        summary, home, lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"]
+        summary,
+        home,
+        lambda _fix, _sandbox: ["clippy", *args, "--", "-D", "warnings"],
+        compiles=True,
     )
 
 
@@ -328,7 +339,12 @@ def run(name: str, mode: Mode, sandbox: bool = False) -> None:
                 }
         elif leaf.prepare is not None:
             changes = leaf.prepare()
-        steps.run(member, leaf.argv(mode is Mode.FIX, sandbox), environment=changes)
+        steps.run(
+            member,
+            leaf.argv(mode is Mode.FIX, sandbox),
+            environment=changes,
+            compiles=leaf.compiles,
+        )
 
 
 def run_all(mode: Mode) -> None:
