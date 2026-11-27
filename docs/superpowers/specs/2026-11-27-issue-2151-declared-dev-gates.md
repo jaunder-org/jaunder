@@ -27,9 +27,9 @@ exit statuses stay the same.
     builds the declaration, calls it inside the gate after `checkout.enter`, and
     runs the result.
   - Choices made while building a declaration therefore see the checkout and the
-    run's environment variables: prepush's platform-dependent Markdown verdict
-    (`index.shares_docs()`) and whether `JAUNDER_CSR_BUNDLE_DIR` skips CSR
-    admission and the bundle build.
+    run's environment variables: prepush's platform-dependent shared verdicts
+    (`index.shares_verdicts()`, from #2136) and whether `JAUNDER_CSR_BUNDLE_DIR`
+    skips CSR admission and the bundle build.
   - Every other `dev` entry point is run as a one-step declaration and is
     otherwise unchanged. That includes perf, upgrade, e2e, pr-watch, issues,
     csr, wasm-audit, trace-analysis and the static leaves.
@@ -58,10 +58,11 @@ exit statuses stay the same.
   - runs the after-snapshot and staging anyway,
   - re-raises a signal.
 
-  Two other deliberate catch sites are unchanged as well: the `static-docs`
-  request and post-check in `index.py`, and e2e's `StepFailed` → `EvidenceError`
-  refusal in `_inventory`. All three live inside steps, never in a gate. Code
-  review guards against new ones, as it does today.
+  Two other deliberate catch sites are unchanged as well: index custody's
+  post-check in `index.py` (precommit's `static-docs` request and, after #2136,
+  prepush's checks, both now passed as declarations), and e2e's `StepFailed` →
+  `EvidenceError` refusal in `_inventory`. All three live inside steps, never in
+  a gate. Code review guards against new ones, as it does today.
 
 - **Shared environment.** `steps.gate` creates one `Env` per run, the way it
   already creates the run's signal state. `Env` is a typed dataclass. It lives

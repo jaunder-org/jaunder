@@ -78,12 +78,13 @@ tool package the run has built, which is still built lazily on its first use. A
 step that holds a resource across others wraps a sub-declaration: test-local
 runs its steps through the same loop inside the `host-artifacts-lock` it holds,
 and each Cargo step resolves the bundle root as it starts. Among the gates'
-steps, three catch `StepFailed` on purpose: index custody records a failed check
-and still reconciles staging, the `static-docs` request still runs its
-post-check, and the e2e server-fn inventory turns a failed listing into an
-evidence refusal. Each re-raises a signal. Steps keep raising rather than
-returning a result, because a returned status, once discarded, is invisible to
-mypy and ruff.
+steps, three catch `StepFailed` on purpose: precommit records a failed check and
+still reconciles staging, index custody (precommit's `static-docs` request and
+prepush's checks) still runs its post-check, and the e2e server-fn inventory
+turns a failed listing into an evidence refusal. Custody, like test-local, runs
+the declaration it is given through the same loop. Each re-raises a signal.
+Steps keep raising rather than returning a result, because a returned status,
+once discarded, is invisible to mypy and ruff.
 
 Work a gate performs is a visible `dev` step, not hidden inside a tool
 ([#1962](https://github.com/jaunder-org/jaunder/issues/1962)):
