@@ -1,6 +1,6 @@
-# ADR-DRAFT: Keep dev runs at worktree removal
+# ADR-0274: Keep dev runs at worktree removal
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2138](https://github.com/jaunder-org/jaunder/issues/2138)
 

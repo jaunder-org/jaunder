@@ -301,6 +301,7 @@ convention). See the Status column below for each ADR's current status.
 | [0271](adr/0271-dev-trace-shows-e2e-capture-spans.md)                    | Dev traces show an e2e lane's capture spans                                                                  | accepted   |
 | [0272](adr/0272-e2e-duration-pressure-is-a-signal.md)                    | E2E duration pressure is a reported signal; only a timeout fails                                             | accepted   |
 | [0273](adr/0273-prepush-takes-shared-static-verdicts.md)                 | Pre-push takes reusable static verdicts from Nix                                                             | accepted   |
+| [0274](adr/0274-keep-dev-runs-at-worktree-removal.md)                    | Keep dev runs at worktree removal                                                                            | accepted   |
 
 <!-- adr-table:end -->
 
