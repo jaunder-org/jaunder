@@ -21,8 +21,8 @@ from conftest import Checkout, lift_lanes, nests, require, write_lane_capture
 from opentelemetry.trace import INVALID_SPAN
 
 from dev import trace, traces
-from dev.e2e import _capture_spans, capture_tree
-from dev.e2e_evidence import LaneEvidence
+from dev.e2e import _capture_spans, capture_tree, report_pressure
+from dev.e2e_evidence import DurationBudget, LaneEvidence, validate_duration_files
 from dev.evidence import EvidenceError
 
 BASH = shutil.which("bash") or "/bin/sh"
@@ -340,40 +340,58 @@ def test_a_pressured_lane_passes_and_is_annotated_and_summarized(e2e: E2E) -> No
     )
 
 
+def budget(root: Path, slow: bool = True) -> DurationBudget:
+    """The first SQLite/Chromium lane's duration budget, lifted under `root`."""
+    lanes = slow_first_lane(root) if slow else lift_lanes(root, "chromium")
+    return validate_duration_files(lanes[0].report, lanes[0].duration_manifest)
+
+
+def test_pressure_is_appended_to_the_step_summary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    summary = tmp_path / "summary.md"
+    summary.write_text("earlier step\n")
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    report_pressure(LANE, budget(tmp_path / "lanes"))
+    assert summary.read_text() == (
+        f"earlier step\n### Duration pressure: {LANE}\n\n- {PRESSURED}\n\n"
+    )
+
+
 @pytest.mark.parametrize("summary", ["", "unwritable"])
 def test_pressure_without_a_usable_step_summary_is_still_annotated(
-    e2e: E2E, summary: str
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    summary: str,
 ) -> None:
     if summary:
         # A directory cannot be appended to.
-        summary = str(e2e.root)
-    result = e2e.run(
-        "e2e-producer",
-        LANE,
-        output=pressured_output(),
-        status="0",
-        GITHUB_ACTIONS="true",
-        GITHUB_STEP_SUMMARY=summary,
-    )
-    assert result.returncode == 0, result
-    assert b"::warning title=Duration pressure::" in result.stdout
-    said = f"dev: {summary}: no pressure summary: ".encode()
-    assert (said in result.stderr) == bool(summary)
+        summary = str(tmp_path)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", summary)
+    report_pressure(LANE, budget(tmp_path / "lanes"))
+    captured = capsys.readouterr()
+    assert captured.out.startswith("::warning title=Duration pressure::")
+    said = f"dev: {summary}: no pressure summary: "
+    assert (said in captured.err) == bool(summary)
 
 
-def test_a_pressured_lane_outside_github_is_only_shown(e2e: E2E) -> None:
-    result = e2e.run(
-        "e2e-producer",
-        LANE,
-        output=pressured_output(),
-        status="0",
-        GITHUB_ACTIONS="",
-        GITHUB_STEP_SUMMARY=str(e2e.root / "summary.md"),
-    )
-    assert result.returncode == 0, result
-    assert b"::warning" not in result.stdout
-    assert b"duration pressure: 1 attempt(s)" in result.stdout
-    assert not (e2e.root / "summary.md").exists()
+@pytest.mark.parametrize(("github", "slow"), [("", True), ("true", False)])
+def test_pressure_is_annotated_only_when_github_runs_a_pressured_lane(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    github: str,
+    slow: bool,
+) -> None:
+    summary = tmp_path / "summary.md"
+    monkeypatch.setenv("GITHUB_ACTIONS", github)
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+    report_pressure(LANE, budget(tmp_path / "lanes", slow))
+    assert capsys.readouterr().out == ""
+    assert not summary.exists()
 
 
 def test_reconciliation_names_pressure_but_never_annotates_it(e2e: E2E) -> None:

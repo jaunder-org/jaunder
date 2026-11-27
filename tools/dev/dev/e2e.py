@@ -172,7 +172,7 @@ def _phase_spans(check: str, lane: str) -> Callable[[Span, int], None]:
     return add
 
 
-def _report_pressure(lane: str, budget: e2e_evidence.DurationBudget) -> None:
+def report_pressure(lane: str, budget: e2e_evidence.DurationBudget) -> None:
     """Under GitHub Actions, the lane's duration pressure as one warning
     annotation and its every attempt in the step summary, so a green run still
     shows it. One annotation per lane: GitHub drops a step's annotations past
@@ -214,7 +214,7 @@ def producer(lane: str) -> None:
 
     def decide() -> str:
         verdict, budget = e2e_evidence.verify_lane(lane, Path(CATALOG), output)
-        _report_pressure(lane, budget)
+        report_pressure(lane, budget)
         return verdict
 
     steps.verdict("e2e-evidence", decide)
