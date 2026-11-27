@@ -145,6 +145,13 @@ capture = pathlib.Path(os.environ["JAUNDER_CAPTURE_DIR"])
 if behaviour == "collide" or (behaviour == "collide-once" and attempts == 1):
     print("listen tcp: bind: address already in use", file=sys.stderr, flush=True)
     sys.exit(1)
+# Faults land before the listeners: e2e-local starts instance 0 as soon as
+# they accept, so injecting afterwards races it.
+if behaviour == "instance-file":
+    (capture / "instance-0").touch()
+if behaviour == "readonly-tmp":
+    # The capture source is made in the run's TMPDIR.
+    os.chmod(capture.parent, 0o500)
 listeners = []
 for key in ("OTELCOL_GRPC_ENDPOINT", "OTELCOL_HTTP_ENDPOINT"):
     host, port = os.environ[key].rsplit(":", 1)
@@ -152,11 +159,6 @@ for key in ("OTELCOL_GRPC_ENDPOINT", "OTELCOL_HTTP_ENDPOINT"):
 note("collector-args", json.dumps(sys.argv[1:]))
 note("collector-tmpdir", json.dumps([os.environ["TMPDIR"], str(capture)]))
 (capture / "otel-traces.jsonl").write_text("{}\\n")
-if behaviour == "instance-file":
-    (capture / "instance-0").touch()
-if behaviour == "readonly-tmp":
-    # The capture source is made in the run's TMPDIR.
-    os.chmod(capture.parent, 0o500)
 code = 2 if behaviour == "fail-shutdown" else 0
 signal.signal(signal.SIGTERM, lambda *_: sys.exit(code))
 while not (behaviour == "premature" and (state / "playwright-ran").exists()):
