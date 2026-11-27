@@ -4730,7 +4730,7 @@ records, merged traces and `traced-run` summaries (`<id>.run.json`, never the
 parked output) into a per-user store under
 `${XDG_STATE_HOME:-~/.local/state}/jaunder/runs/` capped at 20 GiB, warning but
 never blocking removal on failure
-([keep dev runs at worktree removal](adr/drafts/keep-dev-runs-at-worktree-removal.md)).
+([keep dev runs at worktree removal](adr/0274-keep-dev-runs-at-worktree-removal.md)).
 
 The auxiliary repository-policy package owns only the fixed documentation
 policies (`repository-docs`) and the fixed Rust/TypeScript source contracts

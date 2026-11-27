@@ -1504,7 +1504,7 @@ and traces are not pruned: they remain for the worktree lifetime, with growing
 disk usage accepted. Monitor storage explicitly.
 
 Removing a worktree with `wt remove` keeps its runs
-([keep dev runs at worktree removal](docs/adr/drafts/keep-dev-runs-at-worktree-removal.md)).
+([keep dev runs at worktree removal](docs/adr/0274-keep-dev-runs-at-worktree-removal.md)).
 The Worktrunk `pre-remove` hook in `.config/wt.toml` runs
 `direnv exec . dev keep-runs || true` in the worktree being removed. That copies
 every `.xtask/run/<run_id>.trace.d/`, `<run_id>.trace.json` and `<id>.run.json`,
