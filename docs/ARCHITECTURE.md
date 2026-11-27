@@ -4678,10 +4678,9 @@ closure unless the output was reused. A `build` child that exits 1, with no
 builder failed, runs once more and records `jaunder.nix.retried`, so a dropped
 substitute download doesn't fail the step. `scripts/nix-retry` does the same for
 the E2E producer's build and for CI's dev-shell entry and direct builds. A host
-Cargo step that compiles labels its
-kache events with a build tree of its own (`KACHE_EVENT_ROOT`, a path never
-created), then asks `kache stats --last-build` for that tree and records
-`jaunder.kache.hits`, `jaunder.kache.misses` and
+Cargo step that compiles labels its kache events with a build tree of its own
+(`KACHE_EVENT_ROOT`, a path never created), then asks `kache stats --last-build`
+for that tree and records `jaunder.kache.hits`, `jaunder.kache.misses` and
 `jaunder.kache.avoided_compile_ms`. A query that does not answer records nothing
 ([compiling steps label their kache events](adr/drafts/dev-steps-label-their-kache-events.md)).
 When a producer times its own phases where it cannot trace (the Rust coverage
