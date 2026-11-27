@@ -4,7 +4,7 @@ CI checks advisories only for a change to the product dependencies
 (`dev.scope`), so an advisory published against a dependency already on `main`
 fails no pull request. This scan reports it instead, as one open issue per
 advisory, commented on each day it still fails
-(docs/adr/drafts/ci-checks-advisories-on-dependency-change.md). cargo-deny reads
+(docs/adr/0275-ci-checks-advisories-on-dependency-change.md). cargo-deny reads
 `deny.toml`, so its ignores and unmaintained scope are the gate's.
 """
 

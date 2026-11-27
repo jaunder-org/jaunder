@@ -1,6 +1,6 @@
-# ADR-DRAFT: CI checks advisories only on a dependency change, plus a daily scan
+# ADR-0275: CI checks advisories only on a dependency change, plus a daily scan
 
-- Status: proposed
+- Status: accepted
 - Date: 2026-11-26
 - Issue: [#2134](https://github.com/jaunder-org/jaunder/issues/2134)
 
@@ -8,7 +8,7 @@
 
 cargo-deny runs in two CI lanes. The hermetic lane's `static-code` check runs
 `cargo deny check bans licenses sources` with no network and no advisory
-database ([ADR-0145](../0145-sandbox-cargo-deny-skips-advisories.md)). The host
+database ([ADR-0145](0145-sandbox-cargo-deny-skips-advisories.md)). The host
 lane runs full `cargo deny check`, which fetches the RustSec database. It ran on
 every pull request and merge-queue run.
 

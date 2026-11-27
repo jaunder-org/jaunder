@@ -5160,7 +5160,7 @@ unreadable diff counts as a change. A push to `main` never checks advisories.
 The daily `advisories.yml` workflow runs `dev advisory-scan` on `main` instead,
 and comments on or opens one issue per failing advisory. Local gates keep full
 `cargo deny check`
-([CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md)).
+([CI checks advisories only on a dependency change](adr/0275-ci-checks-advisories-on-dependency-change.md)).
 
 #### Shared static-check definitions
 
@@ -5594,7 +5594,7 @@ the sole command-capture interface.
   lane runs it only for a product-dependency change
   ([ADR-0052](adr/0052-devtool-unifies-static-checks.md),
   [Sandboxed cargo-deny skips advisories](adr/0145-sandbox-cargo-deny-skips-advisories.md),
-  [CI checks advisories only on a dependency change](adr/drafts/ci-checks-advisories-on-dependency-change.md),
+  [CI checks advisories only on a dependency change](adr/0275-ci-checks-advisories-on-dependency-change.md),
   [devtool owns compiling static-check definitions across host and Nix](adr/0146-devtool-owns-compiling-static-check-definitions.md),
   [proposed devtool ast-grep enforcement](adr/0161-devtool-owns-ast-grep-enforcement.md),
   [hermetic documentation/code static boundaries](adr/0178-split-hermetic-static-check-boundaries.md)).

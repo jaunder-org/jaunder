@@ -431,7 +431,7 @@ def ci_validate_host(advisories: bool) -> None:
     cargo-deny runs only with `advisories`, which CI passes for a change to the
     product dependencies (`dev.scope`): the hermetic lane checks bans, licenses
     and sources on every run, so only the advisory check is the host's
-    (docs/adr/drafts/ci-checks-advisories-on-dependency-change.md).
+    (docs/adr/0275-ci-checks-advisories-on-dependency-change.md).
     """
     clean_tree()
     format_checks(Mode.VERIFY)
