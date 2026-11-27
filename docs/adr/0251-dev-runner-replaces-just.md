@@ -67,9 +67,9 @@ functions that return tuples, and gates concatenate them. One loop,
 into the gate's exit status. Fail-fast is therefore one loop's property, pinned
 by one test, while per-gate tests pin each population and its order.
 `steps.gate` builds the declaration inside the gate, after the checkout root is
-entered, so choices that depend on the host or the environment, such as
-prepush's shared Markdown verdict or a given `JAUNDER_CSR_BUNDLE_DIR`, are made
-there. Every other `dev` workflow runs as a declaration of one step.
+entered, so choices that depend on the host or the environment, such as whether
+prepush takes the shared Nix verdicts or a given `JAUNDER_CSR_BUNDLE_DIR`, are
+made there. Every other `dev` workflow runs as a declaration of one step.
 
 Values a step produces for later steps live in the run's environment (`Env`),
 which `steps.gate` creates for each run. It stays in the `dev` process's memory
