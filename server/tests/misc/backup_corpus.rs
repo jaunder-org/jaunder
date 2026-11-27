@@ -707,7 +707,8 @@ mod tests {
             Err(BackupCorpusError::UnsafeFixture(message)) if message.contains("symlink")
         ));
         fs::remove_file(root.join("link")).expect("remove symlink");
-        let _socket = UnixListener::bind(root.join("socket")).expect("create socket");
+        // One-byte name: socket paths cap at 107 bytes under a checkout TMPDIR.
+        let _socket = UnixListener::bind(root.join("s")).expect("create socket");
         assert!(matches!(
             normalized_digest(&root),
             Err(BackupCorpusError::UnsafeFixture(message)) if message.contains("special")

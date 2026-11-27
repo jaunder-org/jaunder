@@ -1975,7 +1975,9 @@ mod tests {
         }
     }
 
-    fn manager_with_changed_snapshot() -> ThemeManager {
+    /// The lock root is returned so the caller holds it for the test; dropping
+    /// it removes the directory.
+    fn manager_with_changed_snapshot() -> (ThemeManager, tempfile::TempDir) {
         let mut themes = crate::MockThemeStorage::new();
         themes
             .expect_role_binding()
@@ -1990,19 +1992,23 @@ mod tests {
             .once()
             .returning(|_, _, _| Ok(vec![changed_media_reference()]));
         let lock_root = tempfile::TempDir::new().expect("create lock root");
-        ThemeManager::new(
+        let manager = ThemeManager::new(
             Arc::new(themes),
             Arc::new(crate::MockMediaStorage::new()),
             crate::test_support::mock_write_scope(),
-            Arc::new(crate::MediaContentLocks::new(Arc::new(lock_root.keep()))),
-        )
+            Arc::new(crate::MediaContentLocks::new(Arc::new(
+                lock_root.path().to_path_buf(),
+            ))),
+        );
+        (manager, lock_root)
     }
 
     // guard:no-backend — mocks deterministically change the aggregate between snapshots.
     #[tokio::test]
     async fn replace_role_rejects_a_changed_locked_media_snapshot() {
+        let (manager, _lock_root) = manager_with_changed_snapshot();
         assert!(
-            manager_with_changed_snapshot()
+            manager
                 .replace_role(
                     UserId::from(0),
                     ThemeOwner::Site,
@@ -2020,8 +2026,9 @@ mod tests {
     // guard:no-backend — mocks deterministically change the aggregate between snapshots.
     #[tokio::test]
     async fn replace_header_pool_rejects_a_changed_locked_media_snapshot() {
+        let (manager, _lock_root) = manager_with_changed_snapshot();
         assert!(
-            manager_with_changed_snapshot()
+            manager
                 .replace_header_pool(
                     UserId::from(0),
                     ThemeOwner::Site,
@@ -2039,8 +2046,9 @@ mod tests {
     // guard:no-backend — mocks deterministically change the aggregate between snapshots.
     #[tokio::test]
     async fn remove_theme_rejects_a_changed_locked_media_snapshot() {
+        let (manager, _lock_root) = manager_with_changed_snapshot();
         assert!(
-            manager_with_changed_snapshot()
+            manager
                 .remove_theme(UserId::from(0), ThemeOwner::Site, ThemeId::from(9), 10)
                 .await
                 .expect_err("changed binding must reject")

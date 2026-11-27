@@ -119,7 +119,7 @@ def test_shared_shell_entry_replaces_inherited_tmpdir_before_provisioning(
         "bash -c 'printenv TMPDIR; bash -c \"printenv TMPDIR\"'",
     )
     assert output.returncode == 0, f"{name}: {output.stderr}"
-    expected = root / ".xtask" / "tmp"
+    expected = root / ".tmp"
     assert expected.is_dir(), f"{name}: shell must create TMPDIR"
     assert list(expected.iterdir()) == [], (
         "usability probe must be removed by its startup owner"
@@ -151,14 +151,54 @@ printenv TMPDIR
 """,
     )
     assert output.returncode == 0, f"{name}: {output.stderr}"
-    a_tmp = a / ".xtask" / "tmp"
+    a_tmp = a / ".tmp"
     assert output.stdout == f"{override}\n{a_tmp}\n{a_tmp}\n"
-    assert not (b / ".xtask" / "tmp").exists(), "cd must not create a new temp root"
+    assert not (b / ".tmp").exists(), "cd must not create a new temp root"
     output = enter(hook, b, tmp_path, record, "printenv TMPDIR")
     assert output.returncode == 0, f"{name}: {output.stderr}"
-    b_tmp = b / ".xtask" / "tmp"
+    b_tmp = b / ".tmp"
     assert output.stdout == f"{b_tmp}\n"
     assert_provisioned(name, record, b_tmp)
+
+
+@pytest.mark.parametrize("checkout", [True, False])
+def test_direnv_rebinds_tmpdir_after_nix_direnv_restores_it(
+    tmp_path: Path, checkout: bool
+) -> None:
+    """nix-direnv runs the shellHook, then restores the pre-entry TMPDIR.
+
+    `.envrc` must bind it again, or stop the load when it cannot.
+    """
+    envrc = REPOSITORY / ".envrc"
+    shared = REPOSITORY / "nix" / "checkout-tmpdir.sh"
+    require(envrc.is_file(), "the repository's .envrc")
+    require(shared.is_file(), "the repository's nix/checkout-tmpdir.sh")
+    if checkout:
+        root = repository(tmp_path, "checkout")
+    else:
+        root = tmp_path / "not a repository"
+        root.mkdir()
+    (root / "nix").mkdir()
+    shutil.copy(envrc, root / ".envrc")
+    shutil.copy(shared, root / "nix" / "checkout-tmpdir.sh")
+    # The stub `use` stands for nix-direnv: whatever the hook exported, the
+    # inherited TMPDIR is what remains.
+    output = enter(
+        "watch_file() { :; }\n"
+        'use() { export TMPDIR="$JAUNDER_TEST_PARENT"; }\n'
+        "source .envrc",
+        root,
+        tmp_path,
+        tmp_path / "provision",
+        "printenv TMPDIR",
+    )
+    if checkout:
+        assert output.returncode == 0, output.stderr
+        assert output.stdout == f"{root / '.tmp'}\n"
+    else:
+        assert output.returncode == 1, output.stderr
+        assert "jaunder: cannot resolve an absolute Git checkout root" in output.stderr
+        assert output.stdout == "", "the load must stop before falling back"
 
 
 @pytest.mark.parametrize("failure", ["no-checkout", "blocked", "unusable"])
@@ -171,12 +211,11 @@ def test_invalid_checkout_or_temp_directory_stops_startup_and_command(
         root.mkdir()
     else:
         root = repository(tmp_path, "checkout")
-    tmpdir = root / ".xtask" / "tmp"
+    tmpdir = root / ".tmp"
     if failure == "blocked":
-        tmpdir.parent.mkdir()
         tmpdir.write_text("caller-owned obstruction")
     elif failure == "unusable":
-        tmpdir.mkdir(parents=True)
+        tmpdir.mkdir()
         tmpdir.chmod(0o500)
     record = tmp_path / "provision"
     # No errexit: the hook itself must stop the shell, not merely return a

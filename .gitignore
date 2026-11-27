@@ -42,6 +42,9 @@ mutants.out.old/
 # from a subdirectory such as `end2end/` is covered as well as the repo root.
 .xtask/
 
+# The devShell's checkout-local TMPDIR.
+/.tmp/
+
 # Subagent-driven-development scratch (briefs, ledger, review packages)
 /.superpowers/
 /.pi-herdsman/

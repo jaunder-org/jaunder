@@ -690,7 +690,8 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("tempdir");
         let root = temp.path().join("media");
         std::fs::create_dir(&root).expect("media directory");
-        let _socket = std::os::unix::net::UnixListener::bind(root.join("socket")).expect("socket");
+        // One-byte name: socket paths cap at 107 bytes under a checkout TMPDIR.
+        let _socket = std::os::unix::net::UnixListener::bind(root.join("s")).expect("socket");
 
         let error =
             measure_media_filesystem_bytes(&root).expect_err("special entries are rejected");

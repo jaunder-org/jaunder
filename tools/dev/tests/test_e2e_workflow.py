@@ -67,6 +67,7 @@ if [[ $1 == build ]]; then
       rm -r "$fresh/vm"
     fi
     OUTPUT=$("$REAL_NIX" store add-path --name e2e-phase-fixture "$fresh")
+    rm -r "$fresh"
     echo "$OUTPUT" > "$EVENTS.output"
     echo "$now" > "$EVENTS.now"
   fi

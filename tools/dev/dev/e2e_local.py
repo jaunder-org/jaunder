@@ -468,6 +468,9 @@ def _start_collector(source: Path) -> _Collector:
                     "OTELCOL_GRPC_ENDPOINT": f"{grpc[0]}:{grpc[1]}",
                     "OTELCOL_HTTP_ENDPOINT": f"{http[0]}:{http[1]}",
                     "JAUNDER_CAPTURE_DIR": str(source),
+                    # Its Snowflake driver leaves a temp dir behind at every
+                    # start; inside `source` it goes away with the capture.
+                    "TMPDIR": str(source),
                 },
                 tee=log,
             )
