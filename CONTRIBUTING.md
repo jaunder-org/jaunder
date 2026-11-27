@@ -456,12 +456,10 @@ the rare occasion it is needed.
 
 ## Testing
 
-There are several testing layers in this repository. Use the smallest one that
-matches the change first, then move up only when the boundary needs a broader
-signal: `prepush` for local push, CI for hermetic PR proof, and full `validate`
-for local full-gate confidence. Never remove functionality to pass tests, and
-never bypass or suppress testing, coverage, or linting without explicit
-approval.
+[Testing layers](docs/TESTING.md) describes how the layers fit together — what
+each one runs and costs, which layer owns each verdict, and what to run while
+editing. Never remove functionality to pass tests, and never bypass or suppress
+testing, coverage, or linting without explicit approval.
 
 Every HTTP endpoint exposed by the running Jaunder application must have both an
 integration test and an end-to-end test. Unit tests belong in the same file as
@@ -1264,15 +1262,16 @@ are never cancelled
 ([documentation-only CI scope](docs/adr/0266-ci-documentation-only-scope.md)).
 
 E2E uses one catalog-derived matrix of sixteen isolated producers
-(`dev e2e-producer <identity>`), four per backend/browser pair. A `!cancelled()`
-reconciliation job per pair waits for the complete producer matrix, downloads
-that pair's four artifacts and runs `dev e2e-reconcile` even if downloads fail;
-the SQLite/Chromium job also verifies server-function coverage. Stable
-`e2e gate` requires the `Merge-queue verdict` job, which also projects the
-matrices from the catalog, every producer, and all four reconciliations. Running
-independent surfaces across runners cuts workflow wall-clock; `dev validate`
-remains the full local equivalent and `dev validate-no-e2e` remains its serial
-non-e2e form. See [ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
+(`dev e2e-producer <identity>`): five shards for each backend on Firefox and
+three for each on Chromium. A `!cancelled()` reconciliation job per pair waits
+for the complete producer matrix, downloads that pair's four artifacts and runs
+`dev e2e-reconcile` even if downloads fail; the SQLite/Chromium job also
+verifies server-function coverage. Stable `e2e gate` requires the
+`Merge-queue verdict` job, which also projects the matrices from the catalog,
+every producer, and all four reconciliations. Running independent surfaces
+across runners cuts workflow wall-clock; `dev validate` remains the full local
+equivalent and `dev validate-no-e2e` remains its serial non-e2e form. See
+[ADR-0034](docs/adr/0034-ci-e2e-matrix-distribution.md), the
 [non-e2e validation lane decision](docs/adr/0192-split-ci-non-e2e-validation-lanes.md),
 and the
 [retained distributed topology](docs/adr/0203-distribute-ci-validation-and-firefox-e2e-lanes.md).

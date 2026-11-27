@@ -6,19 +6,20 @@ definitive working hub for humans and agents.
 
 ## Durable docs
 
-| Doc                                                           | What it's for                                                                      |
-| ------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| [CONTRIBUTING](../CONTRIBUTING.md)                            | Definitive working guide: setup, hooks, workflow, testing, invariants. Read first. |
-| [CONTEXT](../CONTEXT.md)                                      | Domain glossary / ubiquitous language for Jaunder.                                 |
-| [ARCHITECTURE](ARCHITECTURE.md)                               | System architecture (Leptos, single-binary, storage); links the ADRs.              |
-| [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                          |
-| [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.       |
-| [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                          |
-| [invocation-traces](invocation-traces.md)                     | Capture and inspect local `test-local` Perfetto traces.                            |
-| [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                           |
-| [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                          |
-| [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                    |
-| [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                           |
+| Doc                                                           | What it's for                                                                         |
+| ------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| [CONTRIBUTING](../CONTRIBUTING.md)                            | Definitive working guide: setup, hooks, workflow, testing, invariants. Read first.    |
+| [CONTEXT](../CONTEXT.md)                                      | Domain glossary / ubiquitous language for Jaunder.                                    |
+| [ARCHITECTURE](ARCHITECTURE.md)                               | System architecture (Leptos, single-binary, storage); links the ADRs.                 |
+| [DESIGN](DESIGN.md)                                           | High-level design / how an instance runs.                                             |
+| [TESTING](TESTING.md)                                         | How the testing layers fit together: what each runs and costs, who owns each verdict. |
+| [codebase-audits](codebase-audits.md)                         | Method for finding and remediating accumulated design and maintenance cruft.          |
+| [ROADMAP](ROADMAP.md)                                         | Completed-milestone ledger and direction.                                             |
+| [invocation-traces](invocation-traces.md)                     | Capture and inspect local `test-local` Perfetto traces.                               |
+| [observability](observability.md)                             | OpenTelemetry tracing for backend + e2e.                                              |
+| [web-style-guide](web-style-guide.md)                         | Conventions for the `web/` Leptos components and widgets.                             |
+| [themes](themes.md)                                           | Create, test, modify, publish, and deploy custom public themes.                       |
+| [atompub-marsedit-acceptance](atompub-marsedit-acceptance.md) | Manual MarsEdit/AtomPub (RFC 5023) acceptance checklist.                              |
 
 ## Architecture Decision Records
 
