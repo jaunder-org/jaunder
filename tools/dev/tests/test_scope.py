@@ -1,4 +1,4 @@
-"""CI's documentation-only scope, on real repositories.
+"""CI's documentation-only and dependency scopes, on real repositories.
 
 Each test commits a base, changes it, and asks `dev.scope` about HEAD. The
 repository is its own `origin`, so the base fetch is real too.
@@ -90,8 +90,8 @@ def test_a_markdown_only_change_is_docs_only(
 ) -> None:
     base = changed(git, change)
     assert answer(base, capsys) == (
-        "docs_only=true\n",
-        "ci-scope: docs_only=True reason=isolated-staged-markdown\n",
+        "docs_only=true\ndependencies=false\n",
+        "ci-scope: docs_only=True reason=isolated-staged-markdown dependencies=False\n",
     )
 
 
@@ -115,8 +115,8 @@ def test_any_other_change_runs_everything(
 ) -> None:
     base = changed(git, change)
     assert answer(base, capsys) == (
-        "docs_only=false\n",
-        f"ci-scope: docs_only=False reason={reason}\n",
+        "docs_only=false\ndependencies=false\n",
+        f"ci-scope: docs_only=False reason={reason} dependencies=False\n",
     )
 
 
@@ -126,21 +126,27 @@ def test_a_deleted_markdown_symlink_runs_everything(
     symlink()
     commit(git)
     base = changed(git, lambda: Path("link.md").unlink())
-    assert answer(base, capsys)[0] == "docs_only=false\n"
+    assert answer(base, capsys)[0] == "docs_only=false\ndependencies=false\n"
 
 
 @pytest.mark.parametrize(
-    ("base", "reason"),
-    [("", "no-base"), ("0" * 40, "base-unavailable")],
+    ("base", "reason", "dependencies"),
+    [("", "no-base", False), ("0" * 40, "base-unavailable", True)],
     ids=["push", "unfetchable"],
 )
 def test_without_a_usable_base_everything_runs(
-    git: Git, base: str, reason: str, capsys: pytest.CaptureFixture[str]
+    git: Git,
+    base: str,
+    reason: str,
+    dependencies: bool,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A push leaves advisories to the daily scan of `main`; a pull request or
+    merge-queue entry whose base cannot be read is checked against them."""
     changed(git, lambda: Path("guide.md").write_text("# Changed\n"))
     assert answer(base, capsys) == (
-        "docs_only=false\n",
-        f"ci-scope: docs_only=False reason={reason}\n",
+        f"docs_only=false\ndependencies={str(dependencies).lower()}\n",
+        f"ci-scope: docs_only=False reason={reason} dependencies={dependencies}\n",
     )
 
 
@@ -151,8 +157,53 @@ def test_an_uncertain_diff_runs_everything(
     malformed = subprocess.CompletedProcess([], 0, b":not a raw record\0guide.md\0")
     monkeypatch.setattr(scope, "_git", lambda *_: malformed)
     assert answer(base, capsys) == (
-        "docs_only=false\n",
-        "ci-scope: docs_only=False reason=uncertain-status\n",
+        "docs_only=false\ndependencies=true\n",
+        "ci-scope: docs_only=False reason=uncertain-status dependencies=True\n",
+    )
+
+
+def write(path: str, text: str = "") -> Callable[[], None]:
+    def change() -> None:
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
+        Path(path).write_text(text)
+
+    return change
+
+
+@pytest.mark.parametrize(
+    ("change", "dependencies"),
+    [
+        (write("Cargo.toml", "[workspace]\n"), True),
+        (write("server/Cargo.toml", "[package]\n"), True),
+        (write("Cargo.lock", "version = 4\n"), True),
+        (write("deny.toml", "[bans]\n"), True),
+        (lambda: Path("main.rs").write_text("fn main() { }\n"), False),
+        (write("tools/Cargo.lock", "version = 4\n"), False),
+        (write("tools/dev-tool/Cargo.toml", "[package]\n"), False),
+        (write("server/Cargo.lock.md", "# Not a lock\n"), False),
+    ],
+    ids=[
+        "root-manifest",
+        "member-manifest",
+        "root-lock",
+        "deny-policy",
+        "source",
+        "tools-lock",
+        "tools-manifest",
+        "lookalike",
+    ],
+)
+def test_advisories_run_when_the_product_dependencies_change(
+    git: Git,
+    change: Callable[[], None],
+    dependencies: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Only the product workspace is checked by cargo-deny, so only its
+    manifests, lock and policy decide whether advisories run."""
+    base = changed(git, change)
+    assert answer(base, capsys)[0].splitlines()[1] == (
+        f"dependencies={str(dependencies).lower()}"
     )
 
 
@@ -174,4 +225,7 @@ def test_ci_runs_it_as_a_module(git: Git, isolated: bool) -> None:
         check=False,
         env=environment | {"PYTHONPATH": tools_dev},
     )
-    assert (result.returncode, result.stdout) == (0, "docs_only=true\n"), result
+    assert (result.returncode, result.stdout) == (
+        0,
+        "docs_only=true\ndependencies=false\n",
+    ), result

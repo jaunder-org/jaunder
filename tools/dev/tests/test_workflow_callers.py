@@ -138,3 +138,63 @@ def test_a_failed_performance_measurement_fails_the_job() -> None:
     assert measurements, "no `dev perf` steps"
     for step in measurements:
         assert "continue-on-error" not in step, step["run"]
+
+
+@pytest.mark.parametrize(
+    ("dependencies", "arguments"),
+    [("true", ["ci-validate-host", "--advisories"]), ("false", ["ci-validate-host"])],
+)
+def test_the_host_lane_checks_advisories_only_for_a_dependency_change(
+    tmp_path: Path, dependencies: str, arguments: list[str]
+) -> None:
+    jobs = load_workflow("ci.yml")["jobs"]
+    scope = jobs["merge-queue-verdict"]["outputs"]["dependencies"]
+    assert scope == "${{ steps.scope.outputs.dependencies }}", scope
+    (step,) = [
+        step
+        for step in jobs["validate-host"]["steps"]
+        if "dev ci-validate-host" in step.get("run", "")
+    ]
+    assert step["env"]["DEPENDENCIES"] == (
+        "${{ needs.merge-queue-verdict.outputs.dependencies }}"
+    )
+    # The step's script runs for real; a fake `nix` records what `dev` gets.
+    fake = tmp_path / "nix"
+    fake.write_text(
+        '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$NIX_ARGS"\n', encoding="utf-8"
+    )
+    fake.chmod(0o755)
+    recorded = tmp_path / "args"
+    result = subprocess.run(
+        ["bash", "-e", "-c", step["run"]],
+        env=os.environ
+        | {
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "NIX_ARGS": str(recorded),
+            "DEPENDENCIES": dependencies,
+        },
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result
+    given = recorded.read_text().splitlines()
+    assert given[: given.index("dev")] == [
+        "develop",
+        ".#ci",
+        "--accept-flake-config",
+        "-c",
+    ]
+    assert given[given.index("dev") + 1 :] == arguments
+
+
+def test_the_advisory_scan_cannot_overlap_or_hide_its_failure() -> None:
+    """Overlapping scans could each file the same advisory; a continued scan
+    would hide a failing `main`."""
+    workflow = load_workflow("advisories.yml")
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    (scan,) = [
+        step
+        for step in workflow["jobs"]["scan"]["steps"]
+        if "dev advisory-scan" in step.get("run", "")
+    ]
+    assert "continue-on-error" not in scan, scan

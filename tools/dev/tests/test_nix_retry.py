@@ -19,7 +19,7 @@ from conftest import REPOSITORY, require
 SCRIPT = REPOSITORY / "scripts" / "nix-retry"
 WORKFLOWS = [
     REPOSITORY / ".github" / "workflows" / name
-    for name in ("ci.yml", "mutants.yml", "upgrade.yml")
+    for name in ("advisories.yml", "ci.yml", "mutants.yml", "upgrade.yml")
 ]
 SHELL = re.compile(r"nix develop (\.#[\w-]+)")
 # `nix build` as a command, not inside `scripts/nix-retry build`.
@@ -104,6 +104,6 @@ def test_each_job_enters_its_dev_shell_through_nix_retry_first() -> None:
             entry = f"scripts/nix-retry develop {shell} --accept-flake-config -c true"
             assert entry in runs[:first], where
             entered += 1
-    # host, hermetic, test checks, coverage, docs, e2e lane and reconcile;
-    # the mutants shard; the upgrade test.
-    assert entered == 9
+    # The advisory scan; host, hermetic, test checks, coverage, docs, e2e lane
+    # and reconcile; the mutants shard; the upgrade test.
+    assert entered == 10
