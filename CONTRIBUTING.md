@@ -249,7 +249,7 @@ the slot of its first leaf:
 Each reads a filtered source slice plus the `dev` package, so a push that leaves
 a check's inputs untouched reuses the verdict built for another tree, locally or
 by CI through Cachix
-([shared static verdicts](docs/adr/drafts/prepush-takes-shared-static-verdicts.md)).
+([shared static verdicts](docs/adr/0273-prepush-takes-shared-static-verdicts.md)).
 Index custody spans all of prepush's checks: after the clean-tree refusal,
 `prepush-admission` requires raw/index identity for every tracked regular file,
 and `prepush-post-check` at the end requires Git state unchanged. The post-check
@@ -727,7 +727,7 @@ hermetic backend/browser matrix verdict; CI remains authoritative.
   succeeds otherwise and has captured diagnostics, it reconciles
   `playwright-report-<lane>.json` against `duration-budget-manifest-<lane>.json`
   in `.xtask/diagnostics/e2e-<lane>/`
-  (docs/adr/drafts/e2e-duration-pressure-is-a-signal.md). Missing, malformed,
+  (docs/adr/0272-e2e-duration-pressure-is-a-signal.md). Missing, malformed,
   incomplete or mismatched inputs fail closed, including an attempt with no
   known Playwright `status`. Every reported attempt is checked, retries
   included:
