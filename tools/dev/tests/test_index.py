@@ -12,17 +12,20 @@ from pathlib import Path
 
 import pytest
 from conftest import FAKE, REAL_GIT, Workflow
-from test_gates import CHECK_NO_TEST, PREPUSH_SHARES_DOCS, STATIC_DOCS, docs_shape
+from test_gates import CHECK_NO_TEST, PREPUSH_SHARES, STATIC_DOCS, docs_shape
 
 from dev import index
 from dev.index import PathStatus, Refused, Snapshot
 from dev.rawdiff import Reason
 
 shared_docs = pytest.mark.skipif(
-    not PREPUSH_SHARES_DOCS, reason="the shared docs verdict is x86_64-linux only"
+    not PREPUSH_SHARES, reason="the shared docs verdict is x86_64-linux only"
 )
 # What the fakes and `dev` write into the checkout root.
-EXCLUDE = "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
+EXCLUDE = (
+    "/order\n/commands\n/cache-env\n/cargo-env\n/.xtask/\n"
+    "/producer-resource\n/producer-cleanup\n"
+)
 MARKDOWN_HOST = [
     ["prettier", "-w", "**/*.md"],
     ["prettier", "-w", "end2end"],
@@ -363,7 +366,7 @@ def test_a_markdown_change_checks_markdown_then_requests_the_docs_verdict(
         b"reason=isolated-staged-markdown\n[ ok ] precommit\n"
     )
     assert stderr(result) == (
-        "precommit-staging: no staged fixes\nshared-static-docs-state: unchanged\n"
+        "precommit-staging: no staged fixes\nstatic-docs-state: unchanged\n"
     )
     assert repo.workflow.commands() == [*MARKDOWN_HOST, *STATIC_DOCS]
     slices = repo.workflow.checkout.merged()
@@ -391,7 +394,7 @@ def test_a_markdown_rename_checks_markdown_then_requests_the_docs_verdict(
         b"precommit-routing: class=staged-markdown-only "
         b"reason=isolated-staged-markdown\n"
     )
-    assert "shared-static-docs-state: unchanged\n" in stderr(result)
+    assert "static-docs-state: unchanged\n" in stderr(result)
     assert repo.workflow.commands() == [*MARKDOWN_HOST, *STATIC_DOCS]
     assert repo.status() == b"R  guide.md -> renamed.md\n"
 
@@ -406,7 +409,7 @@ def test_a_formatted_markdown_change_is_restaged_before_the_request(
     result = repo.dev("precommit")
     assert result.returncode == 0, result
     assert "precommit-staging: staged: guide.md\n" in stderr(result)
-    assert "shared-static-docs-state: unchanged\n" in stderr(result)
+    assert "static-docs-state: unchanged\n" in stderr(result)
     assert repo.git("show", ":guide.md") == b"# Formatted\n"
     assert repo.status() == b"M  guide.md\n"
 
@@ -422,6 +425,19 @@ def test_a_markdown_host_failure_skips_the_docs_request(repo: Repo) -> None:
 
 
 @shared_docs
+def test_a_failed_markdown_request_keeps_its_status_after_the_post_check(
+    repo: Repo,
+) -> None:
+    repo.write("guide.md", "# Staged\n")
+    repo.git("add", "guide.md")
+    result = repo.dev("precommit", failure=" ".join(STATIC_DOCS[-1]))
+    assert result.returncode == 17
+    assert stderr(result).endswith("nix failed\nstatic-docs-state: unchanged\n")
+    assert "[ ok ] precommit" not in result.stdout.decode()
+    assert repo.status() == b"M  guide.md\n"
+
+
+@shared_docs
 def test_a_converting_markdown_checkout_is_not_admitted_to_the_request(
     repo: Repo,
 ) -> None:
@@ -432,38 +448,31 @@ def test_a_converting_markdown_checkout_is_not_admitted_to_the_request(
     result = repo.dev("precommit")
     assert result.returncode == 1
     assert stderr(result).endswith(
-        "[FAIL] precommit — shared-static-docs-admission: "
+        "[FAIL] precommit — static-docs-admission: "
         "raw worktree bytes differ from staged index blob: guide.md\n"
     )
     assert repo.workflow.commands() == MARKDOWN_HOST
 
 
-# Prepush's shared docs slot, through `dev format verify prepush`.
+# Prepush's custody around its checks and their shared verdict requests.
 
 
-def prepush_fixture(repo: Repo, request: str) -> None:
-    """A clean tree with docs inputs, and a docs request that runs `request`."""
+def prepush_fixture(repo: Repo, request: str, check: str = "static-docs") -> None:
+    """A clean tree with docs inputs, and a `check` request that runs `request`;
+    every other Nix call reaches the recording fake."""
     repo.write("docs/adr/0001-choice.md", "# ADR-0001: Choice\n")
     repo.write(".prettierrc.json", "{}\n")
     repo.write("flake.lock", "{}\n")
     repo.commit()
-    # The scoped adapter's package build reaches the recording fake.
     fake = str(repo.recording("nix"))
     repo.tool(
         "nix",
-        "if sys.argv[-1] == '.#repository-policy':\n"
+        f"if sys.argv[1] != 'build' or sys.argv[-1] != '.#checks.x86_64-linux.{check}':\n"
         f"    os.execv({fake!r}, [{fake!r}, *sys.argv[1:]])\n"
-        "if '--derivation' in sys.argv:\n"
-        "    print('/nix/store/fake-static-docs.drv')\n"
-        "    sys.exit()\n"
-        "if sys.argv[1] != 'build':\n    sys.exit(1)\n"
         "with open('request-args', 'w') as recorded:\n"
         "    recorded.write('\\n'.join(sys.argv[1:]) + '\\n')\n" + request,
     )
     (repo.root / ".git" / "info" / "exclude").write_text(EXCLUDE + "/request-args\n")
-
-
-PREPUSH = ("format", "verify", "prepush")
 
 
 @shared_docs
@@ -471,28 +480,45 @@ def test_prepush_runs_the_post_check_after_a_failed_request(repo: Repo) -> None:
     prepush_fixture(
         repo, "print('error: fixture docs failure', file=sys.stderr)\nsys.exit(1)"
     )
-    result = repo.dev(*PREPUSH)
+    result = repo.dev("prepush")
+    # The request's own status, as for any failed step.
     assert result.returncode == 1
     assert stderr(result).endswith(
-        "error: fixture docs failure\n"
-        "shared-static-docs-state: unchanged\n"
-        "[FAIL] prepush-docs — the static-docs request exited 1\n"
+        "error: fixture docs failure\nprepush-state: unchanged\n"
     )
     assert repo.status() == b""
     slices = repo.workflow.checkout.merged()
     assert slices["static-docs"]["args"]["jaunder.status"] == "failed"
-    assert slices["static-docs-post-check"]["args"]["jaunder.status"] == "ok"
+    assert slices["prepush-post-check"]["args"]["jaunder.status"] == "ok"
+    # Fail-fast: nothing after the request ran.
+    assert "static-elisp" not in slices
 
 
 @shared_docs
-def test_prepush_passes_on_a_clean_request(repo: Repo) -> None:
+def test_prepush_requests_every_shared_verdict_inside_custody(repo: Repo) -> None:
     prepush_fixture(repo, "")
-    result = repo.dev(*PREPUSH)
+    result = repo.dev("prepush")
     assert result.returncode == 0, result
-    assert b"[ ok ] prepush-docs\n" in result.stdout
-    assert stderr(result) == "shared-static-docs-state: unchanged\n"
+    assert stderr(result) == "prepush-state: unchanged\n"
     request = STATIC_DOCS[-1][1:]
     assert (repo.root / "request-args").read_text().splitlines() == request
+    slices = repo.workflow.checkout.merged()
+    gate = slices["dev prepush"]["args"]["span_id"]
+    custody = ["prepush-admission", "prepush-post-check"]
+    shared = [
+        "rust-format",
+        "static-docs",
+        "static-elisp",
+        "static-typescript",
+        "static-ert",
+    ]
+    for name in ["clean-tree", *custody, *shared, "nextest"]:
+        assert slices[name]["args"]["parent_id"] == gate, name
+    # Each request falls between the admission and the post-check.
+    starts = {name: slices[name]["ts"] for name in [*custody, *shared]}
+    assert all(
+        starts[custody[0]] < starts[name] < starts[custody[1]] for name in shared
+    )
 
 
 @shared_docs
@@ -507,17 +533,16 @@ def test_prepush_keeps_the_request_failure_when_the_post_check_query_fails(
     )
     (repo.root / ".xtask").mkdir()
     index_before = repo.git("diff", "--cached", "--raw")
-    result = repo.dev(*PREPUSH)
+    result = repo.dev("prepush")
     (repo.root / ".xtask" / "parked-git").rename(repo.root / ".git")
     assert result.returncode == 1
     text = stderr(result)
     assert "error: original request failure\n" in text
     assert (
-        "[FAIL] prepush-docs — the static-docs request exited 19\n"
-        "shared-static-docs-state: git status --porcelain=v1 -z failed: " in text
+        "[FAIL] prepush — a step exited 19\n"
+        "prepush-state: git status --porcelain=v1 -z failed: " in text
     )
-    assert "shared-static-docs-state: unchanged" not in text
-    assert "precommit-staging" not in text
+    assert "prepush-state: unchanged" not in text
     assert repo.git("diff", "--cached", "--raw") == index_before
     assert repo.status() == b" M guide.txt\n"
 
@@ -552,47 +577,56 @@ def test_a_failed_request_cannot_hide_a_mutation_or_restage_it(
         repo,
         f"{mutation}\nprint('error: fixture request failed', file=sys.stderr)\n"
         "sys.exit(19)",
+        check="static-ert",
     )
-    result = repo.dev(*PREPUSH)
+    result = repo.dev("prepush")
     assert result.returncode == 1
     assert stderr(result).endswith(
-        "[FAIL] prepush-docs — the static-docs request exited 19\n"
-        "shared-static-docs-state: tracked, staged, or nonignored untracked Git "
-        "state changed during static-docs request\n"
+        "[FAIL] prepush — a step exited 19\n"
+        "prepush-state: tracked, staged, or nonignored untracked Git "
+        "state changed during prepush\n"
     )
     assert repo.status() == expected
 
 
 @shared_docs
 def test_a_mutating_request_that_succeeds_still_fails(repo: Repo) -> None:
-    prepush_fixture(repo, "pathlib.Path('flake.lock').write_text('changed')")
-    result = repo.dev(*PREPUSH)
+    prepush_fixture(
+        repo, "pathlib.Path('flake.lock').write_text('changed')", "rust-format"
+    )
+    result = repo.dev("prepush")
     assert result.returncode == 1
     assert stderr(result).endswith(
-        "[FAIL] prepush-docs — shared-static-docs-state: tracked, staged, or "
-        "nonignored untracked Git state changed during static-docs request\n"
+        "[FAIL] prepush — prepush-state: tracked, staged, or "
+        "nonignored untracked Git state changed during prepush\n"
     )
+    # The checks after the request still ran before the post-check refused.
+    assert "nextest" in repo.workflow.checkout.merged()
 
 
 @shared_docs
-def test_a_dirty_prepush_tree_is_refused_before_the_request(repo: Repo) -> None:
+def test_a_converting_prepush_checkout_is_refused_before_any_request(
+    repo: Repo,
+) -> None:
+    repo.write(".gitattributes", "*.txt text eol=crlf\n")
+    repo.write("notes.txt", "converted\r\n")
     prepush_fixture(repo, "")
-    repo.write("scratch.txt", "untracked\n")
-    result = repo.dev(*PREPUSH)
+    assert repo.status() == b""
+    result = repo.dev("prepush")
     assert result.returncode == 1
     assert stderr(result) == (
-        "[FAIL] prepush-docs — shared-static-docs-admission: "
-        "prepush tree is not provably clean: []\n"
+        "[FAIL] prepush — prepush-admission: "
+        "raw worktree bytes differ from staged index blob: notes.txt\n"
     )
-    assert not (repo.root / "request-args").exists()
+    assert repo.workflow.commands() == []
 
 
 @shared_docs
 def test_a_signalled_request_stops_without_the_post_check(repo: Repo) -> None:
     prepush_fixture(repo, "os.kill(os.getpid(), signal.SIGKILL)")
-    result = repo.dev(*PREPUSH)
+    result = repo.dev("prepush")
     assert result.returncode == 128 + 9
-    assert "shared-static-docs-state" not in stderr(result)
+    assert "prepush-state" not in stderr(result)
 
 
 # The snapshot parser and classification.
@@ -905,27 +939,6 @@ def test_incomplete_evidence_refuses_all_staging() -> None:
     )
 
 
-def test_the_docs_input_selector_matches_only_the_requests_sources() -> None:
-    for path in [
-        b"guide.md",
-        b"docs/nested/.prettierrc.json",
-        b".prettierrc.json",
-        b".prettierignore",
-        b"docs/.prettierignore",
-        b"tools/dev/pyproject.toml",
-        b"tools/dev/dev/static.py",
-    ]:
-        assert index._static_docs_input(path), path
-    for path in [
-        b"tools/dev/tests/test_static.py",
-        b"README.MD",
-        b"tools/src/main.rs",
-        b".claude/notes.md",
-        b".claude",
-    ]:
-        assert not index._static_docs_input(path), path
-
-
 # Snapshots, staging and admission on a real repository, in process.
 
 
@@ -1082,6 +1095,8 @@ def test_the_markdown_admission_needs_byte_identical_staged_markdown(
             },
         ),
         ("*.py text eol=crlf\n", {"tools/dev/dev/static.py": "CHECK = 1\r\n"}),
+        # Every tracked file is an input of some shared verdict.
+        ("*.el text eol=crlf\n", {"elisp/jaunder.el": "(provide 'jaunder)\r\n"}),
     ],
 )
 def test_a_clean_but_converting_checkout_is_never_admitted(
@@ -1128,11 +1143,20 @@ def test_a_conflicted_docs_input_is_refused(cwd_repo: Repo) -> None:
         index._worktree_matches_index()
 
 
+def test_only_regular_files_are_hashed(cwd_repo: Repo) -> None:
+    # A dangling symlink and a gitlink with no checkout would each fail
+    # `hash-object`; the flake reads neither as file contents.
+    (cwd_repo.root / "link").symlink_to("missing")
+    cwd_repo.git("add", "link")
+    cwd_repo.git("update-index", "--add", "--cacheinfo", f"160000,{'1' * 40},sub")
+    index._worktree_matches_index()
+
+
 @pytest.mark.parametrize(
     ("listing", "hashes", "refusal"),
     [
         (b"no tab\0", b"", "malformed NUL-delimited stage record"),
-        (b"100644 x 0\t\xff.md\0", b"", "non-UTF-8 static-docs input path"),
+        (b"100644 x 0\t\xff.md\0", b"", "non-UTF-8 tracked path"),
         (b"\xff\tguide.md\0", b"", "non-UTF-8 index metadata"),
         (b"100644 x 0\tguide.txt", b"", "unterminated NUL-delimited index record"),
         (b"100644 x 0\tguide.md\0", b"\xff\n", "non-UTF-8 hash-object output"),

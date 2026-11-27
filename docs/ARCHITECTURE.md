@@ -4791,34 +4791,46 @@ The explicit local workflows are:
   untracked files stay unstaged and tolerated. On `x86_64-linux`, successful
   narrow host checks and this one reconciliation are followed by admission
   requiring no unstaged/nonignored-untracked changes, a staged diff that is
-  still Markdown-only (or empty), and raw worktree/index blob identity for all
-  tracked Markdown and formatter-config inputs selected by `static-docs`
-  (`.prettierrc.json`, `.prettierignore`, and the `tools/dev/` source, excluding
-  `.claude`). The ordinary Git-backed `static-docs` request then runs as a `dev`
-  Nix-check step, so it uses `dev`'s one definition of Nix check flags and
-  appears in the trace with its cache state. A post-request status/index check
-  fails on tracked, staged, or nonignored-untracked mutation (including a
-  rewritten `flake.lock`) without restaging. Host, staging, or admission failure
-  skips the request; a request failure remains recorded if the post-check also
-  fails. Broad routing and non-x86 behavior remain host-only. The snapshot, host
-  checks, after-snapshot, staging, admission, request and post-check are each a
-  span directly under `dev precommit`. Every index query runs the `git` CLI
-  (`status`, `diff`, `ls-files`, `hash-object`, `add`) with the hook's
-  environment, so the evidence is the index `git commit` will write, including
-  the temporary `GIT_INDEX_FILE` of `git commit <path>`; a library such as
-  libgit2 could diverge from it on that index, on filters or on fsmonitor.
+  still Markdown-only (or empty), and raw worktree/index blob identity for every
+  tracked regular file (symlinks and gitlinks are not hashed), so no list of a
+  check's inputs has to mirror its Nix source filter
+  ([shared static verdicts](adr/drafts/prepush-takes-shared-static-verdicts.md)).
+  The ordinary Git-backed `static-docs` request then runs as a `dev` Nix-check
+  step, so it uses `dev`'s one definition of Nix check flags and appears in the
+  trace with its cache state. A post-request status/index check fails on
+  tracked, staged, or nonignored-untracked mutation (including a rewritten
+  `flake.lock`) without restaging. Host, staging, or admission failure skips the
+  request; a failed request exits with its own status once the post-check
+  passes, and remains recorded if the post-check also fails. Broad routing and
+  non-x86 behavior remain host-only. The snapshot, host checks, after-snapshot,
+  staging, admission, request and post-check are each a span directly under
+  `dev precommit`. Every index query runs the `git` CLI (`status`, `diff`,
+  `ls-files`, `hash-object`, `add`) with the hook's environment, so the evidence
+  is the index `git commit` will write, including the temporary `GIT_INDEX_FILE`
+  of `git commit <path>`; a library such as libgit2 could diverge from it on
+  that index, on filters or on fsmonitor.
 
 - **`dev prepush`** is the fast local push-hook entrypoint. It opens with the
   same clean-tree precheck as `validate`, then runs the verify-only host/static
   surface, the auxiliary `tools` non-doc tests, the host-native `test-local`
   product Rust suite, and then the Nix `doctests` producer and `doctests-gate`
-  as `dev` Nix-check steps; no host doctest run remains. On `x86_64-linux`, only
-  host `prettier-markdown` Verify is replaced at its current position by the
-  same `static-docs` leaf, requested through `dev nix-check`. Before requesting
-  the leaf, prepush verifies raw/index identity for the complete tracked
-  Markdown and formatter-config input population; afterward it checks Git state
-  remained unchanged. All other phases remain ordered as before. Other platforms
-  retain host Markdown Verify.
+  as `dev` Nix-check steps; no host doctest run remains. On `x86_64-linux` it
+  takes five Nix checks in place of the host leaves they cover, each at the slot
+  of its first leaf: `rust-format` (`fmt`, `leptosfmt`, `tools-fmt`),
+  `static-docs` (`prettier-markdown`), `static-elisp` (`elisp-fmt`,
+  `byte-compile`), `static-typescript` (`tsc`) and `static-ert` (`ert`). Their
+  filtered sources let a verdict built for another tree, locally or by CI
+  through Cachix, be reused
+  ([shared static verdicts](adr/drafts/prepush-takes-shared-static-verdicts.md)).
+  Clippy, `test-local` and the auxiliary host tests stay on the host by measured
+  decision: their Nix forms rebuild from cold on most changes, and `dev-python`
+  skips the tests that check `dev` against the rest of the repository. Index
+  custody spans every check: after the clean-tree precheck, the
+  `prepush-admission` phase requires raw/index identity for every tracked
+  regular file, and the `prepush-post-check` phase at the end requires Git state
+  unchanged, also after a failed step, whose status stays the gate's when the
+  post-check passes. An edit made while the push runs therefore fails it. Other
+  platforms run the host leaves.
 - **`dev validate-no-e2e`** requires a clean tree, then runs Verify host/static
   checks, the platform contract, all nine Nix static checks (including
   `dev-python` and `tools-doctests`), the `csrBundle` build and `wasm-budget`,
@@ -4875,13 +4887,13 @@ further jobs.
 
 All `dev` gates **fail fast** on a required child failure. They return nonzero
 without running later ordinary diagnostics or fabricating skipped success.
-Precommit's single reconciliation and docs post-request check still run on their
-required failure paths. Apart from precommit's selected routing surface, the
-workflows remain broad and preserve success-path ordering, clean-tree authority,
-and real check populations. Independent CI lanes and job results remain
-authoritative. The sole x86_64-linux host substitution is shared `static-docs`
-at prepush's Markdown Verify position; prepush also requests the Nix doctest
-producer and gate.
+Precommit's single reconciliation and docs post-request check, and prepush's
+post-check, still run on their required failure paths. Apart from precommit's
+selected routing surface, the workflows remain broad and preserve success-path
+ordering, clean-tree authority, and real check populations. Independent CI lanes
+and job results remain authoritative. The only x86_64-linux host substitutions
+are prepush's five shared static verdicts at their leaves' slots; prepush also
+requests the Nix doctest producer and gate.
 
 Enforcement is git-native ([ADR-0029](adr/0029-git-enforced-verify-gate.md)).
 `.githooks/pre-commit` calls `dev precommit`, which owns Git/index
@@ -4896,7 +4908,7 @@ scratch `git init` cannot reinitialise the hooked repository. There is no `dev`
 `--allow-dirty` option; `SKIP_PRE_PUSH=1` remains a deliberate hook escape. The
 hook proves the fast local lane ran on the committed tip with no uncommitted
 files hiding; CI remains the non-bypassable hermetic authority; prepush's shared
-`static-docs` leaf and its Nix doctest producer and gate are the deliberate
+static verdicts and its Nix doctest producer and gate are the deliberate
 exceptions to its otherwise host-only gate
 ([Python `dev` runner](adr/0251-dev-runner-replaces-just.md) amends the #1117
 supplement). Every repository-policy host tool self-heals `core.hooksPath` to
@@ -4912,18 +4924,18 @@ The fast local lane and `dev validate-no-e2e` do not run the same tests in
 different environments. They have the following explicit authority split
 ([ADR-0029](adr/0029-git-enforced-verify-gate.md), #1117 supplement):
 
-| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                            | Authority / rationale                                                                                                           |
-| -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| Verify-only host/static surface                          | Runs the same host surface except `x86_64-linux` replaces only `prettier-markdown` Verify with `static-docs`. | Prepush provides the Markdown leaf verdict; other Nix static proof remains authoritative for the sandboxed offline environment. |
-| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                    | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                            |
-| Host-native product Rust tests                           | Runs `test-local`.                                                                                            | The host-native product verdict is cheap and cache-friendly.                                                                    |
-| Root-workspace doctests and fence reconciliation         | Runs the Nix `doctests` producer and `doctests-gate`.                                                         | The same sandboxed verdict validation requests; there is no host doctest run.                                                   |
-| Nix static proof, including `tools-doctests`             | Only the shared `static-docs` leaf runs on `x86_64-linux`; other static derivations do not.                   | The leaf shares the docs formatting verdict; other static definitions still require the sandboxed offline environment.          |
-| Rust coverage/CRAP                                       | Does not run.                                                                                                 | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                   |
-| Wasm browser tests                                       | Does not run.                                                                                                 | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                 |
-| Elisp coverage                                           | Does not run.                                                                                                 | The coverage VM is the authoritative execution environment.                                                                     |
-| Wasm budget                                              | Does not run.                                                                                                 | The verdict is defined by the Nix-built artifact's size semantics.                                                              |
-| Server-function flow verification (full `validate` only) | Does not run.                                                                                                 | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                       |
+| `dev validate-no-e2e` surface                            | `prepush` coverage                                                                                                                                                                 | Authority / rationale                                                                                                                  |
+| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| Verify-only host/static surface                          | Runs the same host surface, except that `x86_64-linux` takes `rust-format`, `static-docs`, `static-elisp`, `static-typescript` and `static-ert` in place of the leaves they cover. | The shared verdicts check the same leaves in the sandbox and are reused across trees; the other host leaves have no cheaper Nix form.  |
+| Auxiliary `tools` non-doc tests                          | Runs once.                                                                                                                                                                         | The host tests are the applicable verdict; they are outside the application coverage/Nix test gates.                                   |
+| Host-native product Rust tests                           | Runs `test-local`.                                                                                                                                                                 | The host-native product verdict is cheap and cache-friendly.                                                                           |
+| Root-workspace doctests and fence reconciliation         | Runs the Nix `doctests` producer and `doctests-gate`.                                                                                                                              | The same sandboxed verdict validation requests; there is no host doctest run.                                                          |
+| Nix static proof, including `tools-doctests`             | Only the five shared verdicts run, on `x86_64-linux`; `static-code`, `static-e2e-census`, `dev-python` and `tools-doctests` do not.                                                | `static-code`'s Clippy rebuilds from cold on any Rust change, and `dev-python` skips the repository-contract tests host `pytest` runs. |
+| Rust coverage/CRAP                                       | Does not run.                                                                                                                                                                      | Instrumentation and SQLite/PostgreSQL backend parity are part of the verdict.                                                          |
+| Wasm browser tests                                       | Does not run.                                                                                                                                                                      | The verdict exercises wasm browser primitives unavailable to a cheap host lane.                                                        |
+| Elisp coverage                                           | Does not run.                                                                                                                                                                      | The coverage VM is the authoritative execution environment.                                                                            |
+| Wasm budget                                              | Does not run.                                                                                                                                                                      | The verdict is defined by the Nix-built artifact's size semantics.                                                                     |
+| Server-function flow verification (full `validate` only) | Does not run.                                                                                                                                                                      | This is an e2e/full-validate responsibility outside the `dev validate-no-e2e` comparator.                                              |
 
 The Nix doctest producer/gate is the only execution of the root-workspace
 doctests and reconciles their fence population in both directions; it may not
@@ -4933,7 +4945,7 @@ derivation.
 `dev` requests hermetic leaves directly with
 `nix build -L --accept-flake-config --out-link .xtask/gcroots/<check> .#checks.x86_64-linux.<check>`,
 one definition of their flags (`steps.py`) shared by every gate,
-`dev nix-check <check>` and the index custody's docs request, which adds the
+`dev nix-check <check>` and the index custody's shared requests, which add the
 lock flags `--no-update-lock-file --no-write-lock-file` as the doctest and
 coverage producers do. Their named output links retain producer evidence as GC
 roots; failure stops the workflow. The wasm budget builds `.#csrBundle` the same
