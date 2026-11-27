@@ -570,7 +570,7 @@ def test_a_passing_attempt_at_or_above_the_threshold_passes_with_a_warning(
     duration = validate_duration_json(attempts((used, "passed")), MANIFEST)
     assert [pressure.retry for pressure in duration.pressured] == [0]
     assert duration.detail() == (
-        "duration pressure: 1 attempt(s) at or above 80% of their timeout\n"
+        "duration pressure: 1 attempt(s) at or above 25% of their timeout\n"
         f"  {shown}: {WORKS}; retry 0; duration {used}.000 ms / effective "
         "timeout 1000.000 ms"
     )

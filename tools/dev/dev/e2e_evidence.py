@@ -58,7 +58,7 @@ from dev.traces import (
 
 # The utilization at or above which an attempt is reported as duration
 # pressure. It is a signal, never a verdict: only a `timedOut` attempt fails.
-PRESSURE_THRESHOLD = 0.80
+PRESSURE_THRESHOLD = 0.25
 # Every status Playwright's JSON reporter gives an attempt.
 ATTEMPT_STATUSES = ("passed", "failed", "timedOut", "skipped", "interrupted")
 # The VM sidecar's phase that runs Playwright.

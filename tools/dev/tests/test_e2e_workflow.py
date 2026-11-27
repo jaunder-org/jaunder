@@ -331,7 +331,7 @@ def test_a_pressured_lane_passes_and_is_annotated_and_summarized(e2e: E2E) -> No
     assert result.returncode == 0, result
     stdout = result.stdout.decode()
     assert (
-        f"::warning title=Duration pressure::{LANE}: 1 attempt(s) at or above 80"
+        f"::warning title=Duration pressure::{LANE}: 1 attempt(s) at or above 25"
         f"%25 of their timeout; worst {PRESSURED.replace('%', '%25')}\n"
     ) in stdout
     assert "verified\nduration pressure: 1 attempt(s)" in stdout
