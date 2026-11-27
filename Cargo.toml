@@ -43,6 +43,13 @@ debug = "line-tables-only"
 [profile.test.package.web]
 codegen-units = 1
 
+# Tree-sitter query compilation in its C core dominates the code-highlight
+# tests, and nextest recompiles every grammar's query in each test process.
+# At -O0 the all-grammar tests timed out under full-workspace load (#2143).
+# Coverage instruments only workspace crates, so this costs no coverage.
+[profile.dev.package.tree-sitter]
+opt-level = 3
+
 [workspace.dependencies]
 client = { path = "client" }
 common = { path = "common" }
