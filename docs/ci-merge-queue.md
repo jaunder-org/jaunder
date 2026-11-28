@@ -247,7 +247,10 @@ generation event cannot replace the event authorized to re-arm that head. The
 single job still derives from fresh `main` and owns the stable
 `automation/adr-promoter` branch and at most one open promoter PR. If that PR
 already exists or is queued, its head SHA and generated diff remain immutable;
-drafts merged later wait for the next pass after it lands.
+drafts merged later wait for the next pass after it lands. The exception is a
+stale PR. A PR is stale when its local merge with fresh `main` conflicts or
+still cites a draft it promotes. The controller retires a stale PR, even one in
+the queue, and regenerates it.
 
 The workflow mints an installation token with
 `actions/create-github-app-token@v3` from repository variable

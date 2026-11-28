@@ -5978,16 +5978,23 @@ first reads the open exact promoter PR and stable ref. An open exact PR with an
 absent ref is interrupted retirement: it closes and verifies that exact PR, then
 regenerates. An open PR with a different ref fails closed.
 
-With an open exact PR and exact stable ref, positive conflict evidence
-lease-deletes the exact ref, verifies absence, closes and verifies that exact
-PR, then regenerates. Evidence requires GitHub `CONFLICTING` / `DIRTY`, the
-generated head's sole parent strictly behind current `main`, and an exact-object
-local merge-tree conflict. Armed or queued promoters remain `Existing`; unarmed
-failed required checks remain visible; unarmed pending or green checks are armed
-and verified at the exact head. With no open promoter PR, a stable ref is
-incomplete publication and is lease-deleted at its exact SHA before
-regeneration; absent PR and ref generates normally. A `dequeued` event remains
-exact-head auto-merge re-arm recovery only.
+With an open exact PR and exact stable ref, Generate first proves staleness
+locally against freshly fetched `main`. This applies whether the PR is unarmed,
+armed or queued. The generated head's sole parent must be strictly behind
+`main`. An exact-object `git merge-tree` must then either conflict or yield a
+tree that still cites `drafts/<slug>` for a draft the head promotes. Promotion
+rewrites every such citation, so a remaining one means `main` cited the draft
+later.
+
+A stale attempt is retired: Generate lease-deletes the exact ref, verifies its
+absence, closes and verifies that exact PR, then regenerates. A PR that GitHub
+already closed with the same identity counts as verified. Fresh armed or queued
+promoters remain `Existing`; fresh unarmed failed required checks remain
+visible; fresh unarmed pending or green checks are armed and verified at the
+exact head. With no open promoter PR, a stable ref is incomplete publication and
+is lease-deleted at its exact SHA before regeneration; absent PR and ref
+generates normally. A `dequeued` event remains exact-head auto-merge re-arm
+recovery only.
 
 The controller uses an exact-SHA lease only to delete `automation/adr-promoter`;
 it never force-updates the branch. It reads exact postconditions after cleanup
@@ -6016,13 +6023,15 @@ promoted result to `main`.
 
 There is at most one open promoter for its stable head/base identity. Its head
 SHA and generated diff are immutable; drafts merged later wait until it lands
-and a subsequent pass handles them. Queue and auto-merge metadata may change as
-the PR advances or safely recovers. After arming, exact-head auto-merge request
-or queue-membership state verifies success; an immediately queued green PR need
-not retain an auto-merge request. The normal pull-request and merge-group check
-interval is a healthy proposed-decision lag. Failure to create, check, or merge
-the promoter is different: the draft remains proposed until the visible
-automation failure is diagnosed and repaired.
+and a subsequent pass handles them, unless they cite a draft it promotes. In
+that case the stale attempt is retired and its replacement promotes both. Queue
+and auto-merge metadata may change as the PR advances or safely recovers. After
+arming, exact-head auto-merge request or queue-membership state verifies
+success; an immediately queued green PR need not retain an auto-merge request.
+The normal pull-request and merge-group check interval is a healthy
+proposed-decision lag. Failure to create, check, or merge the promoter is
+different: the draft remains proposed until the visible automation failure is
+diagnosed and repaired.
 
 Promotion is also the **acceptance event**
 ([ADR-0088](adr/0088-promotion-is-the-acceptance-event.md)): in the same pass
@@ -6120,26 +6129,26 @@ dormant fallback are part of this extraction.
 
 Trusted-main App permissions are unchanged. Open attempt heads/diffs remain
 immutable; generation and per-PR recovery coalesce separately without active
-cancellation. Generate-only orphan resumption and conflict retirement require
-the existing exact identity/local proof, observed-SHA lease, verified absence
-and same-PR close checks. Dequeue re-arm requires one correlated merge group and
-complete green required contexts on both exact SHAs; pending reruns take
-precedence. Failed writes succeed only with verified exact postconditions. Safe
+cancellation. Generate-only orphan resumption and stale retirement require exact
+identity and local merge proof, observed-SHA lease, verified absence and same-PR
+close checks. Dequeue re-arm requires one correlated merge group and complete
+green required contexts on both exact SHAs; pending reruns take precedence.
+Failed writes succeed only with verified exact postconditions. Safe
 refusals/successful outcomes exit zero; operational failures, unsafe state and
 unverified writes exit nonzero.
 
 Tests cover project-owned evidence selection, correlation, refusal/outcome and
 postcondition policy, expected-head/retry arguments, complete original-byte
 outputs, staging and admission. The three Marko exclusions remain covered in
-whole-promotion output. Git boundary tests exercise our lease/conflict argv,
-exit interpretation and policy with supplied results; one selected-package smoke
-uses temporary Git for runtime integration, not bootstrap. Remove all tests
-redundant with consumed-library testing, even behind our adapters. Trust
-PyGithub, Marko, Git and standard-library mechanics; do not test parser/AST
-recognition, HTTP, SDK or pagination engines, provider/library or unconsumed
-field/error matrices, or add a fake route framework. Normal locked realization
-retains configured substitutes; it does not guarantee cold source bootstrap or
-hide realization failures.
+whole-promotion output. Git boundary tests exercise our lease and
+staleness-probe argv, exit interpretation and policy with supplied results; one
+selected-package smoke uses temporary Git for runtime integration, not
+bootstrap. Remove all tests redundant with consumed-library testing, even behind
+our adapters. Trust PyGithub, Marko, Git and standard-library mechanics; do not
+test parser/AST recognition, HTTP, SDK or pagination engines, provider/library
+or unconsumed field/error matrices, or add a fake route framework. Normal locked
+realization retains configured substitutes; it does not guarantee cold source
+bootstrap or hide realization failures.
 
 This branch is not delivered to or observed on trusted `main`; the numberless
 [Python ADR promoter draft](adr/0242-adr-promoter-host-tool-extraction.md)

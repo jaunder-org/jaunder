@@ -47,7 +47,6 @@ def test_merge_group_first_page_only_and_exact_parent_selection():
 
 def test_snapshot_and_rules_project_only_consumed_policy_evidence():
     pr = {"number": 7, "state": "OPEN", "headRefName": "stable", "headRefOid": "head",
-          "baseRefOid": "base", "mergeable": "CONFLICTING", "mergeStateStatus": "DIRTY",
           "isInMergeQueue": False, "autoMergeRequest": {"enabledAt": "now"},
           "statusCheckRollup": {"contexts": {"nodes": [], "pageInfo": {"hasNextPage": False}}}}
     rules = [{"type": "merge_queue"}, {"type": "required_status_checks", "parameters": {
@@ -55,8 +54,7 @@ def test_snapshot_and_rules_project_only_consumed_policy_evidence():
     requester = NS(graphql_query=lambda *args: ({}, {"data": {"repository": {"pullRequest": pr}}}),
                    requestJsonAndCheck=lambda *args: ({}, rules))
     api = github.Repository("fixture", "repo", NS(requester=requester), NS())
-    assert api.snapshot(7) == github.Snapshot(7, "OPEN", "stable", "head", "base", "CONFLICTING",
-                                               "DIRTY", True, False, ())
+    assert api.snapshot(7) == github.Snapshot(7, "OPEN", "stable", "head", True, False, ())
     assert api.rules("main") == github.Rules(("CI",), True)
     with pytest.raises(ValueError, match="does not match"):
         api.snapshot(8)

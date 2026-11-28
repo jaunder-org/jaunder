@@ -41,9 +41,6 @@ class Snapshot:
     state: str
     head_ref: str
     head_sha: str
-    base_sha: str
-    mergeable: str
-    merge_state: str
     armed: bool
     queued: bool
     checks: tuple[Check, ...]
@@ -126,8 +123,7 @@ def parse_snapshot(pr, checks):
     if not number or state not in ("OPEN", "MERGED", "CLOSED") or type(at(pr, "isInMergeQueue")) is not bool:
         raise ValueError("pull request has invalid number, state or isInMergeQueue")
     return Snapshot(
-        number, state, text(pr, "headRefName"), text(pr, "headRefOid"), text(pr, "baseRefOid"),
-        at(pr, "mergeable") or "UNKNOWN", at(pr, "mergeStateStatus") or "UNKNOWN",
+        number, state, text(pr, "headRefName"), text(pr, "headRefOid"),
         isinstance(at(pr, "autoMergeRequest", "enabledAt"), str), pr["isInMergeQueue"], checks,
     )
 
@@ -141,8 +137,8 @@ CONTEXTS = '''statusCheckRollup { contexts(first:100, after:$after) {
 } }'''
 PR_QUERY = '''query($owner:String!,$name:String!,$number:Int!,$after:String){
   repository(owner:$owner,name:$name){ pullRequest(number:$number){
-    number state mergeable mergeStateStatus isInMergeQueue autoMergeRequest { enabledAt }
-    headRefName headRefOid baseRefOid
+    number state isInMergeQueue autoMergeRequest { enabledAt }
+    headRefName headRefOid
     ''' + CONTEXTS + '''
   } }
 }'''

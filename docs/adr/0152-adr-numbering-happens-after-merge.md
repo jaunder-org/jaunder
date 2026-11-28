@@ -87,6 +87,19 @@ stable ref, and workflow result are the operator-visible failure record, so
 manual close, deletion, rebase, or local promotion is not part of recovery. The
 original immutable-head decision remains unchanged.
 
+On 2026-11-27, [#2176](https://github.com/jaunder-org/jaunder/issues/2176)
+widened retirement from conflict to staleness. Generate now proves an open
+attempt stale with one local exact-object merge against freshly fetched `main`,
+for unarmed, armed and queued attempts alike. Its sole parent must be strictly
+behind `main`, and `git merge-tree` must either conflict or yield a tree that
+still cites `drafts/<slug>` for a draft the attempt promotes. GitHub's
+`CONFLICTING` / `DIRTY` evidence is no longer required. A clean merge that
+leaves such a citation means `main` cited the draft after generation, and
+merging the attempt would fail `doc-links`. A stale attempt is retired and
+regenerated as before. A PR that GitHub itself closed when its ref was deleted
+satisfies the verified close. Drafts that `main` gains without citing a promoted
+draft still wait for the next pass.
+
 ## Consequences
 
 Concurrent feature PRs no longer allocate the same ADR number or edit the ADR

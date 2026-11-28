@@ -80,21 +80,75 @@ def test_formatter_failure_never_restages(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("code", [0, 1, 128])
 @pytest.mark.parametrize("operation,arguments,positive", [
-    ("merge", ("merge-tree", "--write-tree", "main", "head"), 1),
-    ("ancestor", ("merge-base", "--is-ancestor", "old", "main"), 0),
+    ("ancestor", ("merge-base", "--is-ancestor", "old", "main"), True),
+    ("cites", ("grep", "-q", "--fixed-strings", "-e", "drafts/a", "-e", "drafts/b", "tree"), True),
+    ("merge", ("merge-tree", "--write-tree", "main", "head"), "tree-oid"),
 ])
-def test_conflict_proof_uses_exact_objects_and_interprets_exit_status(monkeypatch, tmp_path, code, operation, arguments, positive):
+def test_probe_uses_exact_objects_and_interprets_exit_status(monkeypatch, tmp_path, code, operation, arguments, positive):
     calls = []
     def process(repo, *args):
         assert repo == tmp_path
         calls.append(args)
-        return subprocess.CompletedProcess(args, code, b"", b"fixture error")
+        return subprocess.CompletedProcess(args, code, b"tree-oid\nconflict info\n", b"fixture error")
     monkeypatch.setattr(git, "process", process)
-    invoke = (lambda: git.merge_conflicts(tmp_path, "main", "head")) if operation == "merge" else (
-        lambda: git.strict_ancestor(tmp_path, "old", "main"))
+    invoke = {
+        "ancestor": lambda: git.strict_ancestor(tmp_path, "old", "main"),
+        "cites": lambda: git.tree_contains(tmp_path, "tree", ["drafts/a", "drafts/b"]),
+        "merge": lambda: git.merged_tree(tmp_path, "main", "head"),
+    }[operation]
     if code == 128:
         with pytest.raises(RuntimeError, match="fixture error"):
             invoke()
     else:
-        assert invoke() is (code == positive)
+        negative = None if operation == "merge" else False
+        assert invoke() == (positive if code == 0 else negative)
     assert calls == [arguments]
+
+
+def test_no_promoted_drafts_or_unmoved_main_short_circuit_without_running_git(monkeypatch, tmp_path):
+    monkeypatch.setattr(git, "process", lambda *args: pytest.fail("unexpected git"))
+    assert git.tree_contains(tmp_path, "tree", []) is False
+    assert git.strict_ancestor(tmp_path, "main", "main") is False
+
+
+def test_clean_merge_without_a_tree_is_an_error(monkeypatch, tmp_path):
+    monkeypatch.setattr(git, "process", lambda repo, *args: subprocess.CompletedProcess(args, 0, b"\n", b""))
+    with pytest.raises(RuntimeError, match="no tree"):
+        git.merged_tree(tmp_path, "main", "head")
+
+
+def test_deleted_drafts_exclude_rename_destinations(monkeypatch, tmp_path):
+    calls = []
+    monkeypatch.setattr(git, "run", lambda repo, *args, **kwargs: calls.append(args) or b"docs/adr/drafts/a.md\x00")
+    assert git.deleted_paths(tmp_path, "parent", "head", "docs/adr/drafts/") == ["docs/adr/drafts/a.md"]
+    assert calls == [("diff", "--no-renames", "--diff-filter=D", "--name-only", "-z", "parent", "head",
+                      "--", "docs/adr/drafts/")]
+
+
+def test_stale_proof_detects_a_citation_main_added_after_the_promotion(tmp_path):
+    """Our composition (deleted drafts -> stems -> merged-tree grep) on real objects."""
+    from adr_promoter import controller
+    from adr_promoter.promotion import promote
+    from test_promotion import git as fixture_git, tracked_repo, write
+    commit = ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+              "-c", "core.hooksPath=/dev/null", "commit", "-qm")
+    tracked_repo(tmp_path, {
+        "docs/adr/0001-old.md": b"# ADR-0001: Old\n\n- Status: accepted\n",
+        "docs/adr/drafts/alpha.md": b"# ADR-DRAFT: Alpha\n\n- Status: proposed\n",
+        "docs/ARCHITECTURE.md": b"See [alpha](adr/drafts/alpha.md).\n",
+    })
+    fixture_git(tmp_path, "branch", "-M", "main")
+    fixture_git(tmp_path, "remote", "add", "origin", str(tmp_path))
+    fixture_git(tmp_path, "switch", "-q", "--detach")
+    promote(tmp_path)
+    fixture_git(tmp_path, *commit, "promote")
+    head = fixture_git(tmp_path, "rev-parse", "HEAD").decode().strip()
+    fixture_git(tmp_path, "switch", "-q", "main")
+    write(tmp_path, "docs/other.md", b"Unrelated.\n")
+    fixture_git(tmp_path, "add", ".")
+    fixture_git(tmp_path, *commit, "unrelated")
+    assert controller._stale(tmp_path, head) is False
+    write(tmp_path, "docs/adr/drafts/beta.md", b"Cites [alpha](../drafts/alpha.md).\n")
+    fixture_git(tmp_path, "add", ".")
+    fixture_git(tmp_path, *commit, "cite")
+    assert controller._stale(tmp_path, head) is True

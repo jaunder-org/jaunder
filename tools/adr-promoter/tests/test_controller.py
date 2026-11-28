@@ -15,8 +15,7 @@ def pr(number=7, head="head"):
 
 
 def snap(number=7, head="head"):
-    return Snapshot(number, "OPEN", controller.BRANCH, head, "main-new", "MERGEABLE", "CLEAN",
-                    False, False, (Check("CI", "success", None, "2026-01-01"),))
+    return Snapshot(number, "OPEN", controller.BRANCH, head, False, False, (Check("CI", "success", None, "2026-01-01"),))
 
 
 class FakeGitHub:
@@ -103,8 +102,9 @@ class FakeGitHub:
 def world(monkeypatch, tmp_path):
     trace = []
     api = FakeGitHub(trace)
-    local = SimpleNamespace(arguments=[], staged=True, parent="old-main", ancestor=True, conflicts=True,
-                            main="main-new", fail=set(), suppress=set(), trace=trace)
+    local = SimpleNamespace(arguments=[], staged=True, parent="old-main", ancestor=True, tree="tree",
+                            deleted=["docs/adr/drafts/alpha.md"], cites=False, main="main-new",
+                            fail=set(), suppress=set(), closes=False, trace=trace)
     def operation(name, value):
         def invoke(*arguments):
             trace.append(name)
@@ -118,7 +118,8 @@ def world(monkeypatch, tmp_path):
         ("format_staged_markdown", "format", None), ("commit_promotion", "commit", None),
         ("head_sha", "head", "new-head"), ("fetch", "fetch", None),
         ("refresh_main", "main", lambda: local.main), ("sole_parent", "parent", lambda: local.parent),
-        ("strict_ancestor", "ancestor", lambda: local.ancestor), ("merge_conflicts", "conflicts", lambda: local.conflicts),
+        ("strict_ancestor", "ancestor", lambda: local.ancestor), ("merged_tree", "merge", lambda: local.tree),
+        ("deleted_paths", "deleted", lambda: local.deleted), ("tree_contains", "cites", lambda: local.cites),
     ]:
         monkeypatch.setattr(controller.git, method, operation(name, value))
     def delete(repo, branch, expected):
@@ -127,6 +128,9 @@ def world(monkeypatch, tmp_path):
         assert expected == api.remote
         if "delete" not in local.suppress:
             api.remote = None
+            if local.closes:
+                # GitHub closes a PR whose head ref is deleted.
+                api.pulls = [replace(value, open=False) for value in api.pulls]
         if "delete" in local.fail:
             raise RuntimeError("lease refused")
     def push(repo, branch):
@@ -339,39 +343,71 @@ def test_changed_ref_during_lease_does_not_close_pr_or_generate(world, monkeypat
     assert "prepare" not in world.trace and "close" not in world.trace
 
 
-@pytest.mark.parametrize("missing", ["base", "parent", "ancestor", "conflicts"])
-def test_github_conflict_without_complete_local_proof_preserves_head_and_diff(world, missing):
-    existing(world)
-    world.api.snapshots[7] = replace(snap(), mergeable="CONFLICTING", merge_state="DIRTY")
-    if missing == "base":
-        world.local.main = "advanced-main"
-    elif missing == "parent":
-        world.local.parent = None
-    else:
-        setattr(world.local, missing, False)
-    assert run(world).kind == "Existing"
-    assert world.trace.index("fetch") < world.trace.index("main")
-    assert not {"delete", "close", "arm", "prepare"}.intersection(world.trace)
+STALE = {"conflict": {"tree": None}, "citation": {"cites": True}}
 
 
-def test_complete_conflict_proof_retires_then_rebuilds_from_main(world):
+def stale(world, reason, state):
     existing(world)
-    world.api.snapshots[7] = replace(snap(), mergeable="CONFLICTING", merge_state="DIRTY")
+    for field, value in STALE[reason].items():
+        setattr(world.local, field, value)
+    if state != "unarmed":
+        world.api.snapshots[7] = replace(snap(), **{state: True})
+
+
+@pytest.mark.parametrize("state", ["unarmed", "armed", "queued"])
+@pytest.mark.parametrize("reason", STALE)
+def test_stale_attempt_is_retired_then_rebuilt_from_main_in_every_queue_state(world, reason, state):
+    stale(world, reason, state)
     result = run(world)
     assert (result.kind, result.detail) == ("Replaced", "replaced stale promoter PR 7 with 8")
-    phases = {"fetch", "main", "parent", "ancestor", "conflicts", "delete", "close", "prepare"}
-    assert [name for name in world.trace if name in phases] == [
-        "fetch", "main", "parent", "ancestor", "conflicts", "delete", "close", "prepare",
+    probe = ["fetch", "main", "parent", "ancestor", "merge"] + ([] if reason == "conflict" else ["deleted", "cites"])
+    phases = set(probe) | {"delete", "close", "prepare", "arm"}
+    assert [name for name in world.trace if name in phases] == probe + ["delete", "close", "prepare", "arm"]
+
+
+@pytest.mark.parametrize("fresh", ["parent", "ancestor", "deleted", "citation"])
+def test_fresh_attempt_keeps_existing_behaviour(world, fresh):
+    existing(world)
+    if fresh == "parent":
+        world.local.parent = None
+    elif fresh == "ancestor":
+        world.local.ancestor = False
+    elif fresh == "deleted":
+        world.local.deleted = []
+    assert run(world).kind == "Existing"
+    assert world.trace.count("arm") == 1
+    assert ("merge" in world.trace) is (fresh in ("deleted", "citation"))
+    assert not {"delete", "close", "prepare"}.intersection(world.trace)
+
+
+def test_stale_proof_binds_every_local_operation_to_observed_objects(world):
+    stale(world, "citation", "unarmed")
+    world.local.deleted = ["docs/adr/drafts/alpha.md", "docs/adr/drafts/beta.md"]
+    assert run(world).kind == "Replaced"
+    observed = [(name, arguments[1:]) for name, arguments in world.local.arguments
+                if name in {"fetch", "main", "parent", "ancestor", "merge", "deleted", "cites"}]
+    assert observed == [
+        ("fetch", ("head",)), ("main", ("main",)), ("parent", ("head",)),
+        ("ancestor", ("old-main", "main-new")), ("merge", ("main-new", "head")),
+        ("deleted", ("old-main", "head", "docs/adr/drafts/")),
+        ("cites", ("tree", ["drafts/alpha", "drafts/beta"])),
     ]
 
 
-def test_conflict_observation_error_never_authorizes_retirement(world):
-    existing(world)
-    world.api.snapshots[7] = replace(snap(), mergeable="CONFLICTING", merge_state="DIRTY")
-    world.local.fail.add("conflicts")
+@pytest.mark.parametrize("operation", ["fetch", "main", "parent", "ancestor", "merge", "deleted", "cites"])
+def test_stale_probe_error_fails_without_retirement(world, operation):
+    stale(world, "citation", "unarmed")
+    world.local.fail.add(operation)
     with pytest.raises(RuntimeError, match="failed"):
         run(world)
-    assert not {"delete", "close", "prepare"}.intersection(world.trace)
+    assert not {"delete", "close", "arm", "prepare"}.intersection(world.trace)
+
+
+def test_pr_closed_by_github_on_ref_deletion_is_a_verified_close(world):
+    stale(world, "citation", "queued")
+    world.local.closes = True
+    assert run(world).kind == "Replaced"
+    assert "close" not in world.trace
 
 
 @pytest.mark.parametrize("event", [
@@ -500,18 +536,6 @@ def test_pending_rerun_dominates_settled_result_and_completed_reruns_use_latest_
     assert controller.resolve_context((good, bad), "CI") == good
     assert controller.resolve_context((bad, good), "other") is None
     assert controller.resolve_context((bad, replace(good, completed="2026-01")), "CI").state == "success"
-
-
-def test_conflict_probe_binds_every_local_operation_to_observed_objects(world):
-    existing(world)
-    world.api.snapshots[7] = replace(snap(), mergeable="CONFLICTING", merge_state="DIRTY")
-    assert run(world).kind == "Replaced"
-    observed = [(name, arguments[1:]) for name, arguments in world.local.arguments
-                if name in {"fetch", "main", "parent", "ancestor", "conflicts"}]
-    assert observed == [
-        ("fetch", ("head",)), ("main", ("main",)), ("parent", ("head",)),
-        ("ancestor", ("old-main", "main-new")), ("conflicts", ("main-new", "head")),
-    ]
 
 
 @pytest.mark.parametrize("change", ["ref", "author", "number"])

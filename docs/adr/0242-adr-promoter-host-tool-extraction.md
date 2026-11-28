@@ -168,6 +168,17 @@ or library internals. Avoid per-field/error permutations not consumed by policy
 and do not add a fake framework; remove route × action × source-kind × outcome
 fake-Nix matrices.
 
+## Decision history
+
+On 2026-11-27, [#2176](https://github.com/jaunder-org/jaunder/issues/2176)
+replaced the conflict-retirement evidence above with one local staleness proof,
+recorded in [ADR-0152](0152-adr-numbering-happens-after-merge.md). Exact local
+merge proof against fresh `main` retires an attempt whose merge conflicts or
+still cites a draft it promotes, whether it is unarmed, armed or queued. GitHub
+conflict evidence is no longer required. The observed-SHA lease, verified
+absence and same-PR close remain; a PR GitHub already closed with the same
+identity satisfies that close.
+
 ## Consequences
 
 The maintained implementation owns policy and source-preserving mutation, not a
